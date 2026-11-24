@@ -18,9 +18,20 @@ export type GitPanelTabId =
   | 'deployments'
   | 'stashes'
 
+/**
+ * How the History view presents the same commits.
+ *
+ * `grouped` reads history as the batches the upstream saw (the local-only run,
+ * then each push or fetch), which is what most readers want first. `graph` is
+ * the lane drawing, for when the question is how branches diverged and came
+ * back together. Both are renderings of one list, so switching never refetches.
+ */
+export type GitHistoryView = 'grouped' | 'graph'
+
 export interface GitPanelViewState {
   activeTab: GitPanelTabId
   changesView: 'list' | 'tree'
+  historyView: GitHistoryView
   selectedCommit: GitCommitInfo | null
   selectedPullRequest: PullRequestSummary | null
   selectedStash: GitStashEntry | null
@@ -37,6 +48,7 @@ function defaultState(): GitPanelViewState {
   return {
     activeTab: 'changes',
     changesView: 'list',
+    historyView: 'grouped',
     selectedCommit: null,
     selectedPullRequest: null,
     selectedStash: null,

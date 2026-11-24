@@ -12,6 +12,7 @@ import {
   resolveCurrentConflictsWithAgent
 } from '../git-status-panel-agent-actions'
 import type { GitCommitInfo, GitFileChange, GitPullStrategy } from '$shared/types'
+import { mergeHistoryPage } from '$lib/git-history-paging'
 import { toast } from 'svelte-sonner'
 import { GitStatusPanelBranchesController } from '../GitStatusPanel/git-status-panel-branches-controller.svelte'
 import { gitPullJobs } from '$lib/stores/git-pull-jobs.svelte'
@@ -260,8 +261,9 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
     try {
       const page = await gitState.getLog(this.root.props.projectId, this.HISTORY_PAGE_SIZE)
       if (request !== this.historyRequestId) return
-      this.commitHistory = page
-      this.historyHasMore = page.length === this.HISTORY_PAGE_SIZE
+      const merged = mergeHistoryPage([], page, this.HISTORY_PAGE_SIZE)
+      this.commitHistory = merged.commits
+      this.historyHasMore = merged.hasMore
     } finally {
       // A superseded or failed request must never leave the spinner stuck.
       if (request === this.historyRequestId) this.loadingHistory = false
@@ -280,12 +282,35 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
         this.commitHistory.length
       )
       if (request !== this.historyRequestId) return
-      this.commitHistory = [...this.commitHistory, ...page]
-      this.historyHasMore = page.length === this.HISTORY_PAGE_SIZE
+      const merged = mergeHistoryPage(this.commitHistory, page, this.HISTORY_PAGE_SIZE)
+      this.commitHistory = merged.commits
+      this.historyHasMore = merged.hasMore
     } finally {
       if (request === this.historyRequestId) this.loadingMoreHistory = false
     }
   }
+
+  /**
+   * Drop the loaded history because the panel now stands in another repository.
+   *
+   * `loadHistory` fills itself only when the list is empty, so without this a
+   * project switch kept the previous project's commits on screen and appended
+   * the new repository's second page to them: two repositories in one list, and
+   * a duplicate-hash risk on commits that happen to be shared. The in-flight
+   * request is dropped along with the list, and both paging flags are cleared so
+   * the spinner cannot survive a reset.
+   */
+  resetHistory(projectId: string): void {
+    this.historyProjectId = projectId
+    this.historyRequestId += 1
+    this.commitHistory = []
+    this.historyHasMore = true
+    this.loadingHistory = false
+    this.loadingMoreHistory = false
+  }
+
+  /** The project the loaded history belongs to, so a switch can be detected. */
+  historyProjectId = $state('')
 
   /**
    * The drift this panel has with its upstream, plus the worktree it belongs to.

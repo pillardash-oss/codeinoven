@@ -42,6 +42,16 @@ export function graphLaneX(lane: number): number {
   return lane * GRAPH_LANE_WIDTH + GRAPH_LANE_WIDTH / 2
 }
 
+/**
+ * True for a merge: a commit with more than one parent, which is where two
+ * lanes have to end and one continues. It is the one node shape the graph draws
+ * that a plain commit does not, so a reader can tell a merge from a commit that
+ * merely sits in a side lane.
+ */
+export function isMergeRow(row: GitGraphRow): boolean {
+  return row.commit.parents.length > 1
+}
+
 /** Colour for a lane, cycling the palette. */
 export function graphLaneColor(lane: number): string {
   return GRAPH_LANE_COLORS[lane % GRAPH_LANE_COLORS.length] ?? GRAPH_LANE_COLORS[0]

@@ -32,7 +32,7 @@ import { GitStatusPanelChangesController } from '../GitStatusPanel/git-status-pa
 import { gitFindScopeFor } from '../git-panel-find'
 import { prSummaryChatContext, prSummaryExplainPrompt } from '../git-status-panel-prompts'
 import { type PrListAction } from '../pr-view'
-import { type GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
+import { type GitHistoryView, type GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
 import { findNavState } from '$lib/stores/find-nav.svelte'
 import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
 import { threadSettings } from '$lib/stores/thread-settings.svelte'
@@ -175,6 +175,17 @@ export class GitStatusPanelHandlePrListAction extends BoardUnit<GitStatusPanel> 
     gitPanelView.get('', '')
 
   activeTab = $state<GitPanelTabId>(this.savedView.activeTab)
+
+  /**
+   * How the History view tells the same commits: the upstream's batches, or the
+   * lanes. It is a reading preference, not data, so it survives a thread switch
+   * the same way the open view does.
+   */
+  historyView = $state<GitHistoryView>(this.savedView.historyView)
+
+  selectHistoryView(view: GitHistoryView): void {
+    this.historyView = view
+  }
 
   commitMessage = $state('')
 
@@ -385,8 +396,9 @@ export class GitStatusPanelHandlePrListAction extends BoardUnit<GitStatusPanel> 
     )
   }
 
-  /** Switch the panel's view. History is the one view that pages its data in. */
-  selectTab(id: GitPanelTabId): void {
+  /** Switch the panel's view. History is the one view that pages its data in. */ selectTab(
+    id: GitPanelTabId
+  ): void {
     // The find bar follows the view, so a subject change drops the answers that
     // belonged to the old one while leaving the bar open if it was open.
     const subjectChanged = gitFindScopeFor(id) !== this.find.scope
@@ -524,25 +536,49 @@ export class GitStatusPanelHandlePrListAction extends BoardUnit<GitStatusPanel> 
     this.root.confirmPrMerge.prMergeOpen = true
   }
 
+  /**
+   * The diff request the panel is waiting on.
+   *
+   * Opening a commit is an await, and the reader can leave it before the answer
+   * lands (Back, another commit, another view). Without a token the late answer
+   * writes its files into whatever is open now and clears the spinner the newer
+   * request set, so the panel can show one commit's files under another's title
+   * or spin forever. Every other request path here guards the same way.
+   */
+  private commitDiffRequestId = 0
+
   async selectCommit(commit: GitCommitInfo): Promise<void> {
     this.selectedCommit = commit
     this.activeTab = 'changes'
     // The selection belongs to the commit that was open, never to the next one.
     this.workingTree.clearSelection()
+    const request = ++this.commitDiffRequestId
     this.root.confirmAcceptAllConflicts.loadingCommitDiff = true
-    this.commitDiffChanges = await gitState.getCommitDiff(this.root.props.projectId, commit.hash)
-    this.root.confirmPrMerge.commitDiffs = {}
-    this.root.confirmPrMerge.commitExpanded = {}
-    this.root.confirmPrMerge.loadingCommitDiffFile = {}
-    this.root.confirmPrMerge.commitDiffErrors = {}
-    this.root.confirmAcceptAllConflicts.commitTreeCollapsedDirs = {}
-    this.root.confirmAcceptAllConflicts.loadingCommitDiff = false
+    try {
+      const changes = await gitState.getCommitDiff(this.root.props.projectId, commit.hash)
+      if (request !== this.commitDiffRequestId) return
+      this.commitDiffChanges = changes
+      this.root.confirmPrMerge.commitDiffs = {}
+      this.root.confirmPrMerge.commitExpanded = {}
+      this.root.confirmPrMerge.loadingCommitDiffFile = {}
+      this.root.confirmPrMerge.commitDiffErrors = {}
+      this.root.confirmAcceptAllConflicts.commitTreeCollapsedDirs = {}
+    } finally {
+      // Only the request the panel is still waiting on owns the spinner. When a
+      // newer one replaced it, that request has already taken the flag over.
+      if (request === this.commitDiffRequestId)
+        this.root.confirmAcceptAllConflicts.loadingCommitDiff = false
+    }
   }
 
   clearSelectedCommit(): void {
+    // Leaving the commit abandons its diff request too, so a late answer cannot
+    // repopulate the view or leave the loading flag set for the next selection.
+    this.commitDiffRequestId += 1
     this.selectedCommit = null
     this.workingTree.clearSelection()
     this.commitDiffChanges = []
+    this.root.confirmAcceptAllConflicts.loadingCommitDiff = false
     this.root.confirmPrMerge.commitDiffs = {}
     this.root.confirmPrMerge.commitExpanded = {}
     this.root.confirmPrMerge.loadingCommitDiffFile = {}
@@ -616,6 +652,13 @@ export class GitStatusPanelHandlePrListAction extends BoardUnit<GitStatusPanel> 
   }
 
   async reloadHistory(): Promise<void> {
+    // Reloading invalidates any page in flight. Bumping the request id drops its
+    // answer, and the flags are cleared here because that answer's own `finally`
+    // will no longer own them: a superseded paging request used to leave
+    // "Loading older commits" on screen and paging dead until a remount.
+    this.root.loadRepoState.historyRequestId += 1
+    this.root.loadRepoState.loadingHistory = false
+    this.root.loadRepoState.loadingMoreHistory = false
     this.root.loadRepoState.commitHistory = []
     this.root.loadRepoState.historyHasMore = true
     await this.root.loadRepoState.loadHistory()

@@ -408,6 +408,8 @@
     loadingHistory={board.loadRepoState.loadingHistory}
     loadingMoreHistory={board.loadRepoState.loadingMoreHistory}
     historyHasMore={board.loadRepoState.historyHasMore}
+    historyView={board.handlePrListAction.historyView}
+    onHistoryViewChange={board.handlePrListAction.selectHistoryView}
     unpushedCount={board.loadRepoState.unpushedCount}
     remoteUpdates={board.confirmPrMerge.remoteUpdates}
     localBranches={board.confirmAcceptAllConflicts.localBranches}

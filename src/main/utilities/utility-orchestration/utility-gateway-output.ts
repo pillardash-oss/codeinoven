@@ -44,7 +44,7 @@ export interface GatewayOutputBudget {
  * parts as they need keeps every rule in front of the model and still bounds each
  * part. Text without sections is left to the file-backed shortening below.
  */
-function sectionParts(text: string, limit = GATEWAY_TEXT_CHARACTER_LIMIT): string[] | null {
+export function sectionParts(text: string, limit = GATEWAY_TEXT_CHARACTER_LIMIT): string[] | null {
   const sections = text.split(/\n(?=## )/)
   if (sections.length < 2) return null
   const parts: string[] = []

@@ -7,7 +7,6 @@
   import type { Snippet } from 'svelte'
   import type { GitCommitInfo, GitRemoteUpdate } from '$shared/types'
   import { formatCompactAge } from '$shared/date-time-format'
-  import { absoluteTime } from './git-status-panel-format'
   import {
     GRAPH_LANE_WIDTH,
     GRAPH_MAX_LANES,
@@ -16,8 +15,13 @@
     graphLaneColor,
     graphLaneX,
     graphRemotePlacement,
-    graphRowEdges
+    graphRowEdges,
+    isMergeRow,
+    type GitGraphRow
   } from '$lib/git-graph'
+  import { gitHistoryGroups, type GitHistoryGroup } from '$lib/git-history-groups'
+  import type { GitHistoryView } from '$lib/stores/git-panel-view.svelte'
+  import { absoluteTime } from './git-status-panel-format'
 
   interface Props {
     /** Newest first. Paged in by the owning panel's scroll handler. */
@@ -38,6 +42,9 @@
     remoteUpdates: GitRemoteUpdate[]
     /** Hash of the commit whose diff is currently shown, if any. */
     selectedHash: string | null
+    /** How the same commits are presented: the upstream's batches, or the lanes. */
+    view: GitHistoryView
+    onViewChange: (view: GitHistoryView) => void
     onSelectCommit: (commit: GitCommitInfo) => void
     /** The owning panel supplies the per-commit actions menu. */
     menu: Snippet<[{ commit: GitCommitInfo; isHead: boolean }]>
@@ -52,6 +59,8 @@
     upstream,
     remoteUpdates,
     selectedHash,
+    view,
+    onViewChange,
     onSelectCommit,
     menu
   }: Props = $props()
@@ -77,15 +86,36 @@
   const placement = $derived(graphRemotePlacement(rows, remoteUpdates, unpushedCount))
 
   /**
+   * The same rows read as the batches the upstream saw, which is the default
+   * presentation: the local-only run, then each movement of the ref, newest
+   * first. It is a reshaping of `rows`, never a second fetch.
+   */
+  const groups = $derived(
+    gitHistoryGroups({ rows, placement, unpushedCount, upstream: upstream ?? null })
+  )
+
+  /** True while a commit the upstream was rewritten off is on screen, so the
+   *  legend only explains a mark that is actually there. */
+  const hasRewritten = $derived(placement.rewritten.size > 0)
+
+  /**
    * True when no movement the upstream still holds lands on the unpushed
-   * boundary, so the plain "Pushed to <upstream>" line still has to be drawn.
-   * That is the case when the reflog is gone past git's expiry, or when the
-   * remote was never fetched from this clone, and the split between pushed and
-   * unpushed is still real.
+   * boundary, so the graph's plain "Pushed to <upstream>" line still has to be
+   * drawn. That is the case when the reflog is gone past git's expiry, or when
+   * the remote was never fetched from this clone, and the split between pushed
+   * and unpushed is still real.
    */
   const needsPlainBoundary = $derived(
     unpushedCount > 0 && unpushedCount < rows.length && !placement.boundaries.has(unpushedCount)
   )
+
+  const groupLabel = (group: GitHistoryGroup): string => {
+    if (group.kind === 'unpushed') return 'Unpushed'
+    // No upstream means there is nothing to be pushed to or received from: the
+    // batch is just history, and saying otherwise would invent a remote.
+    if (group.ref === null) return 'Local history'
+    return group.kind === 'received' ? `Received from ${group.ref}` : `Pushed to ${group.ref}`
+  }
 
   /**
    * The last thing the upstream is known to have done with a commit it was
@@ -137,6 +167,194 @@
   </div>
 {/snippet}
 
+<!--
+  One batch, named the way the upstream sees it. The grouped view draws these
+  instead of boundary lines: the heading carries the movement and its moment,
+  the rows below it are the commits that arrived together, and the count says
+  how many. Unpushed is the one batch with no movement behind it, so it is the
+  one heading that is tinted: it is the only part of history the remote does not
+  have.
+-->
+{#snippet groupHeader(group: GitHistoryGroup)}
+  {@const at = group.update?.at ?? null}
+  <div
+    class={[
+      'flex items-center gap-1.5 border-y border-border px-2 py-1',
+      group.kind === 'unpushed' ? 'bg-warning/10' : 'bg-elevated/40'
+    ]}
+  >
+    <span
+      class={[
+        'flex shrink-0 items-center gap-1 text-[0.5625rem] font-semibold',
+        group.kind === 'unpushed' ? 'text-warning' : 'text-muted'
+      ]}
+      title={at === null ? groupLabel(group) : `${groupLabel(group)} on ${absoluteTime(at)}`}
+    >
+      {#if group.kind === 'received'}
+        <CioDownload size={10} class="shrink-0" aria-hidden="true" />
+      {:else if group.update !== null || group.ref !== null}
+        <CioUpload size={10} class="shrink-0" aria-hidden="true" />
+      {:else}
+        <CioCommit size={10} class="shrink-0" aria-hidden="true" />
+      {/if}
+      {groupLabel(group)}
+    </span>
+    {#if at !== null}
+      <span class="min-w-0 truncate text-[0.5625rem] text-dimmed">· {absoluteTime(at)}</span>
+    {/if}
+    <span class="ml-auto shrink-0 text-[0.5625rem] tabular-nums text-dimmed">
+      {group.entries.length}
+      {group.entries.length === 1 ? 'commit' : 'commits'}
+    </span>
+  </div>
+{/snippet}
+
+<!--
+  One commit, shared by both presentations so the two can never drift: the lane
+  column, the subject, the refs it wears, the author and the hash. A merge is a
+  ring instead of a dot, which is the only node shape that differs.
+-->
+{#snippet commitRow(entry: { index: number; row: GitGraphRow })}
+  {@const row = entry.row}
+  {@const index = entry.index}
+  {@const edges = graphRowEdges(row)}
+  {@const subject = row.commit.message.split('\n')[0] ?? ''}
+  <!--
+      Commits above the pushed boundary are local only, so their node is amber
+      instead of the lane colour: lane 0 paints in `--color-primary`, which is
+      near-black in the light theme and near-white in the dark one, and a
+      monochrome dot is exactly what hid the pushed/not-pushed split. A commit
+      the upstream was rewritten off keeps that amber and gains a badge: it is
+      missing from the remote for the same reason, only it got there once.
+    -->
+  {@const pushed = index >= unpushedCount}
+  {@const rewrittenBy = placement.rewritten.get(index) ?? null}
+  {@const syncLabel =
+    rewrittenBy !== null
+      ? rewriteLabel(rewrittenBy, upstream)
+      : upstream === null
+        ? 'No upstream configured'
+        : pushed
+          ? `Pushed to ${upstream}`
+          : `Not pushed to ${upstream} yet`}
+  {@const merge = isMergeRow(row)}
+  {@const nodeColor = pushed ? graphLaneColor(row.lane) : 'var(--color-warning)'}
+  <ContextMenu.Root>
+    <ContextMenu.Trigger
+      class="block w-full"
+      aria-label={`Actions for commit ${row.commit.shortHash}`}
+    >
+      <div
+        class={[
+          'flex items-stretch',
+          selectedHash === row.commit.hash ? 'bg-primary/10' : 'hover:bg-elevated/50'
+        ]}
+      >
+        <svg
+          width={laneColumnWidth}
+          height={GRAPH_ROW_HEIGHT}
+          class="shrink-0 overflow-hidden"
+          aria-hidden="true"
+        >
+          {#each edges as edge, edgeIndex (edgeIndex)}
+            <path d={edge.path} fill="none" stroke={edge.color} stroke-width="1.5" />
+          {/each}
+          {#if !pushed && !merge}
+            <!-- A soft halo, so the unpushed run reads as a block at a glance
+                 without the amber having to shout over the lane colours. -->
+            <circle
+              cx={graphLaneX(row.lane)}
+              cy={GRAPH_ROW_HEIGHT / 2}
+              r="5"
+              fill="var(--color-warning)"
+              opacity="0.18"
+            />
+          {/if}
+          {#if merge}
+            <!-- A merge is where a lane ends and another continues: the ring
+                 says "two histories met here" at a glance, which no dot can. -->
+            <circle
+              cx={graphLaneX(row.lane)}
+              cy={GRAPH_ROW_HEIGHT / 2}
+              r="4"
+              fill="var(--color-app)"
+              stroke={nodeColor}
+              stroke-width="1.5"
+            />
+            <circle cx={graphLaneX(row.lane)} cy={GRAPH_ROW_HEIGHT / 2} r="1.25" fill={nodeColor} />
+          {:else}
+            <circle
+              cx={graphLaneX(row.lane)}
+              cy={GRAPH_ROW_HEIGHT / 2}
+              r="3"
+              fill={nodeColor}
+              stroke="var(--color-app)"
+              stroke-width="1.5"
+            />
+          {/if}
+        </svg>
+        <button
+          type="button"
+          class={[
+            'flex min-w-0 flex-1 items-center gap-2 px-2 text-left',
+            pushed ? 'text-foreground' : 'text-muted'
+          ]}
+          style={`height: ${GRAPH_ROW_HEIGHT}px`}
+          title={`View ${row.commit.shortHash}: ${subject}. ${row.commit.author}. ${syncLabel}`}
+          aria-label={`View commit ${row.commit.shortHash}: ${subject}. ${row.commit.author}. ${syncLabel}`}
+          onclick={() => onSelectCommit(row.commit)}
+        >
+          <span class="min-w-0 flex-1 truncate text-[0.6875rem] leading-snug">
+            {subject}
+          </span>
+          {#if rewrittenBy !== null}
+            <!-- Amber like the unpushed run it sits in, because the commit is
+                 not on the remote now; the badge is what says it was there
+                 once, and the row's tooltip names the movement and its time. -->
+            <span class="shrink-0 bg-warning/10 px-1 py-px text-[0.5rem] font-medium text-warning">
+              rewritten
+            </span>
+          {/if}
+          {#each row.commit.refs as ref (ref.head ? `head:${ref.name}` : `${ref.kind}:${ref.name}`)}
+            <span
+              class={[
+                'shrink-0 px-1 py-px text-[0.5rem] font-medium',
+                ref.head
+                  ? 'bg-primary text-on-primary'
+                  : ref.kind === 'tag'
+                    ? 'bg-accent/15 text-accent'
+                    : 'bg-primary/15 text-primary'
+              ]}
+            >
+              {ref.name}
+            </span>
+          {/each}
+          <span class="max-w-16 shrink-0 truncate text-[0.5625rem] text-dimmed">
+            {row.commit.author}
+          </span>
+          <span class="shrink-0 font-mono text-[0.5625rem] text-dimmed">
+            {row.commit.shortHash}
+          </span>
+          <span class="shrink-0 text-[0.5625rem] text-dimmed">
+            {formatCompactAge(row.commit.date)}
+          </span>
+        </button>
+      </div>
+    </ContextMenu.Trigger>
+    <ContextMenu.Portal>
+      <ContextMenu.Content
+        class="z-50 min-w-48 overflow-hidden border border-border bg-surface p-1 shadow-xl"
+        side="bottom"
+        align="start"
+        sideOffset={4}
+        collisionPadding={8}
+      >
+        {@render menu({ commit: row.commit, isHead: index === 0 })}
+      </ContextMenu.Content>
+    </ContextMenu.Portal>
+  </ContextMenu.Root>
+{/snippet}
+
 {#if loading}
   <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
     <CioSpinner size={14} class="animate-spin" />
@@ -149,137 +367,128 @@
     <p class="mt-1 text-[0.625rem] text-dimmed">Make your first commit to see history.</p>
   </div>
 {:else}
+  <!--
+    One control for one question: how the same commits are told. Grouped reads
+    them as the batches the upstream saw, which answers "what did I push, and
+    what is still local"; the graph draws the lanes, which answers "where did
+    this branch leave and come back". The summary beside the switch is the only
+    place the panel states the drift in words, and the legend only appears in
+    the view whose marks it explains.
+  -->
+  <div class="sticky top-0 z-10 border-b border-border bg-app">
+    <div class="flex items-center gap-2 px-2 py-1.5">
+      <div
+        class="flex shrink-0 items-center border border-border"
+        role="group"
+        aria-label="How history is presented"
+      >
+        <button
+          type="button"
+          class={[
+            '-mr-px flex h-6 items-center px-2 text-[0.625rem] font-medium transition-colors',
+            view === 'grouped'
+              ? 'bg-elevated text-foreground'
+              : 'text-muted hover:bg-elevated/60 hover:text-foreground'
+          ]}
+          aria-pressed={view === 'grouped'}
+          title="Group commits by what happened to the remote"
+          onclick={() => onViewChange('grouped')}
+        >
+          Grouped
+        </button>
+        <button
+          type="button"
+          class={[
+            'flex h-6 items-center px-2 text-[0.625rem] font-medium transition-colors',
+            view === 'graph'
+              ? 'bg-elevated text-foreground'
+              : 'text-muted hover:bg-elevated/60 hover:text-foreground'
+          ]}
+          aria-pressed={view === 'graph'}
+          title="Draw the commit lanes to see branches diverge and merge"
+          onclick={() => onViewChange('graph')}
+        >
+          Graph
+        </button>
+      </div>
+      <span class="min-w-0 flex-1 truncate text-right text-[0.5625rem] text-dimmed">
+        {commits.length} loaded{#if unpushedCount > 0}
+          · <span class="text-warning">{unpushedCount} unpushed</span>{/if}
+      </span>
+    </div>
+    {#if view === 'graph'}
+      <div
+        class="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 pb-1.5 text-[0.5rem] text-dimmed"
+        aria-hidden="true"
+      >
+        <span class="flex items-center gap-1">
+          <svg width="10" height="10" viewBox="0 0 10 10">
+            <circle cx="5" cy="5" r="3" fill="var(--color-warning)" />
+          </svg>
+          unpushed
+        </span>
+        <span class="flex items-center gap-1">
+          <svg width="10" height="10" viewBox="0 0 10 10">
+            <circle
+              cx="5"
+              cy="5"
+              r="4"
+              fill="var(--color-app)"
+              stroke="var(--color-info)"
+              stroke-width="1.5"
+            />
+            <circle cx="5" cy="5" r="1.25" fill="var(--color-info)" />
+          </svg>
+          merge
+        </span>
+        <span class="flex items-center gap-1">
+          <svg width="14" height="10" viewBox="0 0 14 10">
+            <line x1="0" y1="5" x2="5" y2="5" stroke="var(--color-border)" />
+            <line
+              x1="9"
+              y1="5"
+              x2="14"
+              y2="5"
+              stroke="var(--color-border)"
+              stroke-dasharray="2 2"
+            />
+          </svg>
+          push boundary
+        </span>
+        {#if hasRewritten}
+          <span class="flex items-center gap-1">
+            <span class="bg-warning/10 px-1 py-px font-medium text-warning">rewritten</span>
+            pushed once, no longer on the remote
+          </span>
+        {/if}
+      </div>
+    {/if}
+  </div>
+
   {#if lanesClipped}
     <p class="px-3 pb-1 pt-2 text-[0.5625rem] text-dimmed">
       Showing the first {GRAPH_MAX_LANES} lanes of history
     </p>
   {/if}
 
-  {#each rows as row, index (row.commit.hash)}
-    {@const edges = graphRowEdges(row)}
-    {@const subject = row.commit.message.split('\n')[0] ?? ''}
-    <!--
-      Commits above the pushed boundary are local only, so their node is amber
-      instead of the lane colour: lane 0 paints in `--color-primary`, which is
-      near-black in the light theme and near-white in the dark one, and a
-      monochrome dot is exactly what hid the pushed/not-pushed split. A commit
-      the upstream was rewritten off keeps that amber and gains a badge: it is
-      missing from the remote for the same reason, only it got there once.
-    -->
-    {@const pushed = index >= unpushedCount}
-    {@const rewrittenBy = placement.rewritten.get(index) ?? null}
-    {@const syncLabel =
-      rewrittenBy !== null
-        ? rewriteLabel(rewrittenBy, upstream)
-        : pushed
-          ? `Pushed to ${upstream ?? 'the remote'}`
-          : `Not pushed to ${upstream ?? 'the remote'} yet`}
-    {@const batchStart = placement.boundaries.get(index) ?? null}
-    {#if batchStart}
-      {@render batchBoundary(batchStart)}
-    {:else if needsPlainBoundary && index === unpushedCount}
-      {@render batchBoundary(null)}
-    {/if}
-    <ContextMenu.Root>
-      <ContextMenu.Trigger
-        class="block w-full"
-        aria-label={`Actions for commit ${row.commit.shortHash}`}
-      >
-        <div
-          class={[
-            'flex items-stretch',
-            selectedHash === row.commit.hash ? 'bg-primary/10' : 'hover:bg-elevated/50'
-          ]}
-        >
-          <svg
-            width={laneColumnWidth}
-            height={GRAPH_ROW_HEIGHT}
-            class="shrink-0 overflow-hidden"
-            aria-hidden="true"
-          >
-            {#each edges as edge, edgeIndex (edgeIndex)}
-              <path d={edge.path} fill="none" stroke={edge.color} stroke-width="1.5" />
-            {/each}
-            {#if !pushed}
-              <!-- A soft halo, so the unpushed run reads as a block at a glance
-                   without the amber having to shout over the lane colours. -->
-              <circle
-                cx={graphLaneX(row.lane)}
-                cy={GRAPH_ROW_HEIGHT / 2}
-                r="5"
-                fill="var(--color-warning)"
-                opacity="0.18"
-              />
-            {/if}
-            <circle
-              cx={graphLaneX(row.lane)}
-              cy={GRAPH_ROW_HEIGHT / 2}
-              r="3"
-              fill={pushed ? graphLaneColor(row.lane) : 'var(--color-warning)'}
-              stroke="var(--color-app)"
-              stroke-width="1.5"
-            />
-          </svg>
-          <button
-            type="button"
-            class={[
-              'flex min-w-0 flex-1 items-center gap-2 px-2 text-left',
-              pushed ? 'text-foreground' : 'text-muted'
-            ]}
-            style={`height: ${GRAPH_ROW_HEIGHT}px`}
-            title={`View ${row.commit.shortHash}: ${subject}. ${syncLabel}`}
-            aria-label={`View commit ${row.commit.shortHash}: ${subject}. ${syncLabel}`}
-            onclick={() => onSelectCommit(row.commit)}
-          >
-            <span class="min-w-0 flex-1 truncate text-[0.6875rem] leading-snug">
-              {subject}
-            </span>
-            {#if rewrittenBy !== null}
-              <!-- Amber like the unpushed run it sits in, because the commit is
-                   not on the remote now; the badge is what says it was there
-                   once, and the row's tooltip names the movement and its time. -->
-              <span
-                class="shrink-0 bg-warning/10 px-1 py-px text-[0.5rem] font-medium text-warning"
-              >
-                rewritten
-              </span>
-            {/if}
-            {#each row.commit.refs as ref (ref.head ? `head:${ref.name}` : `${ref.kind}:${ref.name}`)}
-              <span
-                class={[
-                  'shrink-0 px-1 py-px text-[0.5rem] font-medium',
-                  ref.head
-                    ? 'bg-primary text-on-primary'
-                    : ref.kind === 'tag'
-                      ? 'bg-accent/15 text-accent'
-                      : 'bg-primary/15 text-primary'
-                ]}
-              >
-                {ref.name}
-              </span>
-            {/each}
-            <span class="shrink-0 font-mono text-[0.5625rem] text-dimmed">
-              {row.commit.shortHash}
-            </span>
-            <span class="shrink-0 text-[0.5625rem] text-dimmed">
-              {formatCompactAge(row.commit.date)}
-            </span>
-          </button>
-        </div>
-      </ContextMenu.Trigger>
-      <ContextMenu.Portal>
-        <ContextMenu.Content
-          class="z-50 min-w-48 overflow-hidden border border-border bg-surface p-1 shadow-xl"
-          side="bottom"
-          align="start"
-          sideOffset={4}
-          collisionPadding={8}
-        >
-          {@render menu({ commit: row.commit, isHead: index === 0 })}
-        </ContextMenu.Content>
-      </ContextMenu.Portal>
-    </ContextMenu.Root>
-  {/each}
+  {#if view === 'grouped'}
+    {#each groups as group (group.key)}
+      {@render groupHeader(group)}
+      {#each group.entries as entry (entry.row.commit.hash)}
+        {@render commitRow(entry)}
+      {/each}
+    {/each}
+  {:else}
+    {#each rows as row, index (row.commit.hash)}
+      {@const batchStart = placement.boundaries.get(index) ?? null}
+      {#if batchStart}
+        {@render batchBoundary(batchStart)}
+      {:else if needsPlainBoundary && index === unpushedCount}
+        {@render batchBoundary(null)}
+      {/if}
+      {@render commitRow({ index, row })}
+    {/each}
+  {/if}
 
   {#if loadingMore}
     <div class="flex items-center justify-center gap-2 py-4 text-[0.625rem] text-dimmed">
