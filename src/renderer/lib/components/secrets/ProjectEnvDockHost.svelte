@@ -45,14 +45,16 @@
         <button
           type="button"
           class="flex min-w-0 items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
-          title={`Show the env file for ${label}`}
-          aria-label={`Show the env file for ${label}`}
+          title={`Show the env secrets of ${label}`}
+          aria-label={`Show the env secrets of ${label}`}
           onclick={() => projectEnvDock.expand(dock.id)}
         >
+          <!-- The key is the panel's own mark: a docked chip says what it holds
+               (env secrets) even when the project brings its own icon, and the
+               project icon and name say whose secrets they are. -->
+          <CioKey size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
           {#if dock.iconUrl}
             <img src={dock.iconUrl} alt="" class="h-4 w-4 shrink-0 object-contain" />
-          {:else}
-            <CioKey size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
           {/if}
           <span class="flex min-w-0 flex-col">
             <span class="max-w-36 truncate text-[0.5625rem] leading-tight font-medium text-muted"
