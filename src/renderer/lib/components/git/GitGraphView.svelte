@@ -15,12 +15,12 @@
     graphLaneColor,
     graphLaneX,
     graphRemotePlacement,
+    graphPushBatches,
+    type GitGraphBatch,
     graphRowEdges,
     isMergeRow,
     type GitGraphRow
   } from '$lib/git-graph'
-  import { gitHistoryGroups, type GitHistoryGroup } from '$lib/git-history-groups'
-  import type { GitHistoryView } from '$lib/stores/git-panel-view.svelte'
   import { absoluteTime } from './git-status-panel-format'
 
   interface Props {
@@ -42,8 +42,6 @@
     remoteUpdates: GitRemoteUpdate[]
     /** Hash of the commit whose diff is currently shown, if any. */
     selectedHash: string | null
-    /** How the same commits are presented: the upstream's batches, or the lanes. */
-    view: GitHistoryView
     onSelectCommit: (commit: GitCommitInfo) => void
     /** The owning panel supplies the per-commit actions menu. */
     menu: Snippet<[{ commit: GitCommitInfo; isHead: boolean }]>
@@ -58,7 +56,6 @@
     upstream,
     remoteUpdates,
     selectedHash,
-    view,
     onSelectCommit,
     menu
   }: Props = $props()
@@ -84,15 +81,6 @@
   const placement = $derived(graphRemotePlacement(rows, remoteUpdates, unpushedCount))
 
   /**
-   * The same rows read as the batches the upstream saw, which is the default
-   * presentation: the local-only run, then each movement of the ref, newest
-   * first. It is a reshaping of `rows`, never a second fetch.
-   */
-  const groups = $derived(
-    gitHistoryGroups({ rows, placement, unpushedCount, upstream: upstream ?? null })
-  )
-
-  /**
    * True when no movement the upstream still holds lands on the unpushed
    * boundary, so the graph's plain "Pushed to <upstream>" line still has to be
    * drawn. That is the case when the reflog is gone past git's expiry, or when
@@ -103,13 +91,13 @@
     unpushedCount > 0 && unpushedCount < rows.length && !placement.boundaries.has(unpushedCount)
   )
 
-  const groupLabel = (group: GitHistoryGroup): string => {
-    if (group.kind === 'unpushed') return 'Unpushed'
-    // No upstream means there is nothing to be pushed to or received from: the
-    // batch is just history, and saying otherwise would invent a remote.
-    if (group.ref === null) return 'Local history'
-    return group.kind === 'received' ? `Received from ${group.ref}` : `Pushed to ${group.ref}`
-  }
+  /**
+   * How many commits went up in each recorded movement, counted from the rows
+   * below the line rather than from the ref, so the divider names exactly what
+   * the reader can see under it. The oldest batch reaches the end of the loaded
+   * page, so its count is a floor while older commits remain unfetched.
+   */
+  const batches = $derived(graphPushBatches(rows.length, placement.boundaries, hasMore))
 
   /**
    * The last thing the upstream is known to have done with a commit it was
@@ -138,16 +126,26 @@
   A null update is the fallback for a boundary git kept no record of (an expired
   reflog, or a clone that never fetched): the split between pushed and unpushed
   is still real, only its moment is unknown.
+
+  The line also states how many commits the batch carried, counted from the rows
+  on screen rather than from the ref, so it always matches what hangs below it. A
+  `+` means the batch runs past the loaded page: a floor, never presented as the
+  total.
 -->
-{#snippet batchBoundary(update: GitRemoteUpdate | null)}
+{#snippet batchBoundary(update: GitRemoteUpdate | null, batch: GitGraphBatch | null)}
   {@const direction = update === null || update.kind === 'push' ? 'Pushed to' : 'Received from'}
   {@const ref = update?.ref ?? upstream ?? 'the remote'}
   {@const at = update?.at ?? null}
+  {@const count = batch === null ? null : `${String(batch.count)}${batch.partial ? '+' : ''}`}
+  {@const noun = batch?.count === 1 && batch.partial === false ? 'commit' : 'commits'}
+  {@const countLabel = count === null ? '' : ` · ${count} ${noun}`}
+  {@const countTitle =
+    count === null ? '' : `, ${count}${batch?.partial === true ? ' or more' : ''} ${noun}`}
   <div class="flex items-center gap-2 px-2 py-1">
     <span class="h-px flex-1 bg-border"></span>
     <span
       class="flex shrink-0 items-center gap-1 text-[0.5625rem] font-medium text-dimmed"
-      title={`${direction} ${ref}${at === null ? '' : ` on ${absoluteTime(at)}`}`}
+      title={`${direction} ${ref}${at === null ? '' : ` on ${absoluteTime(at)}`}${countTitle}`}
     >
       {#if direction === 'Pushed to'}
         <CioUpload size={10} class="shrink-0" aria-hidden="true" />
@@ -155,58 +153,16 @@
         <CioDownload size={10} class="shrink-0" aria-hidden="true" />
       {/if}
       {direction}
-      {ref}{at === null ? '' : ` · ${formatCompactAge(at)}`}
+      {ref}{at === null ? '' : ` · ${formatCompactAge(at)}`}{countLabel}
     </span>
     <span class="h-px flex-1 bg-border"></span>
   </div>
 {/snippet}
 
 <!--
-  One batch, named the way the upstream sees it. The grouped view draws these
-  instead of boundary lines: the heading carries the movement and its moment,
-  the rows below it are the commits that arrived together, and the count says
-  how many. Unpushed is the one batch with no movement behind it, so it is the
-  one heading that is tinted: it is the only part of history the remote does not
-  have.
--->
-{#snippet groupHeader(group: GitHistoryGroup)}
-  {@const at = group.update?.at ?? null}
-  <div
-    class={[
-      'flex items-center gap-1.5 border-y border-border px-2 py-1',
-      group.kind === 'unpushed' ? 'bg-warning/10' : 'bg-elevated/40'
-    ]}
-  >
-    <span
-      class={[
-        'flex shrink-0 items-center gap-1 text-[0.5625rem] font-semibold',
-        group.kind === 'unpushed' ? 'text-warning' : 'text-muted'
-      ]}
-      title={at === null ? groupLabel(group) : `${groupLabel(group)} on ${absoluteTime(at)}`}
-    >
-      {#if group.kind === 'received'}
-        <CioDownload size={10} class="shrink-0" aria-hidden="true" />
-      {:else if group.update !== null || group.ref !== null}
-        <CioUpload size={10} class="shrink-0" aria-hidden="true" />
-      {:else}
-        <CioCommit size={10} class="shrink-0" aria-hidden="true" />
-      {/if}
-      {groupLabel(group)}
-    </span>
-    {#if at !== null}
-      <span class="min-w-0 truncate text-[0.5625rem] text-dimmed">· {absoluteTime(at)}</span>
-    {/if}
-    <span class="ml-auto shrink-0 text-[0.5625rem] tabular-nums text-dimmed">
-      {group.entries.length}
-      {group.entries.length === 1 ? 'commit' : 'commits'}
-    </span>
-  </div>
-{/snippet}
-
-<!--
-  One commit, shared by both presentations so the two can never drift: the lane
-  column, the subject, the refs it wears, the author and the hash. A merge is a
-  ring instead of a dot, which is the only node shape that differs.
+  One commit: the lane column, the subject, the refs it wears, the author and
+  the hash. A merge is a ring instead of a dot, which is the only node shape
+  that differs.
 -->
 {#snippet commitRow(entry: { index: number; row: GitGraphRow })}
   {@const row = entry.row}
@@ -367,24 +323,15 @@
     </p>
   {/if}
 
-  {#if view === 'grouped'}
-    {#each groups as group (group.key)}
-      {@render groupHeader(group)}
-      {#each group.entries as entry (entry.row.commit.hash)}
-        {@render commitRow(entry)}
-      {/each}
-    {/each}
-  {:else}
-    {#each rows as row, index (row.commit.hash)}
-      {@const batchStart = placement.boundaries.get(index) ?? null}
-      {#if batchStart}
-        {@render batchBoundary(batchStart)}
-      {:else if needsPlainBoundary && index === unpushedCount}
-        {@render batchBoundary(null)}
-      {/if}
-      {@render commitRow({ index, row })}
-    {/each}
-  {/if}
+  {#each rows as row, index (row.commit.hash)}
+    {@const batchStart = placement.boundaries.get(index) ?? null}
+    {#if batchStart}
+      {@render batchBoundary(batchStart, batches.get(index) ?? null)}
+    {:else if needsPlainBoundary && index === unpushedCount}
+      {@render batchBoundary(null, null)}
+    {/if}
+    {@render commitRow({ index, row })}
+  {/each}
 
   {#if loadingMore}
     <div class="flex items-center justify-center gap-2 py-4 text-[0.625rem] text-dimmed">

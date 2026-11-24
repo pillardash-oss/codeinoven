@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest'
 import type { GitCommitInfo, GitRemoteUpdate } from '../../../src/lib/types'
 import {
   assignGraphLanes,
+  graphPushBatches,
   graphRemotePlacement,
   graphRowEdges,
   isMergeRow,
   type GitGraphRow
 } from '../../../src/renderer/lib/git-graph'
-import { gitHistoryGroups } from '../../../src/renderer/lib/git-history-groups'
 
 /**
  * A commit with only the fields the graph reads, took from git's own record:
@@ -93,69 +93,40 @@ describe('assignGraphLanes', () => {
   })
 })
 
-describe('gitHistoryGroups', () => {
-  const commits = [
-    commit('a', ['b']),
-    commit('b', ['c']),
-    commit('c', ['d']),
-    commit('d', ['e']),
-    commit('e', [])
-  ]
-  const rows = assignGraphLanes(commits)
+describe('graphPushBatches', () => {
+  // history:  d (newest), c, b, a    two pushes recorded, at d and at b
+  const rows = assignGraphLanes([
+    commit('d', ['c']),
+    commit('c', ['b']),
+    commit('b', ['a']),
+    commit('a', [])
+  ])
 
-  it('opens the local-only run first, then one group per recorded movement', () => {
-    const unpushedCount = 2
-    const updates = [update('c', 'push', 1_700_000_100_000), update('e', 'push', 1_700_000_200_000)]
-    const placement = graphRemotePlacement(rows, updates, unpushedCount)
-    const groups = gitHistoryGroups({ rows, placement, unpushedCount, upstream: 'origin/main' })
-
-    expect(groups.map((group) => group.kind)).toEqual(['unpushed', 'pushed', 'pushed'])
-    expect(groups.map((group) => group.entries.length)).toEqual([2, 2, 1])
-    expect(groups[1]?.update?.sha).toBe('c')
-    expect(groups[2]?.update?.sha).toBe('e')
-  })
-
-  it('reads a fetched movement as received, not as something this checkout pushed', () => {
-    const unpushedCount = 0
-    const placement = graphRemotePlacement(rows, [update('a', 'received', 1_700_000_100_000)], 0)
-    const groups = gitHistoryGroups({ rows, placement, unpushedCount, upstream: 'origin/main' })
-
-    expect(groups).toHaveLength(1)
-    expect(groups[0]?.kind).toBe('received')
-  })
-
-  it('keeps every row exactly once, in order, whatever the boundaries are', () => {
-    const unpushedCount = 3
+  it('counts the commits that sit below each divider', () => {
     const placement = graphRemotePlacement(
       rows,
-      [update('d', 'push', 1_700_000_100_000), update('e', 'push', 1_700_000_200_000)],
-      unpushedCount
+      [update('d', 'push', 1_700_000_100_000), update('b', 'push', 1_700_000_200_000)],
+      0
     )
-    const groups = gitHistoryGroups({ rows, placement, unpushedCount, upstream: 'origin/main' })
-    const indexes = groups.flatMap((group) => group.entries.map((entry) => entry.index))
+    const batches = graphPushBatches(rows.length, placement.boundaries, false)
 
-    expect(indexes).toEqual([0, 1, 2, 3, 4])
+    expect(batches.get(0)).toEqual({ count: 2, partial: false })
+    expect(batches.get(2)).toEqual({ count: 2, partial: false })
   })
 
-  it('gives two movements of the same ref in the same second distinct keys', () => {
-    const unpushedCount = 0
-    const at = 1_700_000_100_000
-    const updates = [update('a', 'push', at), update('c', 'push', at)]
-    const placement = graphRemotePlacement(rows, updates, unpushedCount)
-    const groups = gitHistoryGroups({ rows, placement, unpushedCount, upstream: 'origin/main' })
+  it('marks the oldest batch as a floor while older commits are unfetched', () => {
+    const placement = graphRemotePlacement(rows, [update('c', 'push', 1_700_000_100_000)], 0)
+    const batches = graphPushBatches(rows.length, placement.boundaries, true)
 
-    const keys = groups.map((group) => group.key)
-    expect(new Set(keys).size).toBe(keys.length)
+    // The divider sits on `c`, so the batch is c, b, a, and paging can still
+    // bring more of it: the count is a floor, never presented as the total.
+    expect(batches.get(1)).toEqual({ count: 3, partial: true })
   })
 
-  it('never names a push for a repository with no upstream', () => {
-    const placement = graphRemotePlacement(rows, [], 0)
-    const groups = gitHistoryGroups({ rows, placement, unpushedCount: 0, upstream: null })
+  it('counts nothing for a boundary the loaded rows do not reach', () => {
+    const placement = graphRemotePlacement(rows, [update('gone', 'push', 1_700_000_100_000)], 0)
+    const batches = graphPushBatches(rows.length, placement.boundaries, false)
 
-    expect(groups).toHaveLength(1)
-    expect(groups[0]?.kind).toBe('pushed')
-    // The view reads a null ref as "Local history": there is no remote to claim.
-    expect(groups[0]?.ref).toBeNull()
-    expect(groups[0]?.update).toBeNull()
+    expect(batches.size).toBe(0)
   })
 })

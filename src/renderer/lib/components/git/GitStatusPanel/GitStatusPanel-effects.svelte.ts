@@ -37,7 +37,6 @@ export class GitStatusPanelEffects extends BoardUnit<GitStatusPanel> {
       gitPanelView.set(this.root.props.projectId, this.root.props.threadId, {
         activeTab: this.root.handlePrListAction.activeTab,
         changesView: this.root.confirmAcceptAllConflicts.changesView,
-        historyView: this.root.handlePrListAction.historyView,
         selectedCommit: this.root.handlePrListAction.selectedCommit,
         selectedPullRequest: this.root.handlePrListAction.selectedPullRequest,
         selectedStash: this.root.handlePrListAction.stashes.selectedStash,

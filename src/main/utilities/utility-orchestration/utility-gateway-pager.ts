@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { GATEWAY_TEXT_CHARACTER_LIMIT } from './utility-gateway-output'
 
 /**
@@ -35,12 +35,12 @@ export const GATEWAY_PAGE_MAX_CHARACTERS = 200_000
 /** Pages one call may ask for. A page beyond the payload is answered empty. */
 export const GATEWAY_PAGE_MAX_NUMBER = 6_400
 
-/** Documents one turn keeps. A turn that reads six large payloads is not paging
- *  its way through the seventh; the oldest is what it has moved past. */
-const MAX_HELD_DOCUMENTS = 6
+/** Documents the app keeps. A session that reads twenty-five large payloads is
+ *  not paging its way back through the first; the ones it has moved past go. */
+const MAX_HELD_DOCUMENTS = 24
 
-/** Characters one turn keeps across every held document. */
-const MAX_HELD_CHARACTERS = 600_000
+/** Characters kept across every held document. */
+const MAX_HELD_CHARACTERS = 2_000_000
 
 export interface GatewayPageRequest {
   /** One-based page of the payload. */
@@ -125,32 +125,40 @@ export interface HeldPage {
 }
 
 /**
- * The payloads one turn holds for paging, oldest first.
+ * The payloads held for paging, by thread, least recently read last.
+ *
+ * Held for the thread rather than for the turn that produced them, because the
+ * reason a later page is wanted is usually that time has passed: a contract read
+ * at the start of a session is still the contract the fifth message wants the rest
+ * of, and a turn-scoped payload would make every page reference die exactly when
+ * it became useful. A reference names its thread and is refused in another one.
  *
  * Bounded twice, by document count and by total characters, because a held
- * payload is live main-process memory: a turn that reads six capability
- * contracts holds a few megabytes at most and gives the oldest back rather than
- * growing with the conversation.
+ * payload is live main-process memory: past the ceiling the least recently read
+ * document is given back, and a reference to it answers with the same sentence a
+ * missing one does. It survives turn boundaries and not the app, which is the
+ * honest lifetime for something rebuilt by one call.
  */
 export class GatewayPageStore {
-  private readonly held = new Map<string, HeldPage>()
+  private readonly held = new Map<string, HeldPage & { threadId: string }>()
   private characters = 0
 
-  hold(tool: string, text: string): string {
-    const ref = `pg-${randomUUID().slice(0, 8)}`
-    this.held.set(ref, { tool, text })
+  hold(threadId: string, tool: string, text: string): string {
+    const ref = `pg-${hashThreadId(threadId)}-${randomUUID().slice(0, 8)}`
+    this.held.set(ref, { threadId, tool, text })
     this.characters += text.length
     this.evict()
     return ref
   }
 
-  read(ref: string): HeldPage | null {
+  /** One held payload, refused unless it was held for the thread asking. */
+  read(threadId: string, ref: string): HeldPage | null {
     const held = this.held.get(ref)
-    if (!held) return null
+    if (!held || held.threadId !== threadId) return null
     // A payload read again is a payload in use, so it moves to the young end.
     this.held.delete(ref)
     this.held.set(ref, held)
-    return held
+    return { tool: held.tool, text: held.text }
   }
 
   clear(): void {
@@ -170,6 +178,11 @@ export class GatewayPageStore {
       this.characters -= entry?.text.length ?? 0
     }
   }
+}
+
+/** The thread a reference belongs to, short enough to read in a header. */
+function hashThreadId(threadId: string): string {
+  return createHash('sha1').update(threadId).digest('hex').slice(0, 8)
 }
 
 /** Room a page leaves for its own header, so the part stays inside the budget. */
@@ -215,6 +228,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export function pageOversizedResult(
   shaped: unknown,
+  threadId: string,
   tool: string,
   request: GatewayPageRequest,
   store: GatewayPageStore
@@ -231,7 +245,7 @@ export function pageOversizedResult(
   }
   const whole = texts.join('\n')
   if (whole.length <= request.charSize) return shaped
-  const pageRef = store.hold(tool, whole)
+  const pageRef = store.hold(threadId, tool, whole)
   const page = readPage(whole, request)
   const structured = isRecord(shaped['structuredContent'])
   return {

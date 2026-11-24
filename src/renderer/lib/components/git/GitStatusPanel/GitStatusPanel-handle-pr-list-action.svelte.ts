@@ -32,7 +32,7 @@ import { GitStatusPanelChangesController } from '../GitStatusPanel/git-status-pa
 import { gitFindScopeFor } from '../git-panel-find'
 import { prSummaryChatContext, prSummaryExplainPrompt } from '../git-status-panel-prompts'
 import { type PrListAction } from '../pr-view'
-import { type GitHistoryView, type GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
+import { type GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
 import { findNavState } from '$lib/stores/find-nav.svelte'
 import { prBatchJobs } from '$lib/stores/pr-batch-jobs.svelte'
 import { threadSettings } from '$lib/stores/thread-settings.svelte'
@@ -175,17 +175,6 @@ export class GitStatusPanelHandlePrListAction extends BoardUnit<GitStatusPanel> 
     gitPanelView.get('', '')
 
   activeTab = $state<GitPanelTabId>(this.savedView.activeTab)
-
-  /**
-   * How the History view tells the same commits: the upstream's batches, or the
-   * lanes. It is a reading preference, not data, so it survives a thread switch
-   * the same way the open view does.
-   */
-  historyView = $state<GitHistoryView>(this.savedView.historyView)
-
-  selectHistoryView(view: GitHistoryView): void {
-    this.historyView = view
-  }
 
   commitMessage = $state('')
 

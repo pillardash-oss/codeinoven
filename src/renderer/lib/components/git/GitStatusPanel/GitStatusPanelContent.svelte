@@ -24,7 +24,7 @@
     PrState,
     PullRequestSummary
   } from '$shared/types'
-  import type { GitHistoryView, GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
+  import type { GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
   import type { PrDetailTabId } from '../pr-view'
   import OvenSurfaceOverlay from '../../shared/OvenSurfaceOverlay.svelte'
   import GitStatusPanelRepoStates from '../GitStatusPanelRepoStates.svelte'
@@ -88,7 +88,6 @@
     loadingHistory: boolean
     loadingMoreHistory: boolean
     historyHasMore: boolean
-    historyView: GitHistoryView
     unpushedCount: number
     remoteUpdates: GitRemoteUpdate[]
     localBranches: GitBranchInfo[]
@@ -221,7 +220,6 @@
     loadingHistory,
     loadingMoreHistory,
     historyHasMore,
-    historyView,
     unpushedCount,
     remoteUpdates,
     localBranches,
@@ -456,7 +454,6 @@
           loading={loadingHistory}
           loadingMore={loadingMoreHistory}
           hasMore={historyHasMore}
-          view={historyView}
           {unpushedCount}
           upstream={status?.upstream ?? null}
           {remoteUpdates}

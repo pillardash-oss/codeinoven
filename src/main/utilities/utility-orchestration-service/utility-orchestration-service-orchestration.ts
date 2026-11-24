@@ -135,8 +135,16 @@ export class UtilityOrchestrationServiceOrchestration {
    */
   private readonly rosterReadTurns = new WeakSet<TurnState>()
 
-  /** The paged payloads each live turn is holding, by turn id. */
-  private readonly pagedText = new Map<string, GatewayPageStore>()
+  /**
+   * The payloads held for paging.
+   *
+   * One store for the app rather than one per turn: a page is usually asked for
+   * after time has passed, and a reference that died with its turn would refuse
+   * exactly the read it was made for. The store bounds itself by document count
+   * and total characters, and refuses a reference outside the thread it was held
+   * for.
+   */
+  private readonly pagedText = new GatewayPageStore()
 
   constructor(private readonly host: UtilityOrchestrationService) {}
 
@@ -815,12 +823,11 @@ export class UtilityOrchestrationServiceOrchestration {
     // here and stripped, so a utility never receives an argument its schema does
     // not declare.
     const { request: page, rest } = readPageRequest(body)
-    const pages = this.pagesFor(turnId)
     if (page.pageRef !== null) {
-      const held = pages.read(page.pageRef)
+      const held = this.pagedText.read(state.request.threadId, page.pageRef)
       if (!held)
         throw new Error(
-          'That page reference is no longer held by this turn. Call the tool again for a new first page.'
+          'That page reference is not held any more, or belongs to another thread. Call the tool again for a new first page.'
         )
       // A later page is a read, never a second dispatch: a preview, a checkpoint
       // or any other mutation must not run again because its answer was long.
@@ -831,7 +838,13 @@ export class UtilityOrchestrationServiceOrchestration {
     // ways: content parts for a model, the same data for a script. Every other
     // route keeps the exact body it has always returned.
     const shaped = this.host.structuredRoutes.has(route) ? gatewayStructuredResult(result) : result
-    const presented = pageOversizedResult(shaped, direct.name, page, pages)
+    const presented = pageOversizedResult(
+      shaped,
+      state.request.threadId,
+      direct.name,
+      page,
+      this.pagedText
+    )
     let measurement: GatewayOutputMeasurement | undefined
     const prepared = await budgetGatewayOutput(presented, state.request.projectPath, {
       limit: page.charSize,
@@ -850,26 +863,6 @@ export class UtilityOrchestrationServiceOrchestration {
       })
     }
     return prepared
-  }
-
-  /**
-   * The payloads one turn holds for paging.
-   *
-   * Kept per turn and dropped with it, because a held payload is main-process
-   * memory and a page reference means nothing to the turn after this one.
-   */
-  pagesFor(turnId: string): GatewayPageStore {
-    const existing = this.pagedText.get(turnId)
-    if (existing) return existing
-    const store = new GatewayPageStore()
-    this.pagedText.set(turnId, store)
-    return store
-  }
-
-  /** Release the payloads a finished turn was holding. */
-  forgetPages(turnId: string): void {
-    this.pagedText.get(turnId)?.clear()
-    this.pagedText.delete(turnId)
   }
 
   /**
