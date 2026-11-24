@@ -163,6 +163,49 @@ EOF`
     ])
   })
 
+  // Regression: the ordinary one-file shell edit names the path once, in an
+  // assignment, and hands the command a variable. The operand was rejected for
+  // holding `$`, so the turn proved nothing about the file it rewrote.
+  it('extracts a sed in-place target held in a shell variable', () => {
+    const part: Extract<AgentPart, { type: 'tool' }> = {
+      type: 'tool',
+      id: 'part-shell-var',
+      messageID: 'message-shell-var',
+      callID: 'call-shell-var',
+      tool: 'bash',
+      state: {
+        status: 'completed',
+        input: {
+          command: `f=apps/application/src/lib/components/AuthorizedDeviceGate.svelte && sed -i '' 's|>Recover your account<|>Use your email<|' $f && git add $f`
+        }
+      }
+    }
+
+    expect(changedPathsFromTool('/project', part)).toEqual([
+      'apps/application/src/lib/components/AuthorizedDeviceGate.svelte'
+    ])
+  })
+
+  it('extracts a perl in-place target and ignores an unknown variable', () => {
+    const part: Extract<AgentPart, { type: 'tool' }> = {
+      type: 'tool',
+      id: 'part-perl-var',
+      messageID: 'message-perl-var',
+      callID: 'call-perl-var',
+      tool: 'bash',
+      state: {
+        status: 'completed',
+        input: {
+          command: `cd apps/application/src && f=lib/components/Gate.svelte && perl -0pi -e 's/a/b/g' $f && sed -i '' 's/a/b/' $UNKNOWN`
+        }
+      }
+    }
+
+    expect(changedPathsFromTool('/project', part)).toEqual([
+      'apps/application/src/lib/components/Gate.svelte'
+    ])
+  })
+
   it('extracts paths from Codex file-change items', () => {
     const part: Extract<AgentPart, { type: 'tool' }> = {
       type: 'tool',

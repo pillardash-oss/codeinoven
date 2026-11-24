@@ -125,6 +125,28 @@ export function shellVariableValues(command: string): Map<string, string> {
   return values
 }
 
+/**
+ * Values of the plain assignments a shell command makes, quoted or bare.
+ *
+ * `f=src/lib/components/Gate.svelte && sed -i '' 's|a|b|' $f` is the ordinary
+ * way one file is edited, and the writer's operand is the variable. Paths are
+ * usually unquoted, which the inline-script reader's literal rule does not
+ * accept, so this reads the assignment itself.
+ */
+export function shellPathVariables(command: string): Map<string, string> {
+  const values = shellVariableValues(command)
+  const code = scriptCodePositions(command)
+  const assignments = /(?:^|[;\n&|(])\s*([A-Za-z_][\w]*)=(?:"([^"]*)"|'([^']*)'|([^\s;&|]+))/gmu
+  for (const match of command.matchAll(assignments)) {
+    if (!code[match.index]) continue
+    const name = match[1]
+    const value = match[2] ?? match[3] ?? match[4]
+    if (!name || !value || /[$`]/u.test(value)) continue
+    values.set(name, value)
+  }
+  return values
+}
+
 export function shellWorkingDirectory(
   projectPath: string,
   input: Record<string, unknown>,
@@ -345,9 +367,20 @@ export function shellWritePaths(projectPath: string, input: Record<string, unkno
   }
   let workingDirectory = shellWorkingDirectory(projectPath, input, '')
   const paths = new Set<string>()
-  const addIn = (directory: string, candidate: string | undefined): void => {
+  // `f=lib/components/Gate.svelte && sed -i '' 's|a|b|' $f` is the ordinary way a
+  // shell edits one file, and the operand is the variable, not the path. Only an
+  // assignment this same command made is substituted: anything else stays
+  // unexpanded and is rejected below.
+  const variables = shellPathVariables(sourceCommand)
+  const expand = (candidate: string): string =>
+    candidate.replace(/\$\{?([A-Za-z_][A-Za-z_0-9]*)\}?/gu, (literal, name: string) => {
+      return variables.get(name) ?? literal
+    })
+  const addIn = (directory: string, operand: string | undefined): void => {
     // Runtime expansion, command substitution and globs cannot establish an exact target.
-    if (!candidate || /[$`*?{}]/u.test(candidate)) return
+    if (!operand) return
+    const candidate = expand(operand)
+    if (/[$`*?{}]/u.test(candidate)) return
     const path = projectRelativePath(projectPath, resolve(directory, candidate))
     if (path) paths.add(path)
   }
@@ -381,8 +414,8 @@ export function shellWritePaths(projectPath: string, input: Record<string, unkno
       add(operands.at(-1))
       if (executable === 'mv') for (const operand of operands.slice(0, -1)) add(operand)
     } else if (
-      executable === 'sed' &&
-      args.some((arg) => arg === '--in-place' || arg.startsWith('-i'))
+      ['sed', 'perl'].includes(executable) &&
+      args.some((arg) => arg === '--in-place' || (arg.startsWith('-') && /^-[-\w]*i/u.test(arg)))
     ) {
       add(operands.at(-1))
     } else if (/^(?:python[\d.]*|node|bun|deno)$/u.test(executable)) {
