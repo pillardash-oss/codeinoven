@@ -18,6 +18,7 @@ import {
   unmanagedProcessKillReason
 } from '../../../../lib/agent-control-policy'
 import { sensitiveFileTargets } from '../../../../lib/sensitive-file-targets'
+import { tempWorkspaceReferences, tempWorkspaceRefusal } from '../../../../lib/temp-workspace'
 import { CIO_SENSITIVE_ACCESS_REASON_TOOL_NAME } from '../../../../lib/core-tools'
 import {
   DEFAULT_BUNDLED_PI_FILE_PATTERNS,
@@ -64,6 +65,56 @@ const CIO_PERMANENT_SENSITIVE_FILE_PATTERNS = ${JSON.stringify(
   )}
 
 const sensitiveFileTargets = ${sensitiveFileTargets.toString()}
+
+// <cio-temp-workspace-policy>
+// The OS temp directory is banned for agent work, and the ban is enforced here
+// rather than left to a card: a temp path is never something to approve, it is
+// work in the wrong place. Reads stay allowed so a file the user attached from
+// temp still opens; writes, edits and every shell command are refused with the
+// session's own scratch folder named.
+const tempWorkspaceReferences = ${tempWorkspaceReferences.toString()}
+const tempWorkspaceRefusal = ${tempWorkspaceRefusal.toString()}
+const CIO_TEMP_READ_TOOLS = new Set(['read', 'ls', 'grep', 'find'])
+const CIO_TEMP_PATH_FIELDS = [
+  'path',
+  'paths',
+  'file_path',
+  'filePath',
+  'filename',
+  'sourcePath',
+  'destinationPath',
+  'targetPath',
+  'oldPath',
+  'newPath',
+  'directory',
+  'root'
+]
+
+function tempWorkdirTexts(toolName, input) {
+  if (toolName === 'bash' || toolName === 'powershell' || toolName === 'cmd') {
+    return typeof input['command'] === 'string' ? [input['command']] : []
+  }
+  const texts = []
+  for (const field of CIO_TEMP_PATH_FIELDS) {
+    const value = input[field]
+    if (typeof value === 'string') texts.push(value)
+    else if (Array.isArray(value)) {
+      for (const entry of value) if (typeof entry === 'string') texts.push(entry)
+    }
+  }
+  return texts
+}
+
+function tempWorkdirReason(toolName, input, cwd) {
+  // App-owned tools carry whatever the user or the app handed them (a requested
+  // file, a blocked path recorded for a reason), so they are not agent work.
+  if (typeof toolName !== 'string' || toolName.startsWith('cio_')) return undefined
+  if (CIO_TEMP_READ_TOOLS.has(toolName)) return undefined
+  const references = tempWorkspaceReferences(tempWorkdirTexts(toolName, input))
+  if (references.length === 0) return undefined
+  return tempWorkspaceRefusal(references, join(cwd, '.cio', 'tmp'))
+}
+// </cio-temp-workspace-policy>
 
 // Why the run says it needs a protected file, recorded before the card asks and
 // spent once when that card appears. A reason is only accepted for a path this
@@ -570,17 +621,17 @@ function networkOutputPaths(command) {
   return paths
 }
 
-// The session's workspace and the machine's temp directory: the scratch the app
-// pre-authorises, named the same way a chat's own workspace is.
+// The session's own workspace: the scratch the app pre-authorises, named the
+// same way a chat's own workspace is. The machine's temp directory is NOT
+// scratch any more, because agent work there is refused outright (see
+// tempWorkspaceReferences above), so a command that names it is refused instead
+// of being quietly treated as confined.
 function isScratchPath(candidate, cwd) {
   // A leading tilde is the shell's home, not a path this can resolve, so it is
   // never assumed to be scratch.
   if (candidate.startsWith('~')) return false
   const resolved = isAbsolute(candidate) ? resolve(candidate) : resolve(cwd, candidate)
-  const roots = [cwd, tmpdir(), '/tmp', '/private/tmp', '/var/tmp']
-  return roots.some(function (root) {
-    return isWithinPath(resolved, root)
-  })
+  return isWithinPath(resolved, cwd)
 }
 // </cio-network-command-policy>
 

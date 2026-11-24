@@ -273,6 +273,11 @@ export function piCoreToolsEventsSource(): string {
   // stays transparent there.
   async function gateToolCall(event, ctx, skipSensitive = false) {
     const input = recordValue(event.input) ?? {}
+    // The OS temp directory is not a place to approve work in: the session has
+    // its own scratch folder, so a temp path is refused here, before any card,
+    // and no permission mode can turn it into an approved action.
+    const tempWorkdir = tempWorkdirReason(event.toolName, input, ctx.cwd)
+    if (tempWorkdir) return { block: true, reason: tempWorkdir }
     // Session ownership is an invariant, including in Full Access. Never route
     // this through a permission card that could auto-approve the bypass.
     const cuaBypass = unmanagedCuaShellReason(event.toolName, input)

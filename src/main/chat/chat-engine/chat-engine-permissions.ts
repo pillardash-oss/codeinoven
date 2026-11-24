@@ -1,9 +1,14 @@
-import { posix, resolve } from 'path'
+import { join, posix, resolve } from 'path'
 import { existsSync } from 'fs'
 import { ChatEngine } from '../chat-engine'
 import { Logger } from '../../system/logger'
 import { PERMISSION_EVENTS_LOG_FILE, dailyLogRelativePath } from '../../system/log-paths'
-import { PermissionPolicy } from '../../permissions/permission-policy'
+import { PermissionPolicy, normalizePermissionName } from '../../permissions/permission-policy'
+import {
+  tempWorkspaceReferences,
+  tempWorkspaceRefusal,
+  type TempWorkspaceReference
+} from '../../../lib/temp-workspace'
 import { validateBoundedString, validateEntityId } from '../../ipc/ipc-validation'
 import { PermissionRequestGoneError } from '../../drivers/driver.interface'
 import type { HarnessDriver } from '../../drivers/driver.interface'
@@ -42,16 +47,12 @@ import { isOvenMode, isUnrestrictedLevel } from '../../../lib/permission-level'
   'bundled-pi-sensitive-files'
 ])
 
-/**
- * A remote Oven's own temp directories, as that machine spells them.
- *
- * A chat there writes its throwaway files where any shell on that machine would
- * (`/tmp/o.txt` for a probe's output), and those are that machine's scratch in
- * exactly the way `chats-cwd/<threadId>` is a local chat's. Only remote sessions
- * get them: on this machine the temp directory is not a chat's workspace.
- */
-const OVEN_SCRATCH_ROOTS = ['/tmp', '/var/tmp', '/private/tmp']
+/** Permission names that only read: a read is not agent work in the temp
+ *  directory, so an attached file that lives there still opens. */
+const TEMP_READ_TERMS = new Set(['read', 'grep', 'glob', 'find', 'list', 'ls', 'search', 'view'])
 
+/** Permission names that change something, whatever else they also say. */
+const TEMP_WRITE_TERMS = new Set(['write', 'edit', 'delete', 'move', 'create', 'exec', 'execute'])
 /**
  * The app-owned gateway tool a request would run, if that is what it is.
  *
@@ -71,6 +72,41 @@ function appGatewayToolCall(metadata: Record<string, unknown>): string | undefin
   // which no user MCP server shares.
   if (provider !== undefined && provider !== 'utilities') return undefined
   return tool
+}
+
+/**
+ * The OS temp references a request would work in, if any.
+ *
+ * The app's own gateway tools are exempt: their routes carry their own checks,
+ * and the app itself may legitimately open a temp file. Reads are exempt too, so
+ * an attached file that lives in temp still opens; everything else that names a
+ * temp path is refused before any policy runs.
+ */
+export function tempWorkspaceRequestReferences(
+  request: PermissionRequest,
+  commands: readonly string[]
+): TempWorkspaceReference[] {
+  if (appGatewayToolCall(request.metadata) !== undefined) return []
+  if (commands.length > 0) return tempWorkspaceReferences(commands)
+  if (isTempReadPermission(request.permission)) return []
+  return tempWorkspaceReferences(request.patterns)
+}
+
+function isTempReadPermission(permission: string): boolean {
+  const terms = normalizePermissionName(permission)
+    .split(/[^a-z]+/u)
+    .filter(Boolean)
+  if (terms.some((term) => TEMP_WRITE_TERMS.has(term))) return false
+  return terms.some((term) => TEMP_READ_TERMS.has(term))
+}
+
+/** The scratch folder an agent stages disposable work in, spelled the way the
+ *  session's own machine spells it: an Oven is POSIX even from a Windows
+ *  desktop, and its own paths must never be re-serialized by this host. */
+function scratchFolderHint(projectPath: string): string {
+  return projectPath.startsWith('/')
+    ? posix.join(projectPath, PROJECT_DATA_DIRECTORY, 'tmp')
+    : join(projectPath, PROJECT_DATA_DIRECTORY, 'tmp')
 }
 
 /** ChatEngine permissions: one concern, moved verbatim from the composition root. */
@@ -501,13 +537,7 @@ export class ChatEnginePermissions {
             // resolver must never touch them: on a Windows desktop
             // `resolve('/home/u/x')` became `D:\\home\\u\\x`, a path that exists
             // on neither machine and that no request from the Oven could match.
-            remoteSessionPath(info.projectPath),
-            // That machine's own scratch, which is what a shell there writes to
-            // by habit (`/tmp/o.txt` for a probe's output). A local chat's temp
-            // is the workspace itself, so the Oven has no equivalent here unless
-            // this is named: leaving it out asked the user to approve writing a
-            // throwaway file into the Oven's temp directory.
-            ...OVEN_SCRATCH_ROOTS
+            remoteSessionPath(info.projectPath)
           ]
         : info.projectId === GLOBAL_BROWSER_PROJECT_ID
           ? [info.projectPath]
@@ -699,6 +729,50 @@ export class ChatEnginePermissions {
     }
 
     const commands = permissionCommands(request.metadata)
+    // The OS temp directory is an invariant, not a permission tier: the session
+    // has its own scratch folder, and a temp path is where half-finished work
+    // leaks out of a turn. Every harness that asks the app before it writes or
+    // runs a shell command passes through here (the bundled Pi included), so
+    // this is the one place the ban is enforced for all of them: refused with
+    // the scratch folder named, never a card, and never approvable by a
+    // permission mode. Reads are exempt so a file the user attached from temp
+    // still opens.
+    const tempReferences = tempWorkspaceRequestReferences(request, commands)
+    if (tempReferences.length > 0) {
+      const reason = tempWorkspaceRefusal(tempReferences, scratchFolderHint(info.projectPath))
+      const scope = { projectRoot: info.projectPath, paths: request.patterns }
+      const pending: PendingPermissionInfo = {
+        driverId,
+        driver: sourceDriver,
+        session: info,
+        request: {
+          ...request,
+          policy: { risk: 'critical', reason, scopedPaths: [...request.patterns] }
+        },
+        policy: {
+          decision: 'ask',
+          approved: false,
+          reason,
+          risk: 'critical',
+          scope,
+          approval: { required: true },
+          ledger: {
+            permission: normalizePermissionName(request.permission),
+            risk: 'critical',
+            decision: 'ask',
+            reason,
+            scope
+          }
+        },
+        resumeStatus: info.activeTurnId ? 'executing' : 'planning'
+      }
+      this.host.state.pendingPermissions.set(request.id, pending)
+      // A refusal that carries its reason: the harness fails this one call with
+      // the text and the same turn continues in the session's scratch folder,
+      // instead of aborting or parking on a card.
+      await this.replyPermissionRaw(pending, 'reject', 'policy:temp-workspace', reason)
+      return
+    }
     // Process lifecycle is an invariant, not a permission tier. A command that
     // stops a process by pid, port, name, pattern, signal, interpreter or script
     // can only reach something this session did not start, so it is answered
@@ -992,7 +1066,9 @@ export class ChatEnginePermissions {
       pending.session.projectPath,
       pending.request.id,
       reply,
-      undefined,
+      // A policy refusal is a decision with words: without them the harness
+      // fails the call with nothing, and the model retries the same thing.
+      alternative,
       pending.request.sessionId
     )
     await this.recordPermissionDecision(pending, reply, decidedBy)
