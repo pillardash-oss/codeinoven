@@ -76,6 +76,33 @@
     activeTab ? contextSidebarState.noteTabFor(GLOBAL_BROWSER_PROJECT_ID, activeTab.id) : null
   )
   const agentChat = $derived(activeTab ? globalBrowser.agentChatFor(activeTab.id) : null)
+  /**
+   * Every assistant conversation the browser holds, one rail tab per browser tab
+   * that has one.
+   *
+   * A conversation belongs to the tab that opened it, so the strip is the
+   * browser's own tabs in the browser's own order, each row a page the agent is
+   * working on. That is what makes the strip work like the thread browser's: the
+   * conversations sit as tabs on the left of one row, the "+" that opens another
+   * stays at its right, and a strip of conversations can never hide the way to
+   * add one.
+   */
+  const agentTabs = $derived(
+    globalBrowser.tabs.flatMap((tab): BrowserAgentContextTab[] => {
+      const chat = globalBrowser.agentChatFor(tab.id)
+      if (!chat) return []
+      return [
+        {
+          id: `browser-agent:${tab.id}`,
+          kind: 'browser-agent',
+          title: chat.thread.title,
+          projectId: chat.thread.projectId,
+          threadId: chat.thread.id,
+          browserTabId: tab.id
+        }
+      ]
+    })
+  )
   const artifactTab = $derived<FilesContextTab | null>(
     agentChat && browserAssistant.hasArtifacts(agentChat.threadId)
       ? {
@@ -108,24 +135,15 @@
   )
 
   /**
-   * The active tab's assistant conversation as a rail tab.
+   * The assistant conversation of the tab on screen, as its rail tab.
    *
-   * It exists once the tab has asked the agent something, which is what the rail
-   * draws and what the strip names. The conversation is a real thread, so the tab
-   * is a view of it: its title is the thread's, and closing the tab deletes the
-   * thread.
+   * The strip lists every conversation (see `agentTabs`), while the conversation
+   * on screen is always the one the page on screen owns: switching to another
+   * page switches the conversation with it, so the rail never talks about a page
+   * the user cannot see.
    */
   const agentTab: BrowserAgentContextTab | null = $derived(
-    activeTab && agentChat
-      ? {
-          id: `browser-agent:${activeTab.id}`,
-          kind: 'browser-agent',
-          title: agentChat.thread.title,
-          projectId: agentChat.thread.projectId,
-          threadId: agentChat.thread.id,
-          browserTabId: activeTab.id
-        }
-      : null
+    activeTab ? (agentTabs.find((tab) => tab.browserTabId === activeTab.id) ?? null) : null
   )
   /**
    * The downloads panel. It belongs to the shared browser profile, not to a tab,
@@ -240,7 +258,7 @@
     ...(globalBrowser.extensionSidePanelSidebarShown ? [extensionSidePanelTab] : []),
     downloadsTab,
     ...(noteTab ? [noteTab] : []),
-    ...(agentTab ? [agentTab] : []),
+    ...agentTabs,
     ...(artifactTab ? (artifactFileTabs.length ? artifactFileTabs : [artifactTab]) : []),
     ...(notificationsTab ? [notificationsTab] : []),
     ...(stickyNotesTab ? [stickyNotesTab] : [])
@@ -278,6 +296,14 @@
    *  it, so a browser tab's agent chat closes the rail rather than dropping the
    *  conversation (closing the browser tab does). */
   function selectTool(tabId: string): void {
+    const pickedAgentTab = agentTabs.find((tab) => tab.id === tabId)
+    if (pickedAgentTab) {
+      // A conversation is a page, so picking its tab brings that page on screen
+      // and the rail follows it: the two never talk about different pages.
+      globalBrowser.activate(pickedAgentTab.browserTabId)
+      globalBrowser.showAgentSidebar()
+      return
+    }
     if (
       artifactTab &&
       (tabId === artifactTab.id || artifactFileTabs.some((tab) => tab.id === tabId))
@@ -320,8 +346,8 @@
       globalBrowser.showExtensionsSidebar()
       return
     }
-    if (agentTab && tabId === agentTab.id) globalBrowser.showAgentSidebar()
-    else globalBrowser.showNoteSidebar()
+    // Every agent tab is answered above; what is left is the note.
+    globalBrowser.showNoteSidebar()
   }
 
   function closeTab(tabId: string): void {
@@ -363,8 +389,26 @@
       globalBrowser.closeExtensionsSidebar()
       return
     }
-    if (agentTab && tabId === agentTab.id) closing = agentTab
-    else onClose()
+    if (agentTabs.some((tab) => tab.id === tabId)) {
+      closing = agentTabs.find((tab) => tab.id === tabId) ?? null
+      return
+    }
+    onClose()
+  }
+
+  /**
+   * Open another browser assistant tab: a new browser tab with a conversation of
+   * its own, which is what the strip's "+" adds.
+   *
+   * A conversation is bound to the tab that owns it, so a second conversation
+   * means a second tab. Showing the agent on it is what creates it, exactly as it
+   * does for the first one, and the page it answers about is whatever the user
+   * opens next.
+   */
+  function openNewAssistantTab(): void {
+    const tabId = globalBrowser.createTab('')
+    globalBrowser.activate(tabId)
+    globalBrowser.showAgentSidebar()
   }
 
   /**
@@ -390,7 +434,7 @@
 
   async function commitRename(): Promise<void> {
     const tabId = renamingTabId
-    const tab = tabId !== null && agentTab?.id === tabId ? agentTab : null
+    const tab = tabId === null ? null : (agentTabs.find((entry) => entry.id === tabId) ?? null)
     const title = renameValue.trim()
     if (renameBusy) return
     if (!tab || title === '' || title === tab.title) {
@@ -419,7 +463,7 @@
       browserPopupWindows.openMenu(tabId, event)
       return
     }
-    const tab = agentTab?.id === tabId ? agentTab : null
+    const tab = agentTabs.find((entry) => entry.id === tabId) ?? null
     if (!tab) return
     event.preventDefault()
     event.stopPropagation()
@@ -430,7 +474,7 @@
       Math.max(0, Math.round(event.clientY))
     ).catch(() => null)
     if (!choice) return
-    const current = agentTab?.id === tabId ? agentTab : null
+    const current = agentTabs.find((entry) => entry.id === tabId) ?? null
     if (!current) return
     switch (choice.action) {
       case 'rename':
@@ -457,7 +501,10 @@
       const chat = browserAssistant.chatForThread(tab.threadId)
       if (chat) await browserAssistant.closeChat(chat)
       closing = null
-      globalBrowser.closeAgentSidebar()
+      // Only the conversation on screen leaves the rail with it: the strip lists
+      // every conversation, and closing one that belongs to another page must not
+      // close the panel the user is reading.
+      if (globalBrowser.activeTab?.id === tab.browserTabId) globalBrowser.closeAgentSidebar()
     } catch (error) {
       reportError(error, 'The conversation could not be closed.')
     } finally {
@@ -582,6 +629,7 @@
     onRenameCommit={() => void commitRename()}
     onRenameCancel={cancelRename}
     onClosePopups={closePopups}
+    onNewBrowser={openNewAssistantTab}
     {onWidthChange}
     onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
     onTerminalPlacementChange={() => {}}

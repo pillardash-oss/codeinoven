@@ -156,9 +156,11 @@ export interface BrowserContextTab {
  * The conversation is a real chat thread of the reserved hidden browser project,
  * so the tab is a view of that thread rather than a conversation of its own: the
  * title is the thread's title, the panel renders the thread's own transcript and
- * settings, and closing the tab deletes the thread. The browser tab it answers
- * about is carried here because the rail only ever shows the conversation of the
- * tab on screen.
+ * settings, and closing the tab deletes the thread. One of these exists per
+ * browser tab that has a conversation, so the rail's strip lists the browser's
+ * conversations the way a tab bar lists its pages, and the browser tab it answers
+ * about is carried here because selecting the tab brings that page on screen with
+ * it.
  */
 export interface BrowserAgentContextTab {
   id: string

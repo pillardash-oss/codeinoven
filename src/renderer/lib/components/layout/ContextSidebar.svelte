@@ -105,8 +105,9 @@
     /** Fold the bottom terminal dock away. Only wired for the bottom dock; the
      *  right sidebar is closed from the context dock rail instead. */
     onTerminalDockToggle?: () => void
-    /** Spawn another shell. The terminal is the only tool that still offers a
-     *  "+"; temporary chats are tabbed but are only ever opened from a thread. */
+    /** Spawn another shell. The terminal, a display's target and the browser's
+     *  own tabs are the tools that offer a "+": each of them owns a list of
+     *  things that only grows from the strip itself. */
     onNewTerminal?: () => void
     onNewBrowser?: () => void
     /** Open another display tab, which starts as the target chooser. */
@@ -292,6 +293,11 @@
    *  the fullscreen a phone-sized picture needs on a dock-sized panel. */
   let displayMode = $derived(activeTab?.kind === 'display')
   let browserMode = $derived(activeTab?.kind === 'browser')
+  /** A browser tab's assistant conversations, listed one tab per conversation.
+   *  The strip is the browser's own list of conversations, so it keeps the "+"
+   *  that opens another conversation the way the thread browser's strip keeps
+   *  the one that opens another page. */
+  let browserAgentMode = $derived(activeTab?.kind === 'browser-agent')
   /** A popup window's page. Its tabs are the windows the page opened, so the tool
    *  is tabbed like a terminal and still owns a close-all control of its own. */
   let popupMode = $derived(activeTab?.kind === 'popup-window')
@@ -313,6 +319,7 @@
     terminalMode ||
       displayMode ||
       browserMode ||
+      browserAgentMode ||
       popupMode ||
       (activeTab !== null && !tabbedMode && !RAIL_DISMISSED_KINDS.has(activeTab.kind))
   )
@@ -874,6 +881,22 @@
             >
               <CioMaximize size={13} />
             </button>
+          {:else if browserAgentMode}
+            {#if onNewBrowser}
+              <!-- The adjacency is deliberate: the other browser tools keep the
+                   "+" beside their own controls, and a conversation is created
+                   the same way, so the strip never leaves the user without the
+                   one action that adds to it. -->
+              <button
+                type="button"
+                class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                aria-label="Open another browser assistant tab"
+                title="New browser assistant tab"
+                onclick={() => onNewBrowser?.()}
+              >
+                <CioPlus size={13} />
+              </button>
+            {/if}
           {:else if displayMode}
             <button
               type="button"

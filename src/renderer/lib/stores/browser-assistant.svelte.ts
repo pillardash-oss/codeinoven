@@ -76,11 +76,20 @@ class BrowserAssistantState {
         undefined,
         threadId
       )
+      // The conversation can be deleted while this read is in flight, and its
+      // workspace with it. Nothing may be recorded for a conversation the store
+      // no longer knows, or a fresh conversation for the same tab would inherit
+      // the deleted one's answer.
+      if (!this.byThread.has(threadId)) return
       this.artifactThreads.set(
         threadId,
         entries.some((entry) => !entry.name.startsWith('.'))
       )
     } catch (error) {
+      // A read for a conversation that was deleted meanwhile is not a failure the
+      // user can act on: reporting it only leaves an error about a conversation
+      // that is already gone.
+      if (!this.byThread.has(threadId)) return
       reportError(error, 'Browser conversation artifacts could not be loaded.')
     } finally {
       delete this.artifactLoads[threadId]
