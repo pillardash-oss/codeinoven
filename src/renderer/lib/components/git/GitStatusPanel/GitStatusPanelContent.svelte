@@ -89,7 +89,6 @@
     loadingMoreHistory: boolean
     historyHasMore: boolean
     historyView: GitHistoryView
-    onHistoryViewChange: (view: GitHistoryView) => void
     unpushedCount: number
     remoteUpdates: GitRemoteUpdate[]
     localBranches: GitBranchInfo[]
@@ -223,7 +222,6 @@
     loadingMoreHistory,
     historyHasMore,
     historyView,
-    onHistoryViewChange,
     unpushedCount,
     remoteUpdates,
     localBranches,
@@ -459,7 +457,6 @@
           loadingMore={loadingMoreHistory}
           hasMore={historyHasMore}
           view={historyView}
-          onViewChange={onHistoryViewChange}
           {unpushedCount}
           upstream={status?.upstream ?? null}
           {remoteUpdates}

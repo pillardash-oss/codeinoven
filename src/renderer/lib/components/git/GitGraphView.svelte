@@ -44,7 +44,6 @@
     selectedHash: string | null
     /** How the same commits are presented: the upstream's batches, or the lanes. */
     view: GitHistoryView
-    onViewChange: (view: GitHistoryView) => void
     onSelectCommit: (commit: GitCommitInfo) => void
     /** The owning panel supplies the per-commit actions menu. */
     menu: Snippet<[{ commit: GitCommitInfo; isHead: boolean }]>
@@ -60,7 +59,6 @@
     remoteUpdates,
     selectedHash,
     view,
-    onViewChange,
     onSelectCommit,
     menu
   }: Props = $props()
@@ -93,10 +91,6 @@
   const groups = $derived(
     gitHistoryGroups({ rows, placement, unpushedCount, upstream: upstream ?? null })
   )
-
-  /** True while a commit the upstream was rewritten off is on screen, so the
-   *  legend only explains a mark that is actually there. */
-  const hasRewritten = $derived(placement.rewritten.size > 0)
 
   /**
    * True when no movement the upstream still holds lands on the unpushed
@@ -367,104 +361,6 @@
     <p class="mt-1 text-[0.625rem] text-dimmed">Make your first commit to see history.</p>
   </div>
 {:else}
-  <!--
-    One control for one question: how the same commits are told. Grouped reads
-    them as the batches the upstream saw, which answers "what did I push, and
-    what is still local"; the graph draws the lanes, which answers "where did
-    this branch leave and come back". The summary beside the switch is the only
-    place the panel states the drift in words, and the legend only appears in
-    the view whose marks it explains.
-  -->
-  <div class="sticky top-0 z-10 border-b border-border bg-app">
-    <div class="flex items-center gap-2 px-2 py-1.5">
-      <div
-        class="flex shrink-0 items-center border border-border"
-        role="group"
-        aria-label="How history is presented"
-      >
-        <button
-          type="button"
-          class={[
-            '-mr-px flex h-6 items-center px-2 text-[0.625rem] font-medium transition-colors',
-            view === 'grouped'
-              ? 'bg-elevated text-foreground'
-              : 'text-muted hover:bg-elevated/60 hover:text-foreground'
-          ]}
-          aria-pressed={view === 'grouped'}
-          title="Group commits by what happened to the remote"
-          onclick={() => onViewChange('grouped')}
-        >
-          Grouped
-        </button>
-        <button
-          type="button"
-          class={[
-            'flex h-6 items-center px-2 text-[0.625rem] font-medium transition-colors',
-            view === 'graph'
-              ? 'bg-elevated text-foreground'
-              : 'text-muted hover:bg-elevated/60 hover:text-foreground'
-          ]}
-          aria-pressed={view === 'graph'}
-          title="Draw the commit lanes to see branches diverge and merge"
-          onclick={() => onViewChange('graph')}
-        >
-          Graph
-        </button>
-      </div>
-      <span class="min-w-0 flex-1 truncate text-right text-[0.5625rem] text-dimmed">
-        {commits.length} loaded{#if unpushedCount > 0}
-          · <span class="text-warning">{unpushedCount} unpushed</span>{/if}
-      </span>
-    </div>
-    {#if view === 'graph'}
-      <div
-        class="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 pb-1.5 text-[0.5rem] text-dimmed"
-        aria-hidden="true"
-      >
-        <span class="flex items-center gap-1">
-          <svg width="10" height="10" viewBox="0 0 10 10">
-            <circle cx="5" cy="5" r="3" fill="var(--color-warning)" />
-          </svg>
-          unpushed
-        </span>
-        <span class="flex items-center gap-1">
-          <svg width="10" height="10" viewBox="0 0 10 10">
-            <circle
-              cx="5"
-              cy="5"
-              r="4"
-              fill="var(--color-app)"
-              stroke="var(--color-info)"
-              stroke-width="1.5"
-            />
-            <circle cx="5" cy="5" r="1.25" fill="var(--color-info)" />
-          </svg>
-          merge
-        </span>
-        <span class="flex items-center gap-1">
-          <svg width="14" height="10" viewBox="0 0 14 10">
-            <line x1="0" y1="5" x2="5" y2="5" stroke="var(--color-border)" />
-            <line
-              x1="9"
-              y1="5"
-              x2="14"
-              y2="5"
-              stroke="var(--color-border)"
-              stroke-dasharray="2 2"
-            />
-          </svg>
-          push boundary
-        </span>
-        {#if hasRewritten}
-          <span class="flex items-center gap-1">
-            <span class="bg-warning/10 px-1 py-px font-medium text-warning">rewritten</span>
-            pushed once, no longer on the remote
-          </span>
-        {/if}
-      </div>
-    {/if}
-  </div>
-
   {#if lanesClipped}
     <p class="px-3 pb-1 pt-2 text-[0.5625rem] text-dimmed">
       Showing the first {GRAPH_MAX_LANES} lanes of history

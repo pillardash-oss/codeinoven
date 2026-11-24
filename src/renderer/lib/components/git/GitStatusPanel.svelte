@@ -211,6 +211,8 @@
       worktreeState={board.loadRepoState.worktreeState}
       tabs={board.handlePrListAction.tabs}
       activeTab={board.handlePrListAction.activeTab}
+      historyView={board.handlePrListAction.historyView}
+      onHistoryViewChange={board.handlePrListAction.selectHistoryView}
       bind:changesView={board.confirmAcceptAllConflicts.changesView}
       showsSync={board.loadRepoState.showsSync}
       branchSyncBusy={board.confirmPrMerge.branchSyncBusy}
@@ -409,7 +411,6 @@
     loadingMoreHistory={board.loadRepoState.loadingMoreHistory}
     historyHasMore={board.loadRepoState.historyHasMore}
     historyView={board.handlePrListAction.historyView}
-    onHistoryViewChange={board.handlePrListAction.selectHistoryView}
     unpushedCount={board.loadRepoState.unpushedCount}
     remoteUpdates={board.confirmPrMerge.remoteUpdates}
     localBranches={board.confirmAcceptAllConflicts.localBranches}

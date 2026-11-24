@@ -9,8 +9,10 @@
   import CioMerge from '@pdslng/cio-icon/CioMerge.svelte'
   import CioPullRequest from '@pdslng/cio-icon/CioPullRequest.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioRows3 from '@pdslng/cio-icon/CioRows3.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioGitGraph from '@pdslng/cio-icon/CioGitGraph.svelte'
   import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
   import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
@@ -20,7 +22,7 @@
   import { githubNotifications } from '$lib/stores/github-notifications.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
-  import type { GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
+  import type { GitHistoryView, GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
   import type { GIT_FIND_WORDS } from '../git-panel-find'
   import type {
     GitBranchInfo,
@@ -64,6 +66,9 @@
     }>
     activeTab: GitPanelTabId
     changesView: 'list' | 'tree'
+    /** Which telling of History the panel is on, beside the view picker. */
+    historyView: GitHistoryView
+    onHistoryViewChange: (view: GitHistoryView) => void
     onShowIntegrateModal: () => void
     onShowStashModal: () => void
     onRequestCreateBranch: () => void
@@ -150,6 +155,8 @@
     findWords,
     commitActions,
     selectTab,
+    historyView,
+    onHistoryViewChange,
     signOutGitHub,
     switchGitHubAccount,
     requestCheckout,
@@ -340,6 +347,51 @@
         behind a gesture. The trigger is the view in use, with its count.
       -->
     <GitViewMenu {tabs} {activeTab} onSelect={selectTab} />
+    {#if repoState === 'git' && activeTab === 'history'}
+      <!--
+          History is one list told two ways, so its two presentations sit beside
+          the view picker rather than in the content: the panel header already
+          answers "where am I", and which telling of History you are reading is
+          part of that answer. Icon-only because the two marks are the whole
+          argument: stacked batches, or the lanes branches leave and rejoin.
+        -->
+      <div
+        class="flex shrink-0 items-center border border-border"
+        role="group"
+        aria-label="How history is presented"
+      >
+        <button
+          type="button"
+          class={[
+            '-mr-px flex h-6 w-6 items-center justify-center transition-colors',
+            historyView === 'grouped'
+              ? 'bg-elevated text-foreground'
+              : 'text-dimmed hover:bg-elevated hover:text-foreground'
+          ]}
+          aria-pressed={historyView === 'grouped'}
+          aria-label="Group history into the batches the upstream saw"
+          title="Grouped: commits gathered by what happened to the remote"
+          onclick={() => onHistoryViewChange('grouped')}
+        >
+          <CioRows3 size={11} />
+        </button>
+        <button
+          type="button"
+          class={[
+            'flex h-6 w-6 items-center justify-center transition-colors',
+            historyView === 'graph'
+              ? 'bg-elevated text-foreground'
+              : 'text-dimmed hover:bg-elevated hover:text-foreground'
+          ]}
+          aria-pressed={historyView === 'graph'}
+          aria-label="Draw history as commit lanes"
+          title="Graph: the lanes branches leave and come back to"
+          onclick={() => onHistoryViewChange('graph')}
+        >
+          <CioGitGraph size={11} />
+        </button>
+      </div>
+    {/if}
     <span class="min-w-0 flex-1"></span>
     <!--
         The view's own action comes first, ahead of Search: it acts on what you
