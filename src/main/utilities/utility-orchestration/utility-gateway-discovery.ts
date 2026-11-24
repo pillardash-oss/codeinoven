@@ -1,3 +1,4 @@
+import { withoutPageFields } from './utility-gateway-pager'
 import {
   CORE_GATEWAY_TOOL_NAMES,
   UTILITY_ACTIVATE_TOOL_NAME,
@@ -144,7 +145,9 @@ export async function invokeGatewayCapability(
     // its value to the process environment rather than back to the model.
     if (CORE_GATEWAY_TOOL_NAMES.has(tool.name) && !GATEWAY_DISPATCHABLE_CORE_TOOLS.has(tool.name))
       throw new Error('Use the dedicated core tool directly')
-    return { kind: 'tool', tool, args: object(call['arguments'] ?? {}) }
+    // Pager fields belong to the call the agent made, never to the tool it
+    // names: a utility receives exactly the arguments its schema declares.
+    return { kind: 'tool', tool, args: withoutPageFields(object(call['arguments'] ?? {})) }
   }
   const prepareCall = (value: unknown): BatchCall => {
     const call = object(value)
@@ -161,7 +164,7 @@ export async function invokeGatewayCapability(
       kind: 'utility',
       utilityId,
       operation: requiredName(call['operation'], 'operation'),
-      args: object(call['input'] ?? call['arguments'] ?? {})
+      args: withoutPageFields(object(call['input'] ?? call['arguments'] ?? {}))
     }
   }
   if (operation === 'call') {

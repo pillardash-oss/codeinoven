@@ -62,6 +62,12 @@ import {
   budgetGatewayOutput,
   type GatewayOutputMeasurement
 } from '../utility-orchestration/utility-gateway-output'
+import {
+  GatewayPageStore,
+  heldPageResult,
+  pageOversizedResult,
+  readPageRequest
+} from '../utility-orchestration/utility-gateway-pager'
 import { acquireCuaSnapshotLease } from '../cua-snapshot-lease'
 import {
   cuaRefusal,
@@ -128,6 +134,9 @@ export class UtilityOrchestrationServiceOrchestration {
    * proof dies with the turn that produced it.
    */
   private readonly rosterReadTurns = new WeakSet<TurnState>()
+
+  /** The paged payloads each live turn is holding, by turn id. */
+  private readonly pagedText = new Map<string, GatewayPageStore>()
 
   constructor(private readonly host: UtilityOrchestrationService) {}
 
@@ -802,18 +811,34 @@ export class UtilityOrchestrationServiceOrchestration {
       typeof input === 'object' && input !== null && !Array.isArray(input)
         ? (input as Record<string, unknown>)
         : {}
-    const result = await handler(state, body)
+    // The pager fields belong to the gateway, never to the tool: they are read
+    // here and stripped, so a utility never receives an argument its schema does
+    // not declare.
+    const { request: page, rest } = readPageRequest(body)
+    const pages = this.pagesFor(turnId)
+    if (page.pageRef !== null) {
+      const held = pages.read(page.pageRef)
+      if (!held)
+        throw new Error(
+          'That page reference is no longer held by this turn. Call the tool again for a new first page.'
+        )
+      // A later page is a read, never a second dispatch: a preview, a checkpoint
+      // or any other mutation must not run again because its answer was long.
+      return heldPageResult(held, page)
+    }
+    const result = await handler(state, rest)
     // A tool that declares an output schema is answered with the payload both
     // ways: content parts for a model, the same data for a script. Every other
     // route keeps the exact body it has always returned.
+    const shaped = this.host.structuredRoutes.has(route) ? gatewayStructuredResult(result) : result
+    const presented = pageOversizedResult(shaped, direct.name, page, pages)
     let measurement: GatewayOutputMeasurement | undefined
-    const prepared = await budgetGatewayOutput(
-      this.host.structuredRoutes.has(route) ? gatewayStructuredResult(result) : result,
-      state.request.projectPath,
-      (value) => {
+    const prepared = await budgetGatewayOutput(presented, state.request.projectPath, {
+      limit: page.charSize,
+      observe: (value) => {
         measurement = value
       }
-    )
+    })
     if (measurement) {
       await this.audit(state, 'gateway.output_budgeted', {
         ...measurement,
@@ -825,6 +850,26 @@ export class UtilityOrchestrationServiceOrchestration {
       })
     }
     return prepared
+  }
+
+  /**
+   * The payloads one turn holds for paging.
+   *
+   * Kept per turn and dropped with it, because a held payload is main-process
+   * memory and a page reference means nothing to the turn after this one.
+   */
+  pagesFor(turnId: string): GatewayPageStore {
+    const existing = this.pagedText.get(turnId)
+    if (existing) return existing
+    const store = new GatewayPageStore()
+    this.pagedText.set(turnId, store)
+    return store
+  }
+
+  /** Release the payloads a finished turn was holding. */
+  forgetPages(turnId: string): void {
+    this.pagedText.get(turnId)?.clear()
+    this.pagedText.delete(turnId)
   }
 
   /**

@@ -22,6 +22,18 @@ export interface GatewayOutputMeasurement {
 }
 
 /**
+ * How one result is bounded, when the caller has its own page in mind.
+ *
+ * The limit is the caller's `charSize` for this call, so raising it enlarges the
+ * answer instead of colliding with a fixed ceiling. `observe` receives the
+ * measurement the audit records.
+ */
+export interface GatewayOutputBudget {
+  limit?: number
+  observe?: (measurement: GatewayOutputMeasurement) => void
+}
+
+/**
  * One oversized part, delivered whole as the sections it is written in.
  *
  * A capability's contract is a markdown document, and 15,000 characters is not
@@ -32,7 +44,7 @@ export interface GatewayOutputMeasurement {
  * parts as they need keeps every rule in front of the model and still bounds each
  * part. Text without sections is left to the file-backed shortening below.
  */
-export function sectionParts(text: string): string[] | null {
+function sectionParts(text: string, limit = GATEWAY_TEXT_CHARACTER_LIMIT): string[] | null {
   const sections = text.split(/\n(?=## )/)
   if (sections.length < 2) return null
   const parts: string[] = []
@@ -40,9 +52,9 @@ export function sectionParts(text: string): string[] | null {
   for (const section of sections) {
     // A single section past the limit cannot be split by meaning here, so the
     // caller's file-backed shortening stays the one path that cuts text.
-    if (section.length > GATEWAY_TEXT_CHARACTER_LIMIT) return null
+    if (section.length > limit) return null
     const next = current === '' ? section : `${current}\n${section}`
-    if (next.length > GATEWAY_TEXT_CHARACTER_LIMIT) {
+    if (next.length > limit) {
       parts.push(current)
       current = section
       continue
@@ -67,8 +79,9 @@ export function sectionParts(text: string): string[] | null {
 export async function budgetGatewayOutput(
   result: unknown,
   projectPath: string,
-  observe?: (measurement: GatewayOutputMeasurement) => void
+  budget: GatewayOutputBudget = {}
 ): Promise<unknown> {
+  const limit = budget.limit ?? GATEWAY_TEXT_CHARACTER_LIMIT
   if (typeof result !== 'object' || result === null || Array.isArray(result)) return result
   const record = result as Record<string, unknown>
   if (!Array.isArray(record['content'])) return result
@@ -86,17 +99,13 @@ export async function budgetGatewayOutput(
     const entry = part as Record<string, unknown>
     const text = entry['text']
     if (entry['type'] === 'text' && typeof text === 'string') originalTextCharacters += text.length
-    if (
-      entry['type'] !== 'text' ||
-      typeof text !== 'string' ||
-      text.length <= GATEWAY_TEXT_CHARACTER_LIMIT
-    ) {
+    if (entry['type'] !== 'text' || typeof text !== 'string' || text.length <= limit) {
       content.push(part)
       if (entry['type'] === 'text' && typeof text === 'string')
         returnedTextCharacters += text.length
       continue
     }
-    const sections = sectionParts(text)
+    const sections = sectionParts(text, limit)
     if (sections) {
       for (const section of sections) {
         content.push({ ...entry, text: section })
@@ -120,7 +129,7 @@ export async function budgetGatewayOutput(
     const structuredNote =
       'structuredContent' in record ? ' Code mode retains the full structured result.' : ''
     const marker = `\n[Text shortened from ${text.length} characters. Complete output: ${relativePath}. Read a targeted range.${structuredNote}]\n`
-    const keep = Math.max(0, Math.floor((GATEWAY_TEXT_CHARACTER_LIMIT - marker.length) / 2))
+    const keep = Math.max(0, Math.floor((limit - marker.length) / 2))
     const preview = text.slice(0, keep) + marker + text.slice(-keep)
     content.push({ ...entry, text: preview })
     returnedTextCharacters += preview.length
@@ -128,7 +137,7 @@ export async function budgetGatewayOutput(
     savedTextParts += 1
     changed = true
   }
-  observe?.({
+  budget.observe?.({
     originalTextCharacters,
     returnedTextCharacters,
     omittedTextCharacters,

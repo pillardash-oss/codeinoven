@@ -264,6 +264,56 @@ const GATEWAY_OPERATION_RESULT_SCHEMA: Record<string, unknown> = {
 }
 
 /**
+ * The fields any call that answers with a payload may carry, on top of its own.
+ *
+ * A result larger than one page is answered as page 1 of N with the counts and a
+ * reference, and these three fields are how the caller reads the rest: `page` for
+ * the next one, `charSize` to take a bigger page in one round trip rather than
+ * six, and `pageRef` so a later page is a read of what the app already holds
+ * instead of a second run of a call that may have changed something.
+ *
+ * Declared on every tool that declares an output schema, because a harness
+ * rejects an argument its tool's schema does not name. The gateway strips them
+ * before dispatch, so a utility never receives one.
+ */
+export const GATEWAY_PAGER_PROPERTIES: Record<string, unknown> = {
+  page: {
+    type: 'number',
+    minimum: 1,
+    description:
+      'Page of a paged result to read, one-based. Page 2 and later also need the pageRef the first page returned.'
+  },
+  charSize: {
+    type: 'number',
+    minimum: 2_000,
+    maximum: 200_000,
+    description:
+      'Characters this call may return, when the default page is too small for what you need. Raising it returns the payload in one round trip; the app caps it at 200000.'
+  },
+  pageRef: {
+    type: 'string',
+    description:
+      'Reference a paged result returned. Pass it with page (or with charSize and page 1) to read more of that same result without running the tool again.'
+  }
+}
+
+/** Add the pager fields to one tool's schema, leaving every other field alone. */
+function withPagerFields(tool: GatewayToolDefinition): GatewayToolDefinition {
+  const schema = tool.inputSchema
+  const properties = schema['properties']
+  if (tool.outputSchema === undefined) return tool
+  if (typeof properties !== 'object' || properties === null || Array.isArray(properties))
+    return tool
+  return {
+    ...tool,
+    inputSchema: {
+      ...schema,
+      properties: { ...(properties as Record<string, unknown>), ...GATEWAY_PAGER_PROPERTIES }
+    }
+  }
+}
+
+/**
  * Canonical catalog of every tool the utility gateway MCP advertises. The
  * gateway script (tools/list + tools/call routing), the main-process bridge
  * dispatch, and `APPLICATION_AGENT_TOOLS` are all derived from this one array,
@@ -680,4 +730,4 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
     route: '/process-stop',
     sentWhen: 'A process you started is still running and is no longer needed'
   }
-]
+].map(withPagerFields)
