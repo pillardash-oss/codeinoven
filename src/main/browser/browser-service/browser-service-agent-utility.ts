@@ -219,12 +219,15 @@ export class BrowserServiceAgentUtility {
         if (adopted) return adopted
       }
       const tabId = reused && existing ? existing : agentTabIdFor(projectId, threadId)
-      const tab = this.host.ensureTab(
-        tabId,
-        projectId,
-        threadId,
-        this.host.conversationBoxFor(projectId, threadId) ?? this.host.boxOfExistingTab(tabId)
-      )
+      // A tab this conversation has no box for joins the page the user is on,
+      // exactly as a new tab in a browser does: same box, same indicator, right
+      // beside it in the strip.
+      const sourceTabId = this.host.activeTabId ?? undefined
+      const boxId =
+        this.host.conversationBoxFor(projectId, threadId) ??
+        this.host.boxOfExistingTab(tabId) ??
+        (sourceTabId ? this.host.boxOfExistingTab(sourceTabId) : null)
+      const tab = this.host.ensureTab(tabId, projectId, threadId, boxId)
       tab.initialNavigationStarted = true
       // Mount the tab offscreen before anything else: the page must run whether
       // or not the user ends up looking at it.
@@ -249,6 +252,7 @@ export class BrowserServiceAgentUtility {
         projectId,
         threadId,
         requestedTabId: tabId,
+        ...(sourceTabId ? { sourceTabId } : {}),
         reveal,
         boxId: tab.boxId
       })
