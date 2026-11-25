@@ -548,7 +548,7 @@
   {@const isConflicts = section.title === 'Conflicts'}
   {@const sectionAllSelected =
     section.files.length > 0 && section.files.every((f) => selectedPaths[f.path])}
-  <div class="overflow-hidden border border-border bg-surface">
+  <div class="flex min-h-0 flex-col overflow-hidden border border-border bg-surface">
     <!-- The header keeps the row's own gutter so the section toggle sits on the
          same column as every switch below it, and the count ends the line. -->
     <div class="flex items-center gap-1.5 bg-elevated/50 py-1 pl-1 pr-2">
@@ -586,7 +586,9 @@
     </div>
 
     {#if tree.dirs.size > 0 || tree.files.length > 0}
-      <div class="py-1">
+      <!-- The body is the part that scrolls when the section is taller than its
+           share of the column; the header above it stays put. -->
+      <div class="min-h-0 overflow-y-auto py-1">
         {#each sortTreeDirs(tree.dirs) as dir (dir.path)}
           {@const branch = compressDirChain(dir)}
           {@render dirRow(branch.node, 0, branch.label, section.title)}

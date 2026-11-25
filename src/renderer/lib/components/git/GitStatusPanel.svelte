@@ -404,7 +404,6 @@
     commitDiffErrors={board.confirmPrMerge.commitDiffErrors}
     bind:selectedPaths={board.handlePrListAction.workingTree.selectedPaths}
     bind:expandedDirs={board.handlePrListAction.workingTree.expandedDirs}
-    paneClass={board.state.paneClass}
     commitHistory={board.loadRepoState.commitHistory}
     loadingHistory={board.loadRepoState.loadingHistory}
     loadingMoreHistory={board.loadRepoState.loadingMoreHistory}

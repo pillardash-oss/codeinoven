@@ -85,7 +85,6 @@
     selectedPaths: Record<string, boolean>
     /** Folder open state of the changes tree, owned by the panel's controller. */
     expandedDirs: Record<string, boolean>
-    paneClass: string
     commitHistory: GitCommitInfo[]
     loadingHistory: boolean
     loadingMoreHistory: boolean
@@ -218,7 +217,6 @@
     commitDiffErrors,
     selectedPaths = $bindable(),
     expandedDirs = $bindable(),
-    paneClass,
     commitHistory,
     loadingHistory,
     loadingMoreHistory,
@@ -342,7 +340,13 @@
   loadingLabel="Reading Git from the Oven…"
   onRetry={() => void loadRepoState(true)}
 >
-  <div class="min-h-0 flex-1 overflow-auto" onscroll={handleContentScroll}>
+  <!--
+    A flex column, so the view that owns its own scrolling (Changes) can take the
+    rest of the height with `flex-1` instead of growing past it. Every other view
+    is taller than the panel and simply overflows into this one's scrollbar, as
+    before.
+  -->
+  <div class="flex min-h-0 flex-1 flex-col overflow-auto" onscroll={handleContentScroll}>
     {#if repoState === 'loading' || repoState === 'git_unavailable' || repoState === 'not_git'}
       <GitStatusPanelRepoStates
         {repoState}
@@ -435,7 +439,6 @@
           {loadingCommitDiffFile}
           {commitDiffErrors}
           bind:selectedPaths
-          {paneClass}
           {toggleDiff}
           {toggleStage}
           {toggleSelection}
