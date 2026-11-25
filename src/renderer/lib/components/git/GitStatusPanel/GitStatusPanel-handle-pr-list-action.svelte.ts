@@ -88,6 +88,8 @@ export class GitStatusPanelHandlePrListAction extends BoardUnit<GitStatusPanel> 
         return root.loadRepoState.staged
       },
       refreshStatus: () => host.refreshStatus(),
+      beginStageIntent: (paths, staged) => root.loadRepoState.beginStageIntent(paths, staged),
+      settleStageIntent: (paths, request) => root.loadRepoState.settleStageIntent(paths, request),
       requestCommitMessageFocus: () => (root.confirmAcceptAllConflicts.commitSelection = true)
     })
   }

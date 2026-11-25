@@ -12,6 +12,7 @@ import {
   resolveCurrentConflictsWithAgent
 } from '../git-status-panel-agent-actions'
 import type { GitCommitInfo, GitFileChange, GitPullStrategy } from '$shared/types'
+import { applyStageIntents, type StageIntents } from '$lib/git-optimistic-staging'
 import { mergeHistoryPage } from '$lib/git-history-paging'
 import { toast } from 'svelte-sonner'
 import { GitStatusPanelBranchesController } from '../GitStatusPanel/git-status-panel-branches-controller.svelte'
@@ -113,7 +114,49 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
 
   status = $derived(gitState.status)
 
-  changes = $derived(this.status?.changes ?? [])
+  /**
+   * Stage and unstage the reader asked for, painted before git answers.
+   *
+   * Staging is a round trip, and waiting for it before moving a row is what made
+   * a toggle feel like it took a second. The intent is applied to the last status
+   * git reported, so the row moves at once; a refusal reaches the reader through
+   * the store's error, and dropping the intent is the rollback, because the real
+   * status underneath never moved.
+   */
+  stageIntents = $state<StageIntents>({})
+
+  /** The changes the panel draws: git's last answer with the reader's pending
+   *  staging applied on top. */
+  changes = $derived(applyStageIntents(this.status?.changes ?? [], this.stageIntents))
+
+  /**
+   * Paint an intended staging now, and answer with the request that owns it.
+   *
+   * The request is what lets two quick toggles on one path settle in order: the
+   * older answer is not allowed to clear an intent the newer one set.
+   */
+  beginStageIntent(paths: readonly string[], staged: boolean): number {
+    const request = ++this.stageIntentRequest
+    const next = { ...this.stageIntents }
+    for (const path of paths) next[path] = { staged, request }
+    this.stageIntents = next
+    return request
+  }
+
+  /** Drop an intent once git has answered (or refused), leaving the paths whose
+   *  intent a newer request has since taken over. */
+  settleStageIntent(paths: readonly string[], request: number): void {
+    const next = { ...this.stageIntents }
+    let changed = false
+    for (const path of paths) {
+      if (next[path]?.request !== request) continue
+      delete next[path]
+      changed = true
+    }
+    if (changed) this.stageIntents = next
+  }
+
+  private stageIntentRequest = 0
 
   staged = $derived(
     this.changes.filter((change) => change.staged && change.status !== 'conflicted')
