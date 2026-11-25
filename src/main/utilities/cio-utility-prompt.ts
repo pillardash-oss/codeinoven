@@ -68,7 +68,11 @@ Diagnostics role - ${UTILITY_DIAGNOSTICS_TOOL_NAME} actions:
   threads. Ask the user for the thread id when nothing matches.
 - read_messages: {"action":"read_messages","thread_id":"<id>","limit":40}
   Returns a bounded, redacted page of the thread's mirrored conversation,
-  newest page first, oldest-to-newest order.
+  newest page first, oldest-to-newest order. Each message carries the tool
+  calls its turn made (argument plus a preview of the result), which is how
+  you see what was actually run, edited, or failed. The page names its
+  nextBeforeId: pass it as "before_id" to read the page older than it, and
+  repeat to walk a long thread back to its beginning.
 - search_threads: {"action":"search_threads","query":"<what the conversation was about>"}
   Ranks up to 20 matching threads by keyword and by meaning and includes the
   matching passages. Narrow it whenever the work belongs to one container:

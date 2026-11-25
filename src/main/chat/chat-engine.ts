@@ -177,6 +177,7 @@ export {
 export {
   textForMessage,
   formatBrainstormInterviewDecisions,
+  formatHistoryBrief,
   formatHistoryHandoff,
   formatHistoryPointer,
   formatHistoryRecap,

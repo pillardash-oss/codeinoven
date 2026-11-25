@@ -14,8 +14,14 @@ import {
   GLOBAL_BROWSER_PROJECT_ID,
   INBOX_PROJECT_ID,
   type AgentMessage,
-  type Thread
+  type Thread,
+  type ThreadMessageCursor
 } from '../../lib/types'
+import { patternActionPhrase, resolveToolCall } from '../../lib/tool-action-label'
+import {
+  summarizeToolInput,
+  truncateToolResult
+} from '../chat/chat-engine/chat-engine-message-text'
 import {
   ERROR_LOG_FILE,
   LOGS_DIRECTORY,
@@ -45,6 +51,9 @@ const MAX_QUERY_VALUE_LENGTH = 2_000
 const MAX_QUERY_SQL_LENGTH = 4_000
 const MAX_QUERY_PARAMS = 32
 const MAX_SCHEMA_TABLES = 80
+/** Tool calls one message may report, and the length one of them may take. */
+const MAX_ACTION_LINES = 12
+const MAX_ACTION_LINE_LENGTH = 400
 
 /** Log files an agent may inspect through the diagnostics capability. */
 const READABLE_LOG_FILES = [MAIN_LOG_FILE, ERROR_LOG_FILE, PERMISSION_EVENTS_LOG_FILE]
@@ -141,9 +150,33 @@ export interface DiagnosticMessage {
   role: AgentMessage['role']
   createdAt: number
   text: string
+  /** What the turn did, in order: one bounded line per tool call, with its
+   *  argument and a redacted preview of its result. This is the evidence a
+   *  resumed agent needs (what was run, what was edited, what failed); the
+   *  conversation text alone never carries it. */
+  actions?: string[]
   error?: string
   modelId?: string
   providerId?: string
+}
+
+/**
+ * One bounded page of a thread's mirrored conversation.
+ *
+ * A resumed agent starts from a thread id, not from the messages, so the page
+ * has to name the way further back: `nextBeforeId` is the message id to pass as
+ * `before_id` for the page older than this one.
+ */
+export interface DiagnosticMessagePage {
+  threadId: string
+  /** The thread's title, so the agent recognizes the work it is resuming. */
+  title: string
+  messages: DiagnosticMessage[]
+  /** Message id to pass as `before_id` for the next older page. */
+  nextBeforeId?: string
+  /** Whether messages older than this page exist. */
+  hasOlder: boolean
+  note?: string
 }
 
 export interface DiagnosticLogEntry {
@@ -275,6 +308,43 @@ function formatQueryValue(value: unknown): string | number | null {
   return `${redactSensitiveText(text.slice(0, MAX_QUERY_VALUE_LENGTH))}... [truncated]`
 }
 
+/** Collapse whitespace so one tool call stays one line. */
+function collapseLine(text: string): string {
+  return text.replace(/\s+/gu, ' ').trim()
+}
+
+/**
+ * What a message did, as bounded one-line records of its tool calls.
+ *
+ * The mirror stores a turn's work as tool parts: the call's arguments and its
+ * result. That evidence is what a resumed agent cannot get from the assistant's
+ * prose ("I fixed it" versus the edit that fixed it), so a diagnostics read
+ * surfaces it, capped per line and per message so one huge turn cannot flood
+ * the result.
+ */
+function diagnosticActions(parts: AgentMessage['parts']): string[] {
+  const calls = parts.filter(
+    (part): part is Extract<AgentMessage['parts'][number], { type: 'tool' }> => part.type === 'tool'
+  )
+  const lines = calls.slice(0, MAX_ACTION_LINES).map((part) => {
+    const call = resolveToolCall(part.tool, part.state.input ?? {})
+    const action = patternActionPhrase(call.tool) ?? call.tool
+    const subject = summarizeToolInput(call.input)
+    const failed = part.state.status === 'error' || part.state.error
+    const output = failed ? part.state.error : part.state.output
+    const preview = output?.trim() ? collapseLine(truncateToolResult(output)) : ''
+    const head = [failed ? '[failed]' : '', action, subject].filter(Boolean).join(' ')
+    return redactSensitiveText(preview ? `${head} → ${preview}` : head).slice(
+      0,
+      MAX_ACTION_LINE_LENGTH
+    )
+  })
+  if (calls.length > lines.length) {
+    lines.push(`… ${calls.length - lines.length} more tool calls in this turn`)
+  }
+  return lines
+}
+
 function summarizeDiagnosticThread(
   thread: Thread,
   projectName: string,
@@ -300,8 +370,9 @@ function summarizeDiagnosticThread(
   return summary
 }
 
-/** Which hidden container a project id resolves to, for the group listing. */
-function projectGroupKind(projectId: string): DiagnosticProjectGroup['kind'] {
+/** Which hidden container a project id resolves to, for the group listing. */ function projectGroupKind(
+  projectId: string
+): DiagnosticProjectGroup['kind'] {
   if (projectId === INBOX_PROJECT_ID) return 'inbox'
   if (projectId === ASSISTANT_SPACE_ID) return 'assistant'
   if (projectId === GLOBAL_BROWSER_PROJECT_ID) return 'browser'
@@ -539,17 +610,57 @@ export class CioDiagnosticsService {
   }
 
   /**
-   * Load a bounded newest page of mirrored conversation messages for a thread.
-   * `loadPageByThread` already returns the page oldest-to-newest.
+   * Load a bounded page of mirrored conversation messages for a thread.
+   *
+   * Without `beforeId` the page is the newest one. With it, the page is the one
+   * older than that message, which is how an agent handed only a thread id walks
+   * a long conversation back to its beginning. `loadPageByThread` already
+   * returns its page oldest-to-newest and says whether more history exists.
    */
-  async loadThreadMessages(threadId: string, limit: number): Promise<DiagnosticMessage[]> {
+  async loadThreadMessages(
+    threadId: string,
+    limit: number,
+    beforeId?: string
+  ): Promise<DiagnosticMessagePage> {
     const boundedLimit = Math.max(1, Math.min(MAX_MESSAGES, Math.trunc(limit) || 40))
     const thread = await this.threadRepo.getViaWorker(threadId)
-    if (!thread) return []
-    const page = this.messageRepo.loadPageByThread(threadId, undefined, boundedLimit)
-    return page.messages
+    if (!thread) return { threadId, title: '', messages: [], hasOlder: false }
+    const before = beforeId ? this.messageCursor(threadId, beforeId) : undefined
+    const page = this.messageRepo.loadPageByThread(threadId, before, boundedLimit)
+    const messages = page.messages
       .map((message) => this.toDiagnosticMessage(message))
       .filter((message): message is DiagnosticMessage => message !== null)
+    const result: DiagnosticMessagePage = {
+      threadId,
+      title: redactSensitiveText(thread.title),
+      messages,
+      hasOlder: page.hasOlder
+    }
+    const oldest = page.messages[0]
+    if (page.hasOlder && oldest) {
+      result.nextBeforeId = oldest.id
+      result.note = `This is the newest page of the thread. Older messages exist: call read_messages again with thread_id "${threadId}" and before_id "${oldest.id}" for the page before it, and repeat with each page's nextBeforeId.`
+    }
+    return result
+  }
+
+  /**
+   * The ordering key of one message in one thread, from a message id an agent
+   * was handed. An id that is not in this thread is refused by name: silently
+   * returning the newest page would tell a reader it had reached the beginning.
+   */
+  private messageCursor(threadId: string, messageId: string): ThreadMessageCursor {
+    const row = this.db.get<{ created_at: number }>(
+      'SELECT created_at FROM agent_messages WHERE thread_id = ? AND id = ?',
+      threadId,
+      messageId
+    )
+    if (!row) {
+      throw new Error(
+        `No message ${messageId} in thread ${threadId}. Pass a message id from this thread as before_id, or omit before_id for the newest page.`
+      )
+    }
+    return { createdAt: row.created_at, id: messageId }
   }
 
   /**
@@ -749,13 +860,15 @@ export class CioDiagnosticsService {
       .map((part) => part.text)
       .join('\n')
       .slice(0, MAX_MESSAGE_TEXT_LENGTH)
-    if (!text.trim() && !message.error) return null
+    const actions = diagnosticActions(message.parts)
+    if (!text.trim() && !message.error && actions.length === 0) return null
     const result: DiagnosticMessage = {
       id: message.id,
       role: message.role,
       createdAt: message.createdAt,
       text: redactSensitiveText(text)
     }
+    if (actions.length > 0) result.actions = actions
     if (message.error) result.error = redactSensitiveText(message.error).slice(0, 500)
     if (message.modelId) result.modelId = message.modelId
     if (message.providerId) result.providerId = message.providerId

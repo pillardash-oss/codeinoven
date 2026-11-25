@@ -551,7 +551,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {
     name: UTILITY_DIAGNOSTICS_TOOL_NAME,
     description:
-      "Read-only CodeInOven app diagnostics: search every project's threads for context by keyword and by meaning (search_threads includes matching passages for content hits), look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation, list the projects, scopes and assistants a search can be narrowed to, read recent app log entries (logs/<YYYY-MM-DD>/main.jsonl, error.log, permission-events.jsonl), inspect the app SQLite schema, and run read-only SELECT statements when the structured actions cannot answer the question. All output is redacted and bounded. Available on every turn that carries the gateway, so use it whenever the user reports a problem with the app, a thread, an assistant, or a log line instead of asking them to re-send the request with @cio-utility. Never write, delete, or configure anything with it.",
+      "Read-only CodeInOven app diagnostics: search every project's threads for context by keyword and by meaning (search_threads includes matching passages for content hits), look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation (each message carries its tool calls and their results, and before_id pages back through the whole thread), list the projects, scopes and assistants a search can be narrowed to, read recent app log entries (logs/<YYYY-MM-DD>/main.jsonl, error.log, permission-events.jsonl), inspect the app SQLite schema, and run read-only SELECT statements when the structured actions cannot answer the question. All output is redacted and bounded. Available on every turn that carries the gateway, so use it whenever the user reports a problem with the app, a thread, an assistant, or a log line instead of asking them to re-send the request with @cio-utility. Never write, delete, or configure anything with it.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -574,6 +574,11 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
             'For lookup_thread: thread id or exact thread title. For search_threads: what the conversation was about, in words; it ranks titles and content, including by meaning.'
         },
         thread_id: { type: 'string', description: 'For read_messages: the thread id to inspect.' },
+        before_id: {
+          type: 'string',
+          description:
+            'For read_messages: return the page OLDER than this message id, so a long thread can be read back to its beginning. Use the nextBeforeId of the page you just read, or any message id in this thread. Omit it for the newest page.'
+        },
         project_id: {
           type: 'string',
           description:
@@ -598,7 +603,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
         limit: {
           type: 'number',
           description:
-            'Optional cap; read_messages returns at most 120 messages, read_log at most 200 entries.'
+            'Optional cap; read_messages returns at most 120 messages per page, read_log at most 200 entries.'
         },
         level: {
           type: 'string',

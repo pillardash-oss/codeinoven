@@ -14,7 +14,11 @@ import { groupConversationTranscript } from './chat-engine-group-transcript'
 import { handoffTailTokenBudget, recapTokenBudget } from '../../../lib/prompt-budget'
 import type { SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
-import { formatHistoryHandoff, formatHistoryPointer } from './chat-engine-message-text'
+import {
+  formatHistoryBrief,
+  formatHistoryHandoff,
+  formatHistoryPointer
+} from './chat-engine-message-text'
 import { broadcastToast, isCoordinatorThread } from './chat-engine-pure'
 import type { ChatEngine } from '../chat-engine'
 
@@ -168,7 +172,7 @@ export class ChatEngineTranscripts {
     })
   }
 
-  /** Recap of the mirrored transcript when no reusable harness session exists. */
+  /** Short recap of the mirrored transcript when no reusable harness session exists. */
   async buildHistoryRecap(
     projectId: string,
     threadId: string,
@@ -183,17 +187,22 @@ export class ChatEngineTranscripts {
       thread?.settings?.modelId,
       projectId
     )
-    // The handoff carries a verbatim tail, not the whole conversation, so it is
-    // capped by the checkpoint line (never crowding the turn's own input) and
-    // by the handoff tail budget (never replaying a long thread's stale tool
-    // output). Everything older is reachable by querying the thread id the
-    // handoff opens with.
+    // The recap is a short one, so the checkpoint line only bounds how much
+    // detail it may carry; the conversation itself stays in the app database and
+    // reaches the agent through the thread id the recap opens with.
     const budget = Math.min(maxInputTokens ?? fallbackBudget, recapTokenBudget(fallbackBudget))
+    // Parked-branch replay is the one path that still carries a verbatim tail:
+    // that session already holds the conversation and only missed a delta.
     const tailBudget = Math.min(budget, handoffTailTokenBudget(fallbackBudget))
-    const handoff = (messages: AgentMessage[], withTitle: boolean): string =>
+    const brief = (messages: AgentMessage[]): string =>
+      formatHistoryBrief(messages, {
+        threadId,
+        ...(thread?.title ? { threadTitle: thread.title } : {}),
+        maxInputTokens: budget
+      })
+    const handoff = (messages: AgentMessage[]): string =>
       formatHistoryHandoff(messages, {
         threadId,
-        ...(withTitle && thread?.title ? { threadTitle: thread.title } : {}),
         maxInputTokens: tailBudget
       })
 
@@ -276,7 +285,7 @@ export class ChatEngineTranscripts {
     // silently lost from the conversation   rescue it into a fresh thread
     // rather than let the turn proceed with no memory of it.
     const emitRecap = (): string => {
-      const recap = handoff(mirror, true)
+      const recap = brief(mirror)
       if (!recap) {
         void this.rescueUnreplayableHistory(projectId, threadId, driverId).catch(() => {})
       }
@@ -306,7 +315,7 @@ export class ChatEngineTranscripts {
       // thread age, so this case is delivered once.
       if (replay.boundary !== null && boundaryIndex < 0) replay.repeat = false
       const delta = boundaryIndex >= 0 ? mirror.slice(boundaryIndex + 1) : mirror
-      const recap = delta.length === 0 ? '' : handoff(delta, false)
+      const recap = delta.length === 0 ? '' : handoff(delta)
       replay.recap = recap
       replay.recapBudget = budget
       return recap

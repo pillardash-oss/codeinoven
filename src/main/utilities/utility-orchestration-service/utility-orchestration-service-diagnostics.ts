@@ -55,10 +55,8 @@ export class UtilityOrchestrationServiceDiagnostics {
     if (action === 'read_messages') {
       const threadId = requiredString(input['thread_id'], 'thread_id', 128)
       const limit = typeof input['limit'] === 'number' ? input['limit'] : 40
-      return {
-        threadId,
-        messages: await diagnostics.loadThreadMessages(threadId, limit)
-      }
+      const beforeId = optionalString(input['before_id'], 128)
+      return diagnostics.loadThreadMessages(threadId, limit, beforeId || undefined)
     }
     if (action === 'read_log') {
       const file = requiredString(input['file'], 'file', 120)
