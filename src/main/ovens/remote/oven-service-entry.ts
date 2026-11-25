@@ -1363,7 +1363,8 @@ async function daemon(): Promise<void> {
       bytes,
       queuedBytes: 0,
       tail: Promise.resolve(),
-      offsets: new Map([[0, 0]])
+      offsets: new Map([[0, 0]]),
+      touchedAt: run.finishedAt ?? run.createdAt
     })
   }
   const server = createServer((socket) =>
