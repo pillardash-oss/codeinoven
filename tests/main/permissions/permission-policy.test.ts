@@ -262,6 +262,49 @@ describe('permission policy', () => {
     ).toBe(false)
   })
 
+  it('treats a package task run as the project’s own work, not a wrapper', () => {
+    const scratch = resolve(projectRoot, '.cio')
+    const policy = new PermissionPolicy({
+      projectRoot,
+      mode: 'auto_review',
+      scratchPaths: [scratch]
+    })
+
+    // Staging a build in scratch and cleaning it up: the task is the project's
+    // own script, which Auto Review already runs without a card on its own.
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: [
+          'cd .cio/tmp && S=stage && rm -rf "$S" && mkdir -p "$S" && cp -R ../../apps "$S"/ && (cd "$S" && bun run build 2>&1 | tail -8); rm -rf "$S"'
+        ]
+      })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
+    expect(
+      policy.evaluate({ permission: 'bash', commands: ['bun run build && rm -rf .cio/tmp/stage'] })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
+    // Everything else an interpreter does is still a wrapper that disproves the
+    // chain: inline code, a script file, and a task that deletes outside.
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: ["cd .cio/tmp && rm -rf stage && bash -c 'rm -rf /'"]
+      }).approved
+    ).toBe(false)
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: ['cd .cio/tmp && rm -rf stage && bun .cio/tmp/stage/clean.ts']
+      }).approved
+    ).toBe(false)
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: ['cd .cio/tmp && bun run build && rm -rf /Users/me/Documents']
+      }).approved
+    ).toBe(false)
+  })
+
   it('proves a delete glob by the directory it enumerates', () => {
     const scratch = resolve(projectRoot, '.cio')
     const policy = new PermissionPolicy({

@@ -102,6 +102,27 @@ const SAFE_AUTO_PERMISSIONS = new Set(['read', 'list', 'search'])
  *  but deleting a spec or a worktree destroys authored work, so those stay
  *  gated even though their parent folder never prompts. */
 const SCRATCH_RESERVED_DIRECTORIES = ['specs', 'git'] as const
+/** Package managers whose `run <task>` executes the project's own script, and
+ *  the shape of a task name. */
+const PACKAGE_TASK_RUNNERS = new Set(['npm', 'pnpm', 'yarn', 'bun'])
+const PACKAGE_TASK_NAME = /^[A-Za-z0-9:_.-]+$/u
+
+/** Whether one segment runs a package task by name (`bun run build`).
+ *
+ *  That is the project's own script, which Auto Review already runs without a
+ *  card when the task stands alone, so it is read as an ordinary segment when
+ *  deciding what a destructive chain deletes. Everything else an interpreter
+ *  can do is not a task: inline code (`bash -c`, `bun -e`) and a script file
+ *  (`bun ./stage/x.ts`) can reach anywhere without naming a path this module
+ *  can see. */
+function isPackageTaskRun(commandName: string, operands: readonly string[]): boolean {
+  if (!PACKAGE_TASK_RUNNERS.has(commandName)) return false
+  const verb = operands[0]
+  const task = operands[1]
+  if (verb !== 'run' && verb !== 'run-script') return false
+  return task !== undefined && PACKAGE_TASK_NAME.test(task)
+}
+
 /** One `NAME=<literal>` assignment a chain made before using it. Only literal
  *  text is recorded: a value that evaluates anything stays unresolved, so the
  *  proofs below keep asking about it. */
@@ -673,7 +694,9 @@ export class PermissionPolicy {
    *  yields false and the ordinary card still asks. A `NAME=<literal>`
    *  assignment is followed the way the shell follows it, and `$PWD` is the
    *  directory the chain is in at that point, so `S=.cio/tmp/stage; rm -rf
-   *  "$S"` proves what `rm -rf .cio/tmp/stage` proves.
+   *  "$S"` proves what `rm -rf .cio/tmp/stage` proves. A package task run
+   *  (`bun run build`) is the project's own script, which is trusted on its
+   *  own, so it removes nothing here either.
    */
   private isConfinedDestructiveCommand(command: string): boolean {
     if (!command.trim() || command.length > MAX_PROVEN_COMMAND_LENGTH) return false
@@ -692,7 +715,12 @@ export class PermissionPolicy {
       const [name, ...operands] = references.tokens
       if (name === undefined) return false
       const commandName = basename(name).toLowerCase()
-      if (SHELL_INTERPRETERS.has(commandName) || commandName === 'bun') return false
+      if (SHELL_INTERPRETERS.has(commandName) || commandName === 'bun') {
+        if (!isPackageTaskRun(commandName, operands)) return false
+        // A task run removes nothing itself; its own deletes are the project's
+        // script, which is trusted on its own.
+        continue
+      }
       if (commandName === 'cd' || commandName === 'pushd') {
         const cdOperands = operands.filter((token) => !token.startsWith('-'))
         if (cdOperands.length !== 1 || !isReadableTarget(cdOperands[0]!)) {
