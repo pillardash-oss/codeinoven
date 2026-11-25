@@ -59,6 +59,8 @@ function sanitize(raw: unknown): RendererLogEntry | null {
 }
 
 export function registerRendererLogIpcHandler(): void {
+  ipcMain.handle('logger:environment', () => Logger.environmentFacts())
+
   ipcMain.handle('renderer:log', (_event, raw: unknown) => {
     const entry = sanitize(raw)
     if (!entry) return

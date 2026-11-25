@@ -356,7 +356,10 @@
 
   async function copyError(e: AppErrorEntry): Promise<void> {
     try {
-      await copyText(e.details ? `${e.message}\n\n${e.details}` : e.message, null)
+      // The build and host travel with the trace even when the entry has none of
+      // its own: a report without them cannot be matched to a release.
+      const text = [e.message, e.environment, e.details].filter(Boolean).join('\n\n')
+      await copyText(text, null)
       copiedId = e.id
       window.setTimeout(() => {
         if (copiedId === e.id) copiedId = null
@@ -685,6 +688,10 @@
       </p>
       {#if hasUsefulDetails(e.message, e.details) && e.details}
         {@render detailsBlock(`app:${e.id}`, e.details)}
+      {:else if e.environment}
+        <!-- Nothing to expand, but the build and host still belong on the row:
+             they are the first thing a report needs. -->
+        <p class="mt-0.5 select-text font-mono text-[0.625rem] text-dimmed">{e.environment}</p>
       {/if}
     </div>
     <div

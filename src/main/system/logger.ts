@@ -2,20 +2,13 @@ import { appendFile, mkdir } from 'fs/promises'
 import { arch as osArchitecture, platform as osPlatform, release as osRelease } from 'os'
 import { join } from 'path'
 import { APP_NAME } from '../../lib/brand'
+import type { LogEnvironment } from '../../lib/log-environment'
 import { DEBUG_LOG_FILE, ERROR_LOG_FILE, MAIN_LOG_FILE, logDayName } from './log-paths'
 
 type LogLevel = 'dev' | 'info' | 'error'
 
 /** The build and host facts stamped onto every durable log record. */
-export interface LogEnvironment {
-  /** Running app version, prerelease suffix intact (`0.5.70-nightly.15`). */
-  appVersion: string
-  platform: string
-  /** User-facing OS version, e.g. `15.5.0` on macOS, not the Darwin kernel. */
-  platformVersion: string
-  architecture: string
-  electronVersion?: string
-}
+export type { LogEnvironment }
 
 interface LogRecord {
   /** ISO-8601 instant, in UTC. */
@@ -91,6 +84,18 @@ export class Logger {
     Logger.bannerDay = null
     Logger.activeDay = null
     Logger.daySinks = null
+  }
+
+  /**
+   * The facts this process logs with, for a reader outside the main process.
+   *
+   * The renderer's Exceptions panel stamps a stack trace with exactly what the
+   * durable log would have written, so a report pasted from either surface
+   * names the same build, OS and CPU. A copy is returned: a caller must not be
+   * able to rewrite the logger's own facts.
+   */
+  static environmentFacts(): LogEnvironment {
+    return { ...Logger.environment }
   }
 
   private static resolveEnvironment(environment: Partial<LogEnvironment> = {}): LogEnvironment {

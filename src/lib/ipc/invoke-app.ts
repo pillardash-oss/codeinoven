@@ -20,6 +20,7 @@ import type { RendererLogEntry } from './logging'
 import type { CustomIconImage } from '../custom-icon'
 import type { LocalAiRepoDecision } from '../local-ai-repo'
 import type { Contract } from './contract-helpers'
+import type { LogEnvironment } from '../log-environment'
 import type {
   LlamaCppLogStream,
   LlamaCppProbeResult,
@@ -301,5 +302,13 @@ export const invokeAppContract = {
    * rejections, console errors) to the main-process durable Logger. Fire and
    * forget; returns `void`.
    */
-  'renderer:log': {} as Contract<[entry: RendererLogEntry], void>
+  'renderer:log': {} as Contract<[entry: RendererLogEntry], void>,
+  /**
+   * The build and host facts the durable Logger stamps on every record.
+   *
+   * The renderer's Exceptions panel names a failure with the same facts, so a
+   * stack trace copied from the panel and a record read from disk on the same
+   * machine name the same version, OS and CPU.
+   */
+  'logger:environment': {} as Contract<[], LogEnvironment>
 }
