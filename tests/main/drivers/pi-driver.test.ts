@@ -922,6 +922,57 @@ describe('PiDriver', () => {
     expect(endPart?.type === 'subagent' ? endPart.activity.time?.end : undefined).toBeDefined()
   })
 
+  it('never revives a settled sub-agent from a late tool-execution update', () => {
+    // Regression: a background spawn's execute resolves before the worker does,
+    // so pi can flush one last tool-execution update after the call's result
+    // already reported the failure. That update carries no structured payload
+    // and only restated `running`, which put the card back to "Working" for a
+    // worker that had failed for good.
+    const terminal = {
+      type: 'subagent' as const,
+      id: 'pi-subagent-call-spawn-3',
+      messageID: 'assistant-1',
+      callID: 'call-spawn-3',
+      activity: {
+        status: 'error' as const,
+        agent: 'Port the money section',
+        description: 'Port the money section',
+        background: true,
+        childSessionId: 'native-child-3',
+        error: 'No API key found for anthropic.',
+        time: { start: 10, end: 20 }
+      }
+    }
+    const context = sessionContext('s-1', [
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        parts: [terminal],
+        createdAt: Date.now(),
+        harnessId: 'pi'
+      }
+    ])
+    const state = { assistantMessageId: 'assistant-1', turnIndex: 1 }
+    const result = mapPiRecord(
+      {
+        type: 'tool_execution_update',
+        toolCallId: 'call-spawn-3',
+        toolName: 'cio_spawn_agent',
+        args: {},
+        partialResult: { content: [{ type: 'text', text: 'No API key found for anthropic.' }] }
+      },
+      context,
+      state
+    )
+    const part =
+      result?.events?.[0]?.type === 'message.part.updated' ? result.events[0].part : undefined
+    expect(part?.type).toBe('subagent')
+    if (part?.type !== 'subagent') return
+    expect(part.activity.status).toBe('error')
+    expect(part.activity.time).toEqual({ start: 10, end: 20 })
+    expect(part.activity.error).toBe('No API key found for anthropic.')
+  })
+
   it('maps and answers the canonical Pi question envelope', async () => {
     const driver = new PiDriver(await storage())
     const sessionId = await driver.createSession(projectPath(), 'Pi')

@@ -23,7 +23,11 @@ function tool(id: string): AgentPart {
   }
 }
 
-function subagentPart(id: string, status: 'pending' | 'running' | 'completed'): AgentPart {
+function subagentPart(
+  id: string,
+  status: 'pending' | 'running' | 'completed' | 'error' | 'aborted',
+  patch: { time?: { start: number; end?: number }; error?: string } = {}
+): AgentPart {
   return {
     type: 'subagent',
     id,
@@ -32,7 +36,8 @@ function subagentPart(id: string, status: 'pending' | 'running' | 'completed'): 
       status,
       agent: 'implementation',
       description: 'Delegated task',
-      background: false
+      background: false,
+      ...patch
     }
   }
 }
@@ -106,6 +111,30 @@ describe('foldTurnStreamEvents', () => {
     const folded = foldTurnStreamEvents(events, 'turn-2')
     expect(folded.map((p) => p.id)).toEqual(['new'])
     expect(folded[0].type === 'reasoning' && folded[0].text).toBe('fresh')
+  })
+
+  it('never lets a stale running snapshot revive a settled sub-agent', () => {
+    // Regression: a background spawn's execute returns before the worker does,
+    // so pi flushed one last tool-execution update after the call's result had
+    // already reported the failure. That update restated `running`, and the
+    // fold adopted it, which left a failed worker counted as an active
+    // sub-agent for the rest of the thread's life.
+    const settled = subagentPart('worker', 'error', {
+      time: { start: 10, end: 20 },
+      error: 'No API key found for anthropic.'
+    })
+    const stale = subagentPart('worker', 'running', { time: { start: 10 } })
+    const folded = foldTurnStreamEvents([
+      ev({ kind: 'part.updated', part: settled }),
+      ev({ kind: 'part.updated', part: stale })
+    ])
+    expect(folded).toHaveLength(1)
+    const part = folded[0]
+    expect(part.type).toBe('subagent')
+    if (part.type !== 'subagent') return
+    expect(part.activity.status).toBe('error')
+    expect(part.activity.time).toEqual({ start: 10, end: 20 })
+    expect(part.activity.error).toBe('No API key found for anthropic.')
   })
 })
 
