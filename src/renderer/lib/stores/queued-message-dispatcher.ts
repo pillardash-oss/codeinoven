@@ -24,10 +24,11 @@ import { queuedResourceWait } from '$lib/stores/queued-resource-wait.svelte'
 import type { ThreadResourceGateAnswer } from '$shared/resource-admission'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
+import { isThreadBusyStatus } from '$shared/thread-status-policy'
 import {
   isTerminalThread,
-  resolveThreadDeliverySettings,
   threadAgentIsIdle,
+  threadDeliverySettingsFor,
   threadHasPendingGate
 } from '$lib/stores/thread-delivery'
 import {
@@ -35,6 +36,7 @@ import {
   type QueuedMessageEntry,
   type StartAfterThreadReference
 } from '$lib/stores/renderer-recovery.svelte'
+import { SweepCoalescer } from '$lib/stores/queued-sweep-coalescer'
 import { messageId as createMessageId } from '$shared/id'
 import type { AgentEvent, Thread } from '$shared/types'
 
@@ -42,11 +44,25 @@ function threadKey(projectId: string, threadId: string): string {
   return `${projectId}:${threadId}`
 }
 
+/**
+ * Shortest gap between two sweeps while notices keep arriving.
+ *
+ * Every sweep re-asks the waiting threads' gates, so a burst of idle transitions
+ * and row updates must not become a burst of round-trips. See
+ * {@link SweepCoalescer} for the leading-plus-trailing rule.
+ */
+const SWEEP_COALESCE_MS = 250
+
 class QueuedMessageDispatcher {
   /** Queues currently being sent, so concurrent idle events cannot double-send. */
   #inFlight = new Set<string>()
   /** Threads whose ThreadView is currently mounted — they own their own dispatch. */
   #mounted = new Set<string>()
+  /** Collapses a burst of idle notices into few sweeps. */
+  readonly #sweeps = new SweepCoalescer({
+    intervalMs: SWEEP_COALESCE_MS,
+    run: () => this.#sweep()
+  })
 
   constructor() {
     subscribe('agent:event', (...args: unknown[]) => {
@@ -55,11 +71,15 @@ class QueuedMessageDispatcher {
       const idle =
         event.type === 'session.idle' ||
         (event.type === 'session.status' && event.status.state === 'idle')
-      if (idle) this.#sweep()
+      if (idle) this.#sweeps.request()
     })
     subscribe('thread:updated', (...args: unknown[]) => {
       const thread = args[0] as Thread | undefined
-      if (thread) this.#sweep()
+      // A row that still reports the thread as working means nothing became free:
+      // the activity stamps of a live turn arrive constantly, and sweeping on each
+      // one asked every gate again for a queue that could not move.
+      if (!thread || isThreadBusyStatus(thread.status)) return
+      this.#sweeps.request()
     })
   }
 
@@ -75,6 +95,7 @@ class QueuedMessageDispatcher {
 
   /** Deliver the queue now instead of waiting for the next idle event. */
   sweepNow(): void {
+    this.#sweeps.cancel()
     this.#sweep()
   }
 
@@ -112,8 +133,11 @@ class QueuedMessageDispatcher {
       // thread row at all: only its mounted view can deliver it through the
       // side-chat transport, so this headless sweep steps aside. A thread that
       // is not durable yet is treated the same way and retried on the next idle.
-      if ((await invoke('thread:get', projectId, threadId)) === null) return
-      const settings = await resolveThreadDeliverySettings(projectId, threadId)
+      // The row this read returns is also what the turn runs with, so the same
+      // answer decides the settings instead of asking main for it again.
+      const thread = await invoke('thread:get', projectId, threadId)
+      if (thread === null) return
+      const settings = threadDeliverySettingsFor(projectId, thread)
       // Nothing may have changed while we waited — verify before dispatching.
       if (this.#mounted.has(key)) return
       const entry = rendererRecovery.queuedMessageFor(projectId, threadId)
@@ -191,7 +215,7 @@ class QueuedMessageDispatcher {
       queuedResourceWait.clear(projectId, threadId)
       return false
     }
-    queuedResourceWait.hold(projectId, threadId, answer.wait, answer.target, () => this.#sweep())
+    queuedResourceWait.hold(projectId, threadId, answer.wait, answer.target, () => this.sweepNow())
     return true
   }
 
