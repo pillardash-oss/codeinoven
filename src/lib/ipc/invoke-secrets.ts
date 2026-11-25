@@ -2,9 +2,10 @@ import type {
   ProjectEnvApplyTextRequest,
   ProjectEnvApplyTextResult,
   ProjectEnvEntry,
+  ProjectEnvEntryRequest,
+  ProjectEnvEntryToggleRequest,
   ProjectEnvFile,
   ProjectEnvFileRequest,
-  ProjectEnvEntryRequest,
   ProjectEnvImportRequest,
   ProjectEnvImportResult,
   ProjectEnvLaunchPreview,
@@ -30,6 +31,11 @@ export const invokeSecretsContract = {
   'secrets:envThreadList': {} as Contract<[threadId: string], ProjectEnvEntry[]>,
   'secrets:envSetValue': {} as Contract<[request: ProjectEnvValueRequest], ProjectEnvFile[]>,
   'secrets:envRemoveEntry': {} as Contract<[request: ProjectEnvEntryRequest], ProjectEnvFile[]>,
+  /** Turn one key on or off while keeping its stored value. */
+  'secrets:envSetEntryDisabled': {} as Contract<
+    [request: ProjectEnvEntryToggleRequest],
+    ProjectEnvFile[]
+  >,
   'secrets:envCreateFile': {} as Contract<[request: ProjectEnvFileRequest], ProjectEnvFile[]>,
   /** Replace one managed file with the lines of a typed `.env` body. */
   'secrets:envApplyText': {} as Contract<
