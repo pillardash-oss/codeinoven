@@ -33,11 +33,11 @@ export interface PermissionOption {
   tone: 'info' | 'warn'
 }
 
-const AUTO_REVIEW: PermissionOption = { id: 'auto_review', label: 'Auto Review', tone: 'info' }
+const AUTO_REVIEW: PermissionOption = { id: 'auto_review', label: 'Auto', tone: 'info' }
 
 export const PERMISSION_OPTIONS: readonly PermissionOption[] = [
   AUTO_REVIEW,
-  { id: 'full_access', label: 'Full Access', tone: 'warn' }
+  { id: 'full_access', label: 'Full', tone: 'warn' }
 ]
 
 export const DEFAULT_THINKING: ThinkingLevel = 'medium'
