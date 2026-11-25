@@ -83,6 +83,8 @@
     loadingCommitDiffFile: Record<string, boolean>
     commitDiffErrors: Record<string, string | null>
     selectedPaths: Record<string, boolean>
+    /** Folder open state of the changes tree, owned by the panel's controller. */
+    expandedDirs: Record<string, boolean>
     paneClass: string
     commitHistory: GitCommitInfo[]
     loadingHistory: boolean
@@ -215,6 +217,7 @@
     loadingCommitDiffFile,
     commitDiffErrors,
     selectedPaths = $bindable(),
+    expandedDirs = $bindable(),
     paneClass,
     commitHistory,
     loadingHistory,
@@ -413,6 +416,7 @@
         <GitStatusPanelChangesView
           {selectedCommit}
           {status}
+          bind:expandedDirs
           {changes}
           {conflictSections}
           {stagedSections}

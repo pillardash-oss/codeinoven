@@ -113,7 +113,15 @@ export class GitStatusPanelHandlePrListAction extends BoardUnit<GitStatusPanel> 
       get prListState() {
         return root.confirmPrMerge.prListState
       },
+      get changedFiles() {
+        return host.selectedCommit ? host.commitDiffChanges : root.loadRepoState.changes
+      },
       openCommit: (commit) => void host.selectCommit(commit),
+      revealFile: (change) => {
+        void (host.selectedCommit
+          ? root.confirmPrMerge.toggleCommitDiff(change)
+          : host.workingTree.revealFile(change))
+      },
       requestCheckout: (branch) => root.loadRepoState.branches.requestCheckout(branch),
       openPullRequest: (pr) => {
         host.selectedPullRequest = pr

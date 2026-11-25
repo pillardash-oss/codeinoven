@@ -59,6 +59,8 @@
     toggleCommitDir: (path: string) => void
     /** Take the given files of the open commit out of it (confirmed by the panel). */
     requestRemoveCommitChanges: (paths: string[]) => void
+    /** Folder open state, owned by the panel so a search can reveal a file. */
+    expandedDirs: Record<string, boolean>
   }
 
   let {
@@ -97,7 +99,8 @@
     restoreFromSource,
     toggleCommitDiff,
     toggleCommitDir,
-    requestRemoveCommitChanges
+    requestRemoveCommitChanges,
+    expandedDirs = $bindable()
   }: Props = $props()
 
   // The existing summary worker batches path metadata. Rendering never waits on it.
@@ -327,6 +330,7 @@
                 onIgnorePaths={(paths) => ignorePathsAction(paths)}
                 onDiscardPaths={(paths) => requestDiscard(paths)}
                 onResolveConflict={(path) => routeConflictResolution(path)}
+                bind:expandedDirs
               />
             {:else}
               <div class="overflow-hidden border border-warning/25 bg-surface">
@@ -378,6 +382,7 @@
                 onOpenDirectory={(path) => openDirectory(path)}
                 onIgnorePaths={(paths) => ignorePathsAction(paths)}
                 onDiscardPaths={(paths) => requestDiscard(paths)}
+                bind:expandedDirs
               />
             {:else}
               <div class="overflow-hidden border border-border bg-surface">
@@ -457,6 +462,7 @@
                 onOpenDirectory={(path) => openDirectory(path)}
                 onIgnorePaths={(paths) => ignorePathsAction(paths)}
                 onDiscardPaths={(paths) => requestDiscard(paths)}
+                bind:expandedDirs
               />
             {:else}
               <div class="overflow-hidden border border-border bg-surface">

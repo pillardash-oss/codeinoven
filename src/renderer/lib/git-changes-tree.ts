@@ -66,6 +66,37 @@ export function pathsForNode(node: GitChangeTreeNode): string[] {
   return filesForNode(node).map((change) => change.path)
 }
 
+/**
+ * The changed files a query names, best match first.
+ *
+ * A file is found by its name or by any part of its path, which is how people
+ * look for one: `journal` finds the folder's files, `account` the account ones,
+ * and `src/lib/design` narrows to that subtree. The name is ranked above the
+ * path so a query that matches the file itself is not buried under files that
+ * merely sit in a folder that happens to match.
+ */
+export function matchChangeFiles(
+  files: readonly GitFileChange[],
+  query: string,
+  limit: number
+): GitFileChange[] {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return []
+  const scored: Array<{ change: GitFileChange; score: number }> = []
+  for (const change of files) {
+    const name = splitChangePath(change.path).name.toLowerCase()
+    const path = change.path.toLowerCase()
+    if (name === needle) scored.push({ change, score: 0 })
+    else if (name.startsWith(needle)) scored.push({ change, score: 1 })
+    else if (name.includes(needle)) scored.push({ change, score: 2 })
+    else if (path.includes(needle)) scored.push({ change, score: 3 })
+  }
+  return scored
+    .sort((a, b) => a.score - b.score || a.change.path.localeCompare(b.change.path))
+    .slice(0, limit)
+    .map((entry) => entry.change)
+}
+
 /** A path split into the file it names and the folders it sits in. */
 export interface ChangePathParts {
   /** The file name alone, which is what a row leads with. */
@@ -87,6 +118,31 @@ export function splitChangePath(path: string): ChangePathParts {
   if (slash === -1) return { name: path, dir: '' }
   return { name: path.slice(slash + 1), dir: path.slice(0, slash) }
 }
+
+/**
+ * Every folder above a file, outermost first.
+ *
+ * `apps/src/journal.ts` gives `apps`, `apps/src`: what has to be open for that
+ * file's row to be on screen. The file itself is not included, and a root file
+ * has no ancestors.
+ */
+export function ancestorDirPaths(path: string): string[] {
+  const segments = path.split('/')
+  const dirs: string[] = []
+  for (let index = 1; index < segments.length; index += 1) {
+    dirs.push(segments.slice(0, index).join('/'))
+  }
+  return dirs
+}
+
+/**
+ * The sections the Changes view draws, in the order it draws them.
+ *
+ * The tree keys a folder's open state by the section it is listed in, so the
+ * thing that reveals a searched file has to know these names to open the right
+ * folders.
+ */
+export const CHANGE_SECTION_TITLES = ['Conflicts', 'Staged', 'Unstaged', 'Untracked'] as const
 
 /**
  * The key a folder's open state is stored under.

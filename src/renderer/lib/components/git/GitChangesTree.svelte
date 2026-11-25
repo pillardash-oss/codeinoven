@@ -40,6 +40,14 @@
     onDiscardPaths: (paths: string[]) => void
     /** Opens the dedicated conflict-resolution panel for a conflicted file. */
     onResolveConflict?: (path: string) => void
+    /**
+     * Which folder rows are open, keyed by section and path.
+     *
+     * The panel's changes controller owns it so a search result can open the way
+     * to the file it found, and so the folds survive a switch between the list
+     * and the tree.
+     */
+    expandedDirs?: Record<string, boolean>
   }
 
   let {
@@ -58,12 +66,24 @@
     onOpenDirectory,
     onIgnorePaths,
     onDiscardPaths,
-    onResolveConflict
+    onResolveConflict,
+    expandedDirs = $bindable({})
   }: Props = $props()
 
-  /** Which folder rows are open. Keyed by section as well as path, so one
-   *  section's fold never moves another's (see `dirExpansionKey`). */
-  let expandedDirs = $state<Record<string, boolean>>({})
+  /**
+   * The guide columns a row at this depth draws, one per ancestor.
+   *
+   * Indentation alone leaves a deep file floating under nothing; a hairline per
+   * level is what makes a tree read as a tree, and drawing it per row (rather
+   * than a background) keeps it honest when a row is selected or hovered.
+   */
+  function guideLevels(depth: number): number[] {
+    return Array.from({ length: depth }, (_, index) => index)
+  }
+
+  /** The width the toggle occupies, so a conflicted row without one still lines
+   *  its name up with every other row. */
+  const SWITCH_COLUMN = 'w-7'
 
   function toggleDir(key: string): void {
     expandedDirs = { ...expandedDirs, [key]: !(expandedDirs[key] ?? false) }
@@ -248,7 +268,7 @@
   {/if}
 {/snippet}
 
-{#snippet fileRow(change: GitFileChange)}
+{#snippet fileRow(change: GitFileChange, depth: number)}
   {@const key = fileKey(change)}
   {@const viewDiff = viewDiffFor(change, diffs[key] ?? null)}
   <ContextMenu.Root>
@@ -259,7 +279,7 @@
     >
       <div
         class={[
-          'group flex h-7 w-full cursor-pointer items-center gap-1.5 pr-1.5 text-left transition-colors',
+          'group flex h-7 w-full cursor-pointer items-center gap-1.5 pl-1 pr-1.5 text-left transition-colors',
           selectedPaths[change.path] ? 'bg-primary/10' : 'hover:bg-elevated/50'
         ]}
         role="button"
@@ -305,7 +325,12 @@
               activeClass="border-primary bg-primary"
             />
           </span>
+        {:else}
+          <span class="{SWITCH_COLUMN} shrink-0" aria-hidden="true"></span>
         {/if}
+        {#each guideLevels(depth) as level (level)}
+          <span class="h-7 w-3 shrink-0 border-l border-border" aria-hidden="true"></span>
+        {/each}
         <span
           class={[
             'w-4 shrink-0 text-center font-mono text-[0.625rem] font-semibold',
@@ -373,7 +398,6 @@
 {#snippet dirRow(node: GitChangeTreeNode, depth: number, label: string, sectionKey: string)}
   {@const stateKey = dirExpansionKey(sectionKey, node.path)}
   {@const isOpen = expandedDirs[stateKey] ?? false}
-  {@const indent = 3 + depth * 2}
   {@const dirFiles = filesForNode(node)}
   {@const dirSelected =
     dirFiles.every((change) => selectedPaths[change.path]) && dirFiles.length > 0}
@@ -386,10 +410,9 @@
       <button
         type="button"
         class={[
-          'flex h-7 w-full cursor-pointer items-center gap-1.5 px-2 text-left transition-colors',
+          'flex h-7 w-full cursor-pointer items-center gap-1.5 pl-1 pr-2 text-left transition-colors',
           dirSelected ? 'bg-primary/10' : 'hover:bg-elevated/50'
         ]}
-        style="padding-left: {indent}px"
         aria-expanded={isOpen}
         onclick={(event: MouseEvent) => {
           if (event.metaKey || event.ctrlKey) {
@@ -417,6 +440,9 @@
             activeClass="border-primary bg-primary"
           />
         </span>
+        {#each guideLevels(depth) as level (level)}
+          <span class="h-7 w-3 shrink-0 border-l border-border" aria-hidden="true"></span>
+        {/each}
         {#if isOpen}
           <CioChevronDown size={12} class="shrink-0 text-dimmed" />
           <CioFolderOpen size={13} class="shrink-0 text-warning" />
@@ -455,7 +481,7 @@
 
   {#if isOpen}
     {#each node.files as change (change.path)}
-      {@render fileRow(change)}
+      {@render fileRow(change, depth + 1)}
     {/each}
     {#each sortTreeDirs(node.dirs) as subdir (subdir.path)}
       {@const branch = compressDirChain(subdir)}
@@ -470,7 +496,9 @@
   {@const sectionAllSelected =
     section.files.length > 0 && section.files.every((f) => selectedPaths[f.path])}
   <div class="overflow-hidden border border-border bg-surface">
-    <div class="flex items-center gap-1.5 bg-elevated/50 px-2.5 py-1">
+    <!-- The header keeps the row's own gutter so the section toggle sits on the
+         same column as every switch below it, and the count ends the line. -->
+    <div class="flex items-center gap-1.5 bg-elevated/50 py-1 pl-1 pr-2">
       {#if !isConflicts}
         <span
           class="shrink-0"
@@ -497,7 +525,11 @@
       <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
         {section.title}
       </span>
-      <span class="text-[0.5rem] tabular-nums text-dimmed">{section.files.length}</span>
+      <span
+        class="ml-auto text-[0.5rem] tabular-nums text-dimmed"
+        title={`${String(section.files.length)} files in ${section.title}`}
+        >{section.files.length}</span
+      >
     </div>
 
     {#if tree.dirs.size > 0 || tree.files.length > 0}
@@ -507,7 +539,7 @@
           {@render dirRow(branch.node, 0, branch.label, section.title)}
         {/each}
         {#each tree.files as change (change.path)}
-          {@render fileRow(change)}
+          {@render fileRow(change, 0)}
         {/each}
       </div>
     {/if}

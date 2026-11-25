@@ -1,6 +1,7 @@
 import { gitState } from '$lib/stores/git.svelte'
 import type { GitDiff, GitFileChange, GitRestoreTarget } from '$shared/types'
 import { fileDiffKey } from '../git-status-panel-format'
+import { ancestorDirPaths, CHANGE_SECTION_TITLES, dirExpansionKey } from '$lib/git-changes-tree'
 
 /**
  * What the working-tree controls need from the panel around them: the repository
@@ -27,6 +28,19 @@ export class GitStatusPanelChangesController {
   loadingDiff = $state<Record<string, boolean>>({})
   diffErrors = $state<Record<string, string | null>>({})
   selectedPaths = $state<Record<string, boolean>>({})
+  /**
+   * Which folder rows are open, keyed by section as well as path.
+   *
+   * The same directory appears in Staged, Unstaged and Untracked whenever the
+   * same tree is touched on both sides of the index, so the key carries the
+   * section: keyed by the path alone, opening `apps` under Untracked also opened
+   * the staged run of `apps`, and folding one folded the other.
+   *
+   * It lives here rather than in the tree because a search result has to be able
+   * to open the folders above the file it found, and the tree is not the only
+   * thing that needs to know what is open.
+   */
+  expandedDirs = $state<Record<string, boolean>>({})
   discardConfirm = $state<string[] | null>(null)
   restoreWorktreeConfirm = $state<{ source: string; path: string } | null>(null)
   /**
@@ -131,6 +145,30 @@ export class GitStatusPanelChangesController {
 
   clearSelection(): void {
     this.selectedPaths = {}
+  }
+
+  toggleDirKey(key: string): void {
+    this.expandedDirs = { ...this.expandedDirs, [key]: !(this.expandedDirs[key] ?? false) }
+  }
+
+  /**
+   * Bring a changed file into view: open the folders above it, then its diff.
+   *
+   * Every section is opened, not just the one this entry came from, because a
+   * half-staged file is listed twice and the reader should not have to guess
+   * which side the hit was on. Opening the diff is what makes the answer useful:
+   * a row that is merely visible still has to be clicked.
+   */
+  async revealFile(change: GitFileChange): Promise<void> {
+    const ancestors = ancestorDirPaths(change.path)
+    if (ancestors.length > 0) {
+      const next = { ...this.expandedDirs }
+      for (const section of CHANGE_SECTION_TITLES) {
+        for (const dir of ancestors) next[dirExpansionKey(section, dir)] = true
+      }
+      this.expandedDirs = next
+    }
+    if (!this.expanded[fileDiffKey(change)]) await this.toggleDiff(change)
   }
 
   async stageSelectedAction(stage: boolean): Promise<void> {

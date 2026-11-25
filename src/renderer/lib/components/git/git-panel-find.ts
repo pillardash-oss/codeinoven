@@ -1,6 +1,7 @@
 import type {
   GitBranchInfo,
   GitCommitInfo,
+  GitFileChange,
   GitStashEntry,
   GitHubDeployment,
   GitHubNotification,
@@ -14,11 +15,19 @@ import type { GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
  * What the Git panel's find bar searches.
  *
  * The subject follows the view, because a bar that searches commits while the
- * reader is looking at pull requests answers a question nobody asked. Changes and
- * History share one scope: both draw the repository's commits, so both search them.
+ * reader is looking at pull requests answers a question nobody asked. Changes
+ * searches the files in front of it, by name or path; History searches commits,
+ * which is the list it draws.
  */
 export type GitFindScope =
-  'commits' | 'branches' | 'pulls' | 'issues' | 'notifications' | 'stashes' | 'deployments'
+  | 'commits'
+  | 'files'
+  | 'branches'
+  | 'pulls'
+  | 'issues'
+  | 'notifications'
+  | 'stashes'
+  | 'deployments'
 
 /** The words each scope's bar uses, so no label is written twice. */
 export interface GitFindScopeWords {
@@ -33,6 +42,12 @@ export interface GitFindScopeWords {
 }
 
 export const GIT_FIND_WORDS: Record<GitFindScope, GitFindScopeWords> = {
+  files: {
+    label: 'Search changed files',
+    placeholder: 'Search file names or paths…',
+    busy: 'Searching changed files…',
+    empty: 'No matching changed files'
+  },
   commits: {
     label: 'Search commits',
     placeholder: 'Search commit title or hash…',
@@ -98,6 +113,7 @@ export function gitFindScopeFor(tab: GitPanelTabId): GitFindScope {
     case 'deployments':
       return 'deployments'
     case 'changes':
+      return 'files'
     case 'history':
       return 'commits'
   }
@@ -113,6 +129,7 @@ export function gitFindScopeFor(tab: GitPanelTabId): GitFindScope {
  */
 export type GitFindRow = GitFindDisplay &
   (
+    | { kind: 'file'; file: GitFileChange }
     | { kind: 'commit'; commit: GitCommitInfo }
     | { kind: 'branch'; branch: GitBranchInfo }
     | { kind: 'pull'; pull: PullRequestSummary }

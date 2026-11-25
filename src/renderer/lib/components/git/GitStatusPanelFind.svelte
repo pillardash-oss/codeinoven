@@ -2,6 +2,7 @@
   import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
   import CioCommit from '@pdslng/cio-icon/CioCommit.svelte'
   import CioDot from '@pdslng/cio-icon/CioDot.svelte'
+  import CioFileMinus from '@pdslng/cio-icon/CioFileMinus.svelte'
   import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
   import CioNotifications from '@pdslng/cio-icon/CioNotifications.svelte'
   import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
@@ -53,6 +54,8 @@
    */
   function glyphFor(kind: GitFindRow['kind']): typeof CioCommit {
     switch (kind) {
+      case 'file':
+        return CioFileMinus
       case 'commit':
         return CioCommit
       case 'branch':

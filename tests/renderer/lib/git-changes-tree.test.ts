@@ -5,6 +5,8 @@ import {
   compressDirChain,
   dirExpansionKey,
   filesForNode,
+  ancestorDirPaths,
+  matchChangeFiles,
   pathsForNode,
   sortTreeDirs,
   splitChangePath
@@ -100,6 +102,64 @@ describe('splitChangePath', () => {
       dir: '.github/workflows'
     })
     expect(splitChangePath('apps/.env')).toEqual({ name: '.env', dir: 'apps' })
+  })
+})
+
+describe('matchChangeFiles', () => {
+  const files = [
+    change('apps/application/src/lib/design/journal/account-editor.tsx'),
+    change('apps/application/src/lib/design/journal/account-list.svelte'),
+    change('apps/application/src/lib/design/journal/attachments.ts'),
+    change('apps/application/src/test/unit/design/journalCache.ts'),
+    change('packages/convex-backend/convex/journal.ts')
+  ]
+
+  it('finds a file by its name, not just by its folder', () => {
+    const found = matchChangeFiles(files, 'account', 10)
+    expect(found.map((file) => splitChangePath(file.path).name)).toEqual([
+      'account-editor.tsx',
+      'account-list.svelte'
+    ])
+  })
+
+  it('finds a file by any part of its path', () => {
+    const found = matchChangeFiles(files, 'src/test', 10)
+    expect(found.map((file) => file.path)).toEqual([
+      'apps/application/src/test/unit/design/journalCache.ts'
+    ])
+  })
+
+  it('ranks a name match above a file that only sits in a matching folder', () => {
+    const found = matchChangeFiles(files, 'journal', 10)
+    const names = found.map((file) => splitChangePath(file.path).name)
+
+    // The two files named after the query lead; the folder called `journal` only
+    // qualifies the files whose own names say nothing about it, so they follow.
+    expect(names.slice(0, 2).sort()).toEqual(['journal.ts', 'journalCache.ts'])
+    expect(names.slice(2).sort()).toEqual([
+      'account-editor.tsx',
+      'account-list.svelte',
+      'attachments.ts'
+    ])
+  })
+
+  it('answers nothing for an empty query and respects the limit', () => {
+    expect(matchChangeFiles(files, '  ', 10)).toEqual([])
+    expect(matchChangeFiles(files, 'a', 2)).toHaveLength(2)
+  })
+})
+
+describe('ancestorDirPaths', () => {
+  it('names every folder above a file, outermost first', () => {
+    expect(ancestorDirPaths('apps/src/lib/journal.ts')).toEqual([
+      'apps',
+      'apps/src',
+      'apps/src/lib'
+    ])
+  })
+
+  it('gives a root file no folders to open', () => {
+    expect(ancestorDirPaths('package.json')).toEqual([])
   })
 })
 

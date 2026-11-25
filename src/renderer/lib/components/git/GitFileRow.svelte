@@ -151,7 +151,7 @@
         <button
           type="button"
           class={[
-            'flex min-h-7 min-w-0 flex-1 items-center gap-1.5 px-2 text-left transition-colors',
+            'flex min-h-7 min-w-0 flex-1 items-center gap-1.5 pl-1 pr-2 text-left transition-colors',
             selected ? 'bg-primary/10' : 'hover:bg-elevated/50'
           ]}
           title={change.status === 'conflicted' && onResolveConflict
