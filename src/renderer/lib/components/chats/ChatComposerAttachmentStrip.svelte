@@ -282,83 +282,86 @@
         {/each}
       </div>
     {/if}
-    {#if references.length > 0}
-      <div
-        role="group"
-        aria-label={referenceSummary.aria}
-        class="relative inline-flex"
-        onmouseenter={onOpenSelectionPopover}
-        onmouseleave={onScheduleSelectionPopoverClose}
-      >
-        <ComposerRelocationMenu
-          noun={onRelocateItem ? referenceRelocationNoun : null}
-          name={referenceSummary.label}
-          onOpenChange={onReferenceMenuOpenChange}
-          onRelocate={() => requestReferenceRelocation('relocate')}
-          onCopy={() => requestReferenceRelocation('copy')}
+    <!-- Everything the next message carries shares one wrapping row: the
+         attached reference chip and every file sit beside each other and wrap
+         together, instead of each group taking a line of its own. -->
+    <div class="flex flex-wrap items-center gap-1.5">
+      {#if references.length > 0}
+        <div
+          role="group"
+          aria-label={referenceSummary.aria}
+          class="relative inline-flex shrink-0"
+          onmouseenter={onOpenSelectionPopover}
+          onmouseleave={onScheduleSelectionPopoverClose}
         >
-          <div
-            class="flex items-center border border-accent/30 bg-accent/10 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-accent/15"
+          <ComposerRelocationMenu
+            noun={onRelocateItem ? referenceRelocationNoun : null}
+            name={referenceSummary.label}
+            onOpenChange={onReferenceMenuOpenChange}
+            onRelocate={() => requestReferenceRelocation('relocate')}
+            onCopy={() => requestReferenceRelocation('copy')}
           >
-            <button
-              type="button"
-              class="flex items-center gap-1.5 px-2 py-1"
-              title={`${referenceSummary.aria}   hover to manage`}
-              aria-label={referenceSummary.aria}
-              aria-expanded={selectionPopoverOpen}
-              onclick={onToggleSelectionPopover}
+            <div
+              class="flex items-center border border-accent/30 bg-accent/10 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-accent/15"
             >
-              {#if referenceSummary.noun === 'element'}
-                <CioMarquee size={11} class="shrink-0 text-accent" />
-              {:else if referenceSummary.noun === 'annotation'}
-                <CioFileText size={11} class="shrink-0 text-accent" />
-              {:else if referenceSummary.noun === 'note'}
-                <CioClapper size={11} class="shrink-0 text-accent" />
-              {:else if referenceSummary.noun === 'mark'}
-                <CioPencil size={11} class="shrink-0 text-accent" />
-              {:else}
-                <CioMessage size={11} class="shrink-0 text-accent" />
-              {/if}
-              <span>
-                {referenceSummary.label}
-              </span>
-            </button>
-            {#if onRemoveAllReferences}
               <button
                 type="button"
-                class="flex h-full items-center pl-0.5 pr-1.5 text-dimmed transition-colors hover:text-danger"
-                title={referenceSummary.noun === 'selection'
-                  ? 'Delete all selections'
-                  : 'Delete all attached references'}
-                aria-label={referenceSummary.noun === 'selection'
-                  ? 'Delete all selections'
-                  : 'Delete all attached references'}
-                onclick={onRemoveAllReferences}
+                class="flex items-center gap-1.5 px-2 py-1"
+                title={`${referenceSummary.aria}   hover to manage`}
+                aria-label={referenceSummary.aria}
+                aria-expanded={selectionPopoverOpen}
+                onclick={onToggleSelectionPopover}
               >
-                <CioClose size={11} />
+                {#if referenceSummary.noun === 'element'}
+                  <CioMarquee size={11} class="shrink-0 text-accent" />
+                {:else if referenceSummary.noun === 'annotation'}
+                  <CioFileText size={11} class="shrink-0 text-accent" />
+                {:else if referenceSummary.noun === 'note'}
+                  <CioClapper size={11} class="shrink-0 text-accent" />
+                {:else if referenceSummary.noun === 'mark'}
+                  <CioPencil size={11} class="shrink-0 text-accent" />
+                {:else}
+                  <CioMessage size={11} class="shrink-0 text-accent" />
+                {/if}
+                <span>
+                  {referenceSummary.label}
+                </span>
               </button>
-            {/if}
-          </div>
-        </ComposerRelocationMenu>
-        {#if selectionPopoverOpen}
-          <div class="absolute bottom-full left-0 z-50 mb-1.5">
-            <SelectionListPopover
-              {references}
-              onEdit={(id) => {
-                onCloseSelectionPopover()
-                onEditReference?.(id)
-              }}
-              onRemove={(id) => onRemoveReference?.(id)}
-              onRemoveAll={onRemoveAllReferences}
-              {onRelocateItem}
-              onMenuOpenChange={onReferenceMenuOpenChange}
-            />
-          </div>
-        {/if}
-      </div>
-    {/if}
-    {#if attachments.length > 0 || pendingAttachments.length > 0}
-      <div class="flex flex-wrap gap-1.5">
+              {#if onRemoveAllReferences}
+                <button
+                  type="button"
+                  class="flex h-full items-center pl-0.5 pr-1.5 text-dimmed transition-colors hover:text-danger"
+                  title={referenceSummary.noun === 'selection'
+                    ? 'Delete all selections'
+                    : 'Delete all attached references'}
+                  aria-label={referenceSummary.noun === 'selection'
+                    ? 'Delete all selections'
+                    : 'Delete all attached references'}
+                  onclick={onRemoveAllReferences}
+                >
+                  <CioClose size={11} />
+                </button>
+              {/if}
+            </div>
+          </ComposerRelocationMenu>
+          {#if selectionPopoverOpen}
+            <div class="absolute bottom-full left-0 z-50 mb-1.5">
+              <SelectionListPopover
+                {references}
+                onEdit={(id) => {
+                  onCloseSelectionPopover()
+                  onEditReference?.(id)
+                }}
+                onRemove={(id) => onRemoveReference?.(id)}
+                onRemoveAll={onRemoveAllReferences}
+                {onRelocateItem}
+                onMenuOpenChange={onReferenceMenuOpenChange}
+              />
+            </div>
+          {/if}
+        </div>
+      {/if}
+      {#if attachments.length > 0 || pendingAttachments.length > 0}
         <!-- Keyed by the `file://` URL, which the duplicate guard above keeps
              unique across drops, picks, pastes, and restored drafts. -->
         {#each attachments as file, i (file.url)}
@@ -392,7 +395,7 @@
               : undefined}
           />
         {/each}
-      </div>
-    {/if}
+      {/if}
+    </div>
   </div>
 {/if}

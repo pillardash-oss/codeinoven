@@ -36,7 +36,7 @@
      leading segment is the icon or the picture, the trailing one is the remove
      control, and each reads the same wherever the file is listed. -->
 <div
-  class="flex items-stretch overflow-hidden border border-border bg-elevated text-[0.6875rem] text-muted transition-colors"
+  class="flex shrink-0 items-stretch overflow-hidden border border-border bg-elevated text-[0.6875rem] text-muted transition-colors"
   aria-busy={pending || undefined}
 >
   {#snippet label()}
