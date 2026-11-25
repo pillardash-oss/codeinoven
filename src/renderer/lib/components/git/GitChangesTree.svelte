@@ -8,6 +8,15 @@
   import Switch from '../ui/Switch.svelte'
   import { ContextMenu } from 'bits-ui'
   import type { GitDiff, GitFileChange, TurnCheckpointFileDiff } from '$shared/types'
+  import {
+    buildChangeTree,
+    compressDirChain,
+    dirExpansionKey,
+    filesForNode,
+    pathsForNode,
+    sortTreeDirs,
+    type GitChangeTreeNode
+  } from '$lib/git-changes-tree'
   import FileDiffView from '../files/DeferredFileDiffView.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -51,59 +60,16 @@
     onResolveConflict
   }: Props = $props()
 
-  interface TreeNode {
-    name: string
-    path: string
-    dirs: Map<string, TreeNode>
-    files: GitFileChange[]
-  }
-
+  /** Which folder rows are open. Keyed by section as well as path, so one
+   *  section's fold never moves another's (see `dirExpansionKey`). */
   let expandedDirs = $state<Record<string, boolean>>({})
 
-  function buildTree(sectionFiles: GitFileChange[]): TreeNode {
-    const root: TreeNode = { name: '', path: '', dirs: new Map(), files: [] }
-    for (const change of sectionFiles) {
-      const segments = change.path.split('/')
-      let node = root
-      for (let i = 0; i < segments.length - 1; i++) {
-        const seg = segments[i] ?? ''
-        let child = node.dirs.get(seg)
-        if (!child) {
-          child = {
-            name: seg,
-            path: segments.slice(0, i + 1).join('/'),
-            dirs: new Map(),
-            files: []
-          }
-          node.dirs.set(seg, child)
-        }
-        node = child
-      }
-      node.files.push(change)
-    }
-    return root
+  function toggleDir(key: string): void {
+    expandedDirs = { ...expandedDirs, [key]: !(expandedDirs[key] ?? false) }
   }
 
-  function sortDirs(dirs: Map<string, TreeNode>): TreeNode[] {
-    return [...dirs.values()].sort((a, b) => a.name.localeCompare(b.name))
-  }
-
-  function filesFor(node: TreeNode): GitFileChange[] {
-    const files = [...node.files]
-    for (const child of node.dirs.values()) files.push(...filesFor(child))
-    return files
-  }
-
-  function allPathsFor(node: TreeNode): string[] {
-    return filesFor(node).map((change) => change.path)
-  }
-
-  function toggleDir(path: string): void {
-    expandedDirs = { ...expandedDirs, [path]: !(expandedDirs[path] ?? false) }
-  }
-
-  function onToggleSelectDir(node: TreeNode, additive: boolean): void {
-    const paths = allPathsFor(node)
+  function onToggleSelectDir(node: GitChangeTreeNode, additive: boolean): void {
+    const paths = pathsForNode(node)
     const allSelected = paths.length > 0 && paths.every((path) => selectedPaths[path])
     const remove = additive && allSelected
     const next = { ...selectedPaths }
@@ -172,7 +138,7 @@
   }
 </script>
 
-{#snippet dirActions(node: TreeNode)}
+{#snippet dirActions(node: GitChangeTreeNode)}
   <ContextMenu.Item
     class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
     onSelect={() => onOpenDirectory(node.path)}
@@ -183,14 +149,14 @@
   <ContextMenu.Separator class="my-1 h-px bg-border" />
   <ContextMenu.Item
     class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-    onSelect={() => onStagePaths(allPathsFor(node), false)}
+    onSelect={() => onStagePaths(pathsForNode(node), false)}
   >
     <CioCheck size={12} class="text-success" />
     Stage all
   </ContextMenu.Item>
   <ContextMenu.Item
     class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-    onSelect={() => onStagePaths(allPathsFor(node), true)}
+    onSelect={() => onStagePaths(pathsForNode(node), true)}
   >
     <span class="inline-block w-3 text-center text-[0.625rem] text-danger">−</span>
     Unstage all
@@ -198,7 +164,7 @@
   <ContextMenu.Separator class="my-1 h-px bg-border" />
   <ContextMenu.Item
     class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-    onSelect={() => onStashPaths(allPathsFor(node))}
+    onSelect={() => onStashPaths(pathsForNode(node))}
   >
     <span class="inline-block w-3 text-center text-[0.625rem]">↓</span>
     Stash directory…
@@ -212,7 +178,7 @@
   </ContextMenu.Item>
   <ContextMenu.Item
     class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated"
-    onSelect={() => onDiscardPaths(allPathsFor(node))}
+    onSelect={() => onDiscardPaths(pathsForNode(node))}
   >
     <span class="inline-block w-3 text-center text-[0.625rem]">⌫</span>
     Discard changes
@@ -401,17 +367,18 @@
   {/if}
 {/snippet}
 
-{#snippet dirRow(node: TreeNode, depth: number)}
-  {@const isOpen = expandedDirs[node.path] ?? false}
+{#snippet dirRow(node: GitChangeTreeNode, depth: number, label: string, sectionKey: string)}
+  {@const stateKey = dirExpansionKey(sectionKey, node.path)}
+  {@const isOpen = expandedDirs[stateKey] ?? false}
   {@const indent = 3 + depth * 2}
-  {@const dirFiles = filesFor(node)}
+  {@const dirFiles = filesForNode(node)}
   {@const dirSelected =
     dirFiles.every((change) => selectedPaths[change.path]) && dirFiles.length > 0}
   <ContextMenu.Root>
     <ContextMenu.Trigger
       class="block w-full"
-      aria-label={`Actions for ${node.path}/`}
-      title={`Actions for ${node.path}/`}
+      aria-label={`Actions for ${label}/`}
+      title={`Actions for ${label}/`}
     >
       <button
         type="button"
@@ -427,7 +394,7 @@
             onToggleSelectDir(node, true)
             return
           }
-          toggleDir(node.path)
+          toggleDir(stateKey)
         }}
       >
         <span
@@ -442,8 +409,8 @@
           <Switch
             checked={dirSelected}
             onchange={() => onToggleSelectDir(node, true)}
-            title={dirSelected ? `Deselect ${node.path}/` : `Select ${node.path}/`}
-            aria-label={dirSelected ? `Deselect ${node.path}/` : `Select ${node.path}/`}
+            title={dirSelected ? `Deselect ${label}/` : `Select ${label}/`}
+            aria-label={dirSelected ? `Deselect ${label}/` : `Select ${label}/`}
             activeClass="border-primary bg-primary"
           />
         </span>
@@ -454,11 +421,19 @@
           <CioForward size={12} class="shrink-0 text-dimmed" />
           <CioFolder size={13} class="shrink-0 text-warning" />
         {/if}
+        <!--
+          The chain a folded row names (`apps/application/src/lib`) is one path,
+          so it is written as one: the separators are dimmed only, never removed,
+          because `/` is what makes it a path rather than one folder with slashes
+          in its name.
+        -->
         <span class="min-w-0 flex-1 truncate text-[0.625rem] font-medium text-foreground">
-          {node.name}
+          {#each label.split('/') as segment, segmentIndex (segmentIndex)}
+            {#if segmentIndex > 0}<span class="text-dimmed">/</span>{/if}{segment}
+          {/each}
         </span>
         <span class="shrink-0 text-[0.5625rem] tabular-nums text-dimmed">
-          {filesFor(node).length}
+          {filesForNode(node).length}
         </span>
       </button>
     </ContextMenu.Trigger>
@@ -479,14 +454,15 @@
     {#each node.files as change (change.path)}
       {@render fileRow(change)}
     {/each}
-    {#each sortDirs(node.dirs) as subdir (subdir.path)}
-      {@render dirRow(subdir, depth + 1)}
+    {#each sortTreeDirs(node.dirs) as subdir (subdir.path)}
+      {@const branch = compressDirChain(subdir)}
+      {@render dirRow(branch.node, depth + 1, branch.label, sectionKey)}
     {/each}
   {/if}
 {/snippet}
 
 {#each sections as section (section.title)}
-  {@const tree = buildTree(section.files)}
+  {@const tree = buildChangeTree(section.files)}
   {@const isConflicts = section.title === 'Conflicts'}
   {@const sectionAllSelected =
     section.files.length > 0 && section.files.every((f) => selectedPaths[f.path])}
@@ -523,8 +499,9 @@
 
     {#if tree.dirs.size > 0 || tree.files.length > 0}
       <div class="py-1">
-        {#each sortDirs(tree.dirs) as dir (dir.path)}
-          {@render dirRow(dir, 0)}
+        {#each sortTreeDirs(tree.dirs) as dir (dir.path)}
+          {@const branch = compressDirChain(dir)}
+          {@render dirRow(branch.node, 0, branch.label, section.title)}
         {/each}
         {#each tree.files as change (change.path)}
           {@render fileRow(change)}
