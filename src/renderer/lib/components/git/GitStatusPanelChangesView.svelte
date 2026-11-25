@@ -1,5 +1,7 @@
 <script lang="ts">
   import { formatChangeSummary } from '$shared/change-breakdown'
+  import { waterFillHeights } from '$lib/git-changes-layout'
+  import type { Attachment } from 'svelte/attachments'
   import { RunChangesState } from '../threads/run-changes-state.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
@@ -134,8 +136,68 @@
     return list
   })
 
+  /** The column's usable height, measured, because the cards are sized from it. */
+  let columnHeight = $state(0)
+
   /**
-   * The most height one card may take: an equal share of the column.
+   * How tall each card would be with nothing limiting it, measured from its own
+   * content.
+   *
+   * `scrollHeight` is the height the card's content asks for whether or not the
+   * card is currently clipped, so a measurement taken while a section is
+   * scrolled never reports the visible height instead of the real one. Expanding
+   * a folder or a diff changes it, which is why the observer keeps watching
+   * instead of measuring once.
+   */
+  let naturalHeights = $state<Record<string, number>>({})
+
+  const measureColumn: Attachment<HTMLElement> = (element) => {
+    const measure = (): void => {
+      columnHeight = element.clientHeight
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    measure()
+    return () => observer.disconnect()
+  }
+
+  // One stable attachment for every card: the title comes from the element, so
+  // the attachment is not re-created (and its observer not rebuilt) on every
+  // render the way a factory returning a fresh function would be.
+  const measureCard: Attachment<HTMLElement> = (element) => {
+    const title = element.dataset.cardTitle
+    if (!title) return
+    const measure = (): void => {
+      const natural = element.scrollHeight
+      if (naturalHeights[title] === natural) return
+      naturalHeights = { ...naturalHeights, [title]: natural }
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    measure()
+    return () => observer.disconnect()
+  }
+
+  /**
+   * The height each card takes, from the water fill: a short section hugs its
+   * content and hands the rest of the column to the sections that still want
+   * more, and only a column that is full everywhere leaves a section scrolling
+   * inside its own share.
+   *
+   * Null until the first measurement lands, so the first paint uses the equal
+   * share below and never flashes a collapsed column.
+   */
+  const cardHeights = $derived.by(() => {
+    if (columnHeight === 0) return null
+    const measured = cards.map((card) => naturalHeights[card.title])
+    if (measured.some((height) => height === undefined)) return null
+    // `p-1` above and below, and the 4px gap between cards.
+    const available = columnHeight - 8 - (cards.length - 1) * 4
+    return waterFillHeights(available, measured)
+  })
+
+  /**
+   * The fallback maximum one card may take: an equal share of the column.
    *
    * A maximum, not a height. A card with three files uses three rows and leaves
    * the rest at the bottom of the panel, which is why a short section never
@@ -338,9 +400,17 @@
         bottom; a card that holds more scrolls inside itself, so a long Unstaged
         section never hides Staged or Untracked above it.
       -->
-      <div class="flex min-h-0 flex-col gap-1 p-1">
-        {#each cards as card (card.title)}
-          <div class="flex min-h-0 flex-col" style={cardShare}>
+      <div class="flex min-h-0 flex-col gap-1 p-1" {@attach measureColumn}>
+        {#each cards as card, cardIndex (card.title)}
+          {@const measuredHeight = cardHeights?.[cardIndex]}
+          <div
+            class="flex min-h-0 flex-col"
+            style={measuredHeight === undefined
+              ? cardShare
+              : `height: ${measuredHeight}px; flex: 0 0 auto`}
+            data-card-title={card.title}
+            {@attach measureCard}
+          >
             {#if changesView === 'tree'}
               <GitChangesTree
                 sections={[card]}
@@ -366,7 +436,7 @@
                 card.files.length > 0 && card.files.every((file) => selectedPaths[file.path])}
               <div
                 class={[
-                  'flex min-h-0 flex-col overflow-hidden border bg-surface',
+                  'flex min-h-0 flex-1 flex-col overflow-hidden border bg-surface',
                   card.conflicts ? 'border-warning/25' : 'border-border'
                 ]}
               >

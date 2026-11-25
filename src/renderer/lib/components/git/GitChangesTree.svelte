@@ -548,7 +548,7 @@
   {@const isConflicts = section.title === 'Conflicts'}
   {@const sectionAllSelected =
     section.files.length > 0 && section.files.every((f) => selectedPaths[f.path])}
-  <div class="flex min-h-0 flex-col overflow-hidden border border-border bg-surface">
+  <div class="flex min-h-0 flex-1 flex-col overflow-hidden border border-border bg-surface">
     <!-- The header keeps the row's own gutter so the section toggle sits on the
          same column as every switch below it, and the count ends the line. -->
     <div class="flex items-center gap-1.5 bg-elevated/50 py-1 pl-1 pr-2">
