@@ -533,6 +533,16 @@ export function unmanagedBrowserShellReason(
     /(?:^|[\s;&|])(?:rg|grep|ag|ack|git|ls|cat|find|head|tail|wc|stat|file|readlink|realpath)\b/u
   if (browserPath.test(command) && !readOnlyPrograms.test(command)) return refused
 
+  /**
+   * The characters a shell needs a backslash in front of.
+   *
+   * A backslash is only an escape before one of these. Reading it as an escape
+   * everywhere ate the separators of a Windows path, so `node C:\work\boot.mjs`
+   * reached the script check below as `C:workboot.mjs`, found no file, and the
+   * launch the check exists to catch went through.
+   */
+  const escapedByBackslash = /^["'`\s;&|()<>]$/u
+
   /** Split a command into words, remembering whether a word was quoted. */
   const tokenize = (text: string): { words: string[]; quoted: boolean[] }[] => {
     const commands: { words: string[]; quoted: boolean[] }[] = []
@@ -557,14 +567,20 @@ export function unmanagedBrowserShellReason(
       quoted = []
     }
     let escaped = false
-    for (const character of text) {
+    const characters = [...text]
+    for (let index = 0; index < characters.length; index++) {
+      const character = characters[index] ?? ''
       if (escaped) {
         word += character
         open = true
         escaped = false
         continue
       }
-      if (character === '\\' && quote !== "'") {
+      if (
+        character === '\\' &&
+        quote !== "'" &&
+        escapedByBackslash.test(characters[index + 1] ?? '')
+      ) {
         escaped = true
         continue
       }

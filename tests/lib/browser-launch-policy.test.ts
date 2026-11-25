@@ -128,6 +128,33 @@ describe('a script an executor was handed', () => {
     }
   })
 
+  it.skipIf(process.platform === 'win32')(
+    'keeps a Windows path whole when it reads the script',
+    async () => {
+      // Windows separates a path with a backslash, so there it is not an escape.
+      // Reading it as one turned `node C:\work\boot.mjs` into `C:workboot.mjs`,
+      // which found no file, so the launch this check exists to catch went
+      // through. A host where a backslash is a legal filename character can hold
+      // that same argument, and the guard has to see the file it names.
+      const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'cio-browser-script-'))
+      try {
+        await writeFile(
+          join(root, 'boot\\win.mjs'),
+          "import { chromium } from 'playwright'\nchromium.launch()\n",
+          'utf8'
+        )
+        expect(
+          unmanagedBrowserShellReason('bash', { command: 'node boot\\win.mjs' }, { cwd: root })
+        ).not.toBeNull()
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    }
+  )
+
   it('is allowed when the script is ordinary work', async () => {
     const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
     const { tmpdir } = await import('node:os')
