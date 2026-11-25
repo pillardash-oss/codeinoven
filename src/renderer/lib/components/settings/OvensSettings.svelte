@@ -9,6 +9,7 @@
   import CioCpu from '@pdslng/cio-icon/CioCpu.svelte'
   import CioDisk from '@pdslng/cio-icon/CioDisk.svelte'
   import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
+  import CioGrip from '@pdslng/cio-icon/CioGrip.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
@@ -367,18 +368,15 @@
     dropTarget = null
   }
 
-  /** Persist the order the drag produced and republish it to every surface. */
-  async function dropOven(event: DragEvent): Promise<void> {
-    event.preventDefault()
-    const dragged = dragOvenId
-    const target = dropTarget
-    endOvenDrag()
-    if (!dragged || !target || !ovenState || busy) return
-    const before = ovenState.ovens.filter((oven) => oven.kind === 'ssh').map((oven) => oven.id)
-    const next = before.filter((id) => id !== dragged)
-    const at = next.indexOf(target.id)
-    if (at < 0) return
-    next.splice(target.position === 'before' ? at : at + 1, 0, dragged)
+  /** The remote Ovens in the order the list shows them, local excluded. */
+  function remoteOvenIds(): string[] {
+    return ovenState?.ovens.filter((oven) => oven.kind === 'ssh').map((oven) => oven.id) ?? []
+  }
+
+  /** Persist a new remote-Oven order and republish it to every surface. */
+  async function persistOvenOrder(next: string[]): Promise<void> {
+    const before = remoteOvenIds()
+    if (!ovenState || busy) return
     if (next.every((id, index) => id === before[index])) return
     busy = 'reorder'
     try {
@@ -389,6 +387,40 @@
     } finally {
       busy = ''
     }
+  }
+
+  /** Persist the order the drag produced. */
+  async function dropOven(event: DragEvent): Promise<void> {
+    event.preventDefault()
+    const dragged = dragOvenId
+    const target = dropTarget
+    endOvenDrag()
+    if (!dragged || !target) return
+    const next = remoteOvenIds().filter((id) => id !== dragged)
+    const at = next.indexOf(target.id)
+    if (at < 0) return
+    next.splice(target.position === 'before' ? at : at + 1, 0, dragged)
+    await persistOvenOrder(next)
+  }
+
+  /**
+   * Move an Oven one place with the arrow keys.
+   *
+   * The grip is the only drag handle a row has, so without this the order would
+   * be reachable by pointer alone and a keyboard reader could never change it.
+   */
+  function moveOvenWithKeyboard(event: KeyboardEvent, oven: Oven): void {
+    const step = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0
+    if (step === 0) return
+    const order = remoteOvenIds()
+    const from = order.indexOf(oven.id)
+    const to = from + step
+    if (from < 0 || to < 0 || to >= order.length) return
+    event.preventDefault()
+    const next = [...order]
+    next.splice(from, 1)
+    next.splice(to, 0, oven.id)
+    void persistOvenOrder(next)
   }
 
   /**
@@ -1101,11 +1133,8 @@
           class="relative"
           id={`oven-row-${oven.id}`}
           role="listitem"
-          draggable={canDragOven(oven)}
-          ondragstart={(event) => startOvenDrag(event, oven)}
           ondragover={(event) => hoverOven(event, oven)}
           ondrop={(event) => void dropOven(event)}
-          ondragend={endOvenDrag}
         >
           {#if dropTarget?.id === oven.id}
             <span
@@ -1117,6 +1146,24 @@
           <SettingsEntry expanded={!folded[oven.id]}>
             <div class="grid grid-cols-1 items-center gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
               <div class="flex min-w-0 items-center gap-3">
+                <!-- The row is a drop target, never a drag source: a draggable
+                     row turns every press inside it into a drag, so nothing in
+                     the entry can be selected or copied. Only this grip moves
+                     an Oven, and the arrow keys move it without a pointer. -->
+                {#if canDragOven(oven)}
+                  <button
+                    type="button"
+                    class="flex h-6 w-4 shrink-0 cursor-grab items-center justify-center text-dimmed hover:text-foreground focus-visible:text-foreground"
+                    draggable="true"
+                    title={`Reorder ${oven.name}: drag the grip, or press the up and down arrows`}
+                    aria-label={`Reorder ${oven.name}`}
+                    ondragstart={(event) => startOvenDrag(event, oven)}
+                    ondragend={endOvenDrag}
+                    onkeydown={(event) => moveOvenWithKeyboard(event, oven)}
+                  >
+                    <CioGrip size={12} aria-hidden="true" />
+                  </button>
+                {/if}
                 {#if oven.id === LOCAL_OVEN_ID}
                   <CioDisplay size={20} class="shrink-0 text-muted" />
                 {:else}
