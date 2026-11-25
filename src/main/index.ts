@@ -1259,7 +1259,13 @@ void app
     // must be known before `database.init()` can abort the startup chain. The
     // logger owns the per-day folder under it and creates it on first write.
     mkdirSync(storage.resolve(LOGS_DIRECTORY), { recursive: true })
-    Logger.initialize(storage.resolve(LOGS_DIRECTORY))
+    Logger.initialize(storage.resolve(LOGS_DIRECTORY), {
+      appVersion: __CODEINOVEN_APP_VERSION__,
+      platform: process.platform,
+      platformVersion: process.getSystemVersion(),
+      architecture: process.arch,
+      electronVersion: process.versions.electron
+    })
     logConfiguredDataRoot()
     if (!startHidden && splashOutcome !== 'ready' && splashOutcome !== 'deadline') {
       Logger.error('Splash did not reach visual readiness before startup continued', {

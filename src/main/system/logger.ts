@@ -1,12 +1,32 @@
 import { appendFile, mkdir } from 'fs/promises'
+import { arch as osArchitecture, platform as osPlatform, release as osRelease } from 'os'
 import { join } from 'path'
+import { APP_NAME } from '../../lib/brand'
 import { DEBUG_LOG_FILE, ERROR_LOG_FILE, MAIN_LOG_FILE, logDayName } from './log-paths'
 
 type LogLevel = 'dev' | 'info' | 'error'
 
+/** The build and host facts stamped onto every durable log record. */
+export interface LogEnvironment {
+  /** Running app version, prerelease suffix intact (`0.5.70-nightly.15`). */
+  appVersion: string
+  platform: string
+  /** User-facing OS version, e.g. `15.5.0` on macOS, not the Darwin kernel. */
+  platformVersion: string
+  architecture: string
+  electronVersion?: string
+}
+
 interface LogRecord {
+  /** ISO-8601 instant, in UTC. */
   timestamp: string
+  /** The same instant as epoch milliseconds, for correlation outside log tooling. */
+  unix: number
   level: LogLevel
+  /** App version that produced the line, nightly suffix included. */
+  appVersion: string
+  /** OS name, version and architecture, e.g. `darwin 15.5.0 (arm64)`. */
+  os: string
   message: string
 }
 
@@ -46,6 +66,9 @@ export class Logger {
   }
 
   private static logsDirectory: string | null = null
+  private static environment: LogEnvironment = Logger.resolveEnvironment()
+  /** Day folder whose session banner was already written for this process. */
+  private static bannerDay: string | null = null
   private static activeDay: string | null = null
   private static daySinks: LogDaySinks | null = null
   private static createdDirectories = new Set<string>()
@@ -56,11 +79,66 @@ export class Logger {
   private static pendingBytes = 0
   private static dropped = 0
 
-  /** Point the logger at the app's absolute `logs/` directory. */
-  static initialize(logsDirectory: string): void {
+  /**
+   * Point the logger at the app's absolute `logs/` directory and record the
+   * build it runs from. Anything omitted falls back to this process's own OS
+   * facts, so a caller that has no app version yet (a test, a tool) still
+   * writes a valid record instead of failing.
+   */
+  static initialize(logsDirectory: string, environment: Partial<LogEnvironment> = {}): void {
     Logger.logsDirectory = logsDirectory
+    Logger.environment = Logger.resolveEnvironment(environment)
+    Logger.bannerDay = null
     Logger.activeDay = null
     Logger.daySinks = null
+  }
+
+  private static resolveEnvironment(environment: Partial<LogEnvironment> = {}): LogEnvironment {
+    return {
+      appVersion: environment.appVersion ?? 'unknown',
+      platform: environment.platform ?? osPlatform(),
+      platformVersion: environment.platformVersion ?? osRelease(),
+      architecture: environment.architecture ?? osArchitecture(),
+      ...(environment.electronVersion ? { electronVersion: environment.electronVersion } : {})
+    }
+  }
+
+  /** `darwin 15.5.0 (arm64)` - the OS half of every record. */
+  private static osLabel(): string {
+    const environment = Logger.environment
+    return `${environment.platform} ${environment.platformVersion} (${environment.architecture})`
+  }
+
+  /** One line naming the build and host a day folder's lines came from. */
+  private static environmentSummary(): string {
+    const environment = Logger.environment
+    const electron = environment.electronVersion ? ` electron=${environment.electronVersion}` : ''
+    return `session start ${APP_NAME} v${environment.appVersion} os=${Logger.osLabel()}${electron} pid=${process.pid}`
+  }
+
+  private static humanLine(record: LogRecord): string {
+    return `[${record.timestamp}] [unix=${record.unix}] [v${record.appVersion}] [${record.level}] ${record.message}\n`
+  }
+
+  /**
+   * Announce the build once per day folder, before its first line. A day folder
+   * can be written by several launches (and by a nightly next to a stable
+   * build), so every folder opens with the version and OS its lines came from.
+   */
+  private static writeEnvironmentBanner(sinks: LogDaySinks): void {
+    if (Logger.bannerDay === sinks.directory) return
+    Logger.bannerDay = sinks.directory
+    const now = new Date()
+    const record: LogRecord = {
+      timestamp: now.toISOString(),
+      unix: now.getTime(),
+      level: 'info',
+      appVersion: Logger.environment.appVersion,
+      os: Logger.osLabel(),
+      message: Logger.environmentSummary()
+    }
+    Logger.enqueue(sinks, sinks.jsonl, `${JSON.stringify(record)}\n`)
+    Logger.enqueue(sinks, sinks.debug, Logger.humanLine(record))
   }
 
   /** The sinks of the current day, re-resolved when the day changes. */
@@ -195,11 +273,16 @@ export class Logger {
 
     const sinks = Logger.resolveDaySinks()
     if (!sinks) return
+    const now = new Date()
     const record: LogRecord = {
-      timestamp: new Date().toISOString(),
+      timestamp: now.toISOString(),
+      unix: now.getTime(),
       level,
+      appVersion: Logger.environment.appVersion,
+      os: Logger.osLabel(),
       message: formatted.slice(level.length + 3)
     }
+    Logger.writeEnvironmentBanner(sinks)
     Logger.enqueue(sinks, sinks.jsonl, `${JSON.stringify(record)}\n`)
     // `main.jsonl` is the complete record; the human mirror is what an operator
     // reads to answer "what happened", and a dev diagnostic is not that. It was
@@ -207,7 +290,7 @@ export class Logger {
     // dropping it there halves the file without losing a single byte of evidence:
     // the line is still in the JSONL stream, right where a developer greps it.
     if (level !== 'dev') {
-      const humanLine = `[${record.timestamp}] [${record.level}] ${record.message}\n`
+      const humanLine = Logger.humanLine(record)
       Logger.enqueue(sinks, sinks.debug, humanLine)
       if (level === 'error') Logger.enqueue(sinks, sinks.error, humanLine)
     }
