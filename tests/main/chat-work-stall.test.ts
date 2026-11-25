@@ -16,7 +16,8 @@ interface StallHost {
   state: {
     workStallTimers: Map<string, ReturnType<typeof setTimeout>>
     workStallNudgedTurns: Map<string, string>
-    childSessionOwners: Map<string, { parentSessionId: string }>
+    childSessionOwners: Map<string, { parentSessionId?: string }>
+    childSessionActivityStatuses: Map<string, string>
   }
   sessionRegistry: Map<string, { activeTurnId?: string; ephemeral?: boolean }>
   sessionStatuses: Map<string, { state: string }>
@@ -41,7 +42,8 @@ function makeHost(minutes = 10): HostFixture {
     state: {
       workStallTimers: new Map(),
       workStallNudgedTurns: new Map(),
-      childSessionOwners: new Map()
+      childSessionOwners: new Map(),
+      childSessionActivityStatuses: new Map()
     },
     sessionRegistry: new Map([[SESSION, { activeTurnId: 'turn-1' }]]),
     sessionStatuses: new Map([[SESSION, { state: 'working' }]]),
@@ -49,6 +51,7 @@ function makeHost(minutes = 10): HostFixture {
       getConfig: async () => ({ steerToStartWorkMinutes: minutes }) as AppConfig
     },
     units: {
+      misc: { hasInFlightWork: () => false },
       'temporary-chats': { temporaryChatForSession: () => undefined },
       'turns-dispatch': { driverForRuntime: () => ({ hasActiveTurn: () => true }) }
     },
@@ -166,6 +169,69 @@ describe('ChatEngineWorkStall', () => {
     unit.noteTurnStarted(SESSION)
     await vi.advanceTimersByTimeAsync(10 * 60_000)
     expect(sendPrompt).not.toHaveBeenCalled()
+  })
+
+  it('never steers a turn that is waiting on a running sub-agent', async () => {
+    const { host, unit, sendPrompt } = makeHost(10)
+    // A child session is registered from the harness-neutral `subagent` activity
+    // the app folds every driver's child work into.
+    host.state.childSessionOwners.set('child-1', { parentSessionId: SESSION })
+    host.state.childSessionActivityStatuses.set('child-1', 'running')
+    unit.noteTurnStarted(SESSION)
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    expect(sendPrompt).not.toHaveBeenCalled()
+    // The child keeps working, so the parent keeps waiting instead of stalling.
+    await vi.advanceTimersByTimeAsync(5 * 60_000)
+    expect(sendPrompt).not.toHaveBeenCalled()
+    expect(host.state.workStallNudgedTurns.size).toBe(0)
+
+    // Once the child settles with no file change behind it, the parent that
+    // produced nothing is nudged on the next check.
+    host.state.childSessionActivityStatuses.set('child-1', 'completed')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sendPrompt).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats any unsettled child activity as work, including a registered child', async () => {
+    const { host, unit, sendPrompt } = makeHost(10)
+    host.state.childSessionOwners.set('child-1', { parentSessionId: SESSION })
+    host.state.childSessionActivityStatuses.set('child-1', 'pending')
+    unit.noteTurnStarted(SESSION)
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    expect(sendPrompt).not.toHaveBeenCalled()
+
+    // A child session the engine sees as `working` counts even without activity.
+    host.state.childSessionActivityStatuses.delete('child-1')
+    host.sessionStatuses.set('child-1', { state: 'working' })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sendPrompt).not.toHaveBeenCalled()
+
+    host.sessionStatuses.set('child-1', { state: 'idle' })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sendPrompt).toHaveBeenCalledTimes(1)
+  })
+
+  it('defers while the turn has an in-flight shell tool', async () => {
+    const { host, unit, sendPrompt } = makeHost(10)
+    let inFlight = true
+    host.units['misc'] = { hasInFlightWork: () => inFlight }
+    unit.noteTurnStarted(SESSION)
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    expect(sendPrompt).not.toHaveBeenCalled()
+
+    inFlight = false
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sendPrompt).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores child sessions that belong to another turn', async () => {
+    const { host, unit, sendPrompt } = makeHost(10)
+    host.state.childSessionOwners.set('child-1', { parentSessionId: 'another-session' })
+    host.state.childSessionActivityStatuses.set('child-1', 'running')
+    unit.noteTurnStarted(SESSION)
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    expect(sendPrompt).toHaveBeenCalledTimes(1)
   })
 
   it('never arms for a child session or a temporary chat', async () => {

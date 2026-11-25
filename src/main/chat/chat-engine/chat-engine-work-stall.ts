@@ -1,10 +1,25 @@
 import { Logger } from '../../system/logger'
+import type { SessionInfo } from './chat-engine-types'
 import type { ChatEngine } from '../chat-engine'
+
+/** Sub-agent lifecycle states that mean the worker is over, whatever its outcome. */
+const SETTLED_SUBAGENT_STATUSES: ReadonlySet<string> = new Set(['completed', 'error', 'aborted'])
 
 /** How many minutes the nudge names, in the agent's own language. */
 function minutesLabel(minutes: number): string {
   return `${minutes} minute${minutes === 1 ? '' : 's'}`
 }
+
+/**
+ * How long to wait before re-checking a turn whose clock fired while real work
+ * was in flight (an open shell tool, a running sub-agent).
+ *
+ * A turn waiting on a sub-agent is not stalling: the child is doing the work, so
+ * steering the parent would be a false positive and would talk over the child's
+ * report. The clock is only inspected again shortly after the work settles, at
+ * which point a parent that still changed nothing gets its one steer.
+ */
+const IN_FLIGHT_RECHECK_MS = 60_000
 
 /**
  * The invisible steer an agent receives after a window with no file changed.
@@ -75,6 +90,35 @@ export class ChatEngineWorkStall {
     this.host.state.workStallTimers.delete(sessionId)
   }
 
+  /** Re-check shortly after the work the turn is waiting on has settled. */
+  private deferForInFlightWork(sessionId: string): void {
+    this.clearTimer(sessionId)
+    this.host.state.workStallTimers.set(
+      sessionId,
+      setTimeout(() => void this.fire(sessionId), IN_FLIGHT_RECHECK_MS)
+    )
+  }
+
+  /**
+   * Whether this turn is waiting on work it started rather than stalling.
+   *
+   * Both signals are app-owned and harness-neutral: the session's own open
+   * shell-like tools, and the child sessions the engine registers from the
+   * normalized `subagent` activity every driver reports. A child counts as
+   * running until its reported lifecycle status settles, so a parent parked on a
+   * long sub-agent is never steered.
+   */
+  private hasInFlightWork(sessionId: string, info: SessionInfo): boolean {
+    if (this.host.units['misc'].hasInFlightWork(sessionId, info)) return true
+    for (const [childSessionId, owner] of this.host.state.childSessionOwners) {
+      if (owner.parentSessionId !== sessionId) continue
+      if (this.host.sessionStatuses.get(childSessionId)?.state === 'working') return true
+      const status = this.host.state.childSessionActivityStatuses.get(childSessionId)
+      if (status !== undefined && !SETTLED_SUBAGENT_STATUSES.has(status)) return true
+    }
+    return false
+  }
+
   private async arm(sessionId: string): Promise<void> {
     const info = this.host.sessionRegistry.get(sessionId)
     if (!info || info.ephemeral) return
@@ -119,6 +163,15 @@ export class ChatEngineWorkStall {
     // a brand-new turn instead of steering the one that stalled, so hold off.
     if (driver?.hasActiveTurn && !driver.hasActiveTurn(sessionId)) {
       this.host.state.workStallNudgedTurns.delete(sessionId)
+      return
+    }
+    // A turn waiting on real work is not stalling, however quiet its own tools
+    // look: an open shell command or a running sub-agent is the work. The child
+    // sessions come from the harness-neutral `subagent` part the app folds every
+    // driver's child activity into, so this holds for every harness that reports
+    // children at all. Defer and look again when that work is over.
+    if (this.hasInFlightWork(sessionId, info)) {
+      this.deferForInFlightWork(sessionId)
       return
     }
     const thread = await this.host.threadManager.getThread(info.projectId, info.threadId)
