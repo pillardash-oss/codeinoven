@@ -8,6 +8,8 @@ import {
   APP_VIDEO_UTILITY_ID
 } from '../../../lib/utility-ids'
 import { APP_BROWSER_UTILITY_ID, APP_SCOPE_UTILITY_ID } from '../utility-registry-service'
+import { CITE_ENTRY_LIMIT } from '../../../lib/cited-work'
+import { isUnrestrictedLevel } from '../../../lib/permission-level'
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
@@ -21,7 +23,8 @@ import {
   UTILITY_DOCS_TOOL_NAME,
   UTILITY_MANAGE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME,
-  UTILITY_SUGGEST_TOOL_NAME
+  UTILITY_SUGGEST_TOOL_NAME,
+  PROCESS_TOOL_NAMES
 } from '../../../lib/gateway-tools'
 import {
   isOrchestrationTool,
@@ -159,6 +162,12 @@ export class UtilityOrchestrationServiceTurnRuntime {
       // itself, instead of sending the user back to re-send the same message
       // with @cio-utility.
       if (name === UTILITY_DIAGNOSTICS_TOOL_NAME) return true
+      // Process lifecycle belongs to whoever started the process. A shell kill
+      // cannot prove it started its target, so it is refused in every form and
+      // the app owns the stop instead: an agent that started a dev server or a
+      // probe instance must be able to list it and end it on every turn, not
+      // only in Full Access or an @cio-hey session.
+      if (PROCESS_TOOL_NAMES.has(name)) return true
       // Asking for a secret is an app capability rather than a utility
       // operation, and it never needs a secret to be installed: it is offered on
       // every turn that carries the gateway at all, plus every explicit setup
@@ -180,7 +189,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
           // from, so it never needs the tag or the full-access tier.
           request.donTurn === true ||
           request.delegationReach === true ||
-          request.permissionLevel === 'full_access' ||
+          isUnrestrictedLevel(request.permissionLevel) ||
           (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
         )
       }
@@ -214,13 +223,13 @@ export class UtilityOrchestrationServiceTurnRuntime {
       // a route the turn never received.
       if (isAppControlTool(name)) {
         return (
-          request.permissionLevel === 'full_access' ||
+          isUnrestrictedLevel(request.permissionLevel) ||
           (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
         )
       }
       return (
         hasOnDemand ||
-        request.permissionLevel === 'full_access' ||
+        isUnrestrictedLevel(request.permissionLevel) ||
         request.artifactTools === true ||
         request.allowManagement === true ||
         (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
@@ -293,7 +302,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
     // them.
     const sessionToolsAskRequired =
       request.artifactTools === true &&
-      request.permissionLevel !== 'full_access' &&
+      !isUnrestrictedLevel(request.permissionLevel) &&
       (request.orchestrationSession === undefined || request.orchestrationSession === 'off')
     // One batching contract, worded for the tool surface this harness actually
     // has: naming code mode to a harness without a script runner is a rule the
@@ -306,8 +315,9 @@ export class UtilityOrchestrationServiceTurnRuntime {
       gatewayPerItemInstruction(codeMode),
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
       `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
+      'A project env file line written as `NAME=cio://<ref>` is a value the app already exports into your shell as `$NAME`: reference `$NAME` in the command that needs it, never resolve, print or ask for it again.',
       `When a needed capability is missing, check first whether your own tools already cover the work: text, code, SVG and HTML are yours to author, and a missing generator is not a missing capability when the request is vector or written work. That covers documents and assets only: an interface, a screen, a prototype or a set of design variations is not one of them and is never hand-written here, it is designed in the app's design session. Only what you genuinely cannot produce yourself earns an installation card: load ${UTILITY_SUGGEST_TOOL_NAME} through cio:gateway and offer it. Claim it is connected only after accepted. Keep credentials out of bundles and collect them with ${ASK_SECRET_TOOL_NAME}.`,
-      `Read-only app diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql). When the user reports a problem with the app, a thread, an assistant, or a log line, look the evidence up yourself with it instead of asking them to re-send the request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs, and it never writes, deletes, or reconfigures anything.`,
+      `Read-only app diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (lookup_thread, search_threads, list_groups, read_messages, read_log, list_schema, query_sql). When the user reports a problem with the app, a thread, an assistant, or a log line, look the evidence up yourself with it instead of asking them to re-send the request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs, and it never writes, deletes, or reconfigures anything.`,
       ...(gatewayTools.some(({ name }) => isPawnTool(name))
         ? [
             `A pawn agent (${PAWN_AGENT_TOOL_NAME}) is an independent worker thread that answers only to you: it is how you do real work without spending your own context. Spawn one for a long implementation, a broad refactor, independent verification, or research that would otherwise flood this conversation, and give it the complete task, the files it owns, and how to check its own work. It runs on the user's pawn default model when one is configured, otherwise on your model at the lowest thinking level, and it never commits: read its report, inspect the files it touched, and commit them yourself. You keep directing it: when the user corrects or redirects a pawn's work, call the tool again with that pawn's pawn_id and their instruction, and it reaches the work in progress instead of starting over. Do not spawn a second pawn to change direction. It is not extra sub-agent capacity: ${CIO_SPAWN_AGENT_TOOL_NAME} runs at most four workers at once, so a pawn is the way past that ceiling only when the work genuinely needs five or more worker runs in flight at the same time and waiting for a free slot would stall it, or when the user explicitly asks for pawns   and then it is one pawn carrying the overflow, never a fan-out of pawns you decided on yourself.`
@@ -340,7 +350,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_CITE_UTILITY_ID)
         ? [
-            `When this turn produces something the user will open again outside your answer (a report, a document, a folder of scripts, generated assets), activate ${APP_CITE_UTILITY_ID} and call cite_report with the workspace-relative paths before your final message. The app shows one card per cited entry under your answer, with its name, when it was last modified and one open action, so never print the paths or describe the cards yourself. A folder stands for itself; do not list its children as well.`
+            `This is a rule, not a judgment call: when this turn produced work the user will open again outside your answer (a report, a document, findings, an analysis, a folder of scripts, generated assets), activate ${APP_CITE_UTILITY_ID} and call cite_report once, with every path in the same paths array (up to ${CITE_ENTRY_LIMIT}), before your final message. Never call it once per report: a list of reports is one call, not one call each. Reciting that work inline in place of citing it, or naming where the file lives, is not an alternative: the app shows one card per cited entry under your answer, with its name, when it was last modified and one open action, so never print the paths or describe the cards yourself. A folder stands for itself; do not list its children as well. Citing is one local call the app answers itself, with no fee attached, so its cost is never a reason to skip it.`
           ]
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_ARTIFACT_UTILITY_ID)
@@ -350,7 +360,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_BROWSER_UTILITY_ID)
         ? [
-            `Use the in-app browser (${APP_BROWSER_UTILITY_ID}) to inspect every authored or changed renderable page at its served URL. Activate with ${UTILITY_ACTIVATE_TOOL_NAME}; inspect screenshot, viewport, snapshot and console in background. The page this conversation's thread browser is on is readable in whatever box the user put it: pass page "user" when they refer to the page they are looking at (it stays on the tab it resolved for you), page "strip" for whatever that browser shows right now, and page "agent" for a page you opened. Drive a multi-step browser flow (open, navigate, click, type, snapshot, screenshot) through code mode in one model request instead of one invocation per step: every separate browser call is its own model step, and its result stays in context for the rest of the turn. Never substitute your own browser, headless Chromium, Playwright, Puppeteer or curl.`,
+            `Use the in-app browser (${APP_BROWSER_UTILITY_ID}) wherever a step needs a page, starting the moment it does: reproducing a reported bug, checking a layout, reading a console error, walking a flow before you change it, and inspecting an authored or changed renderable page at its served URL before you report completion. Activate with ${UTILITY_ACTIVATE_TOOL_NAME}; inspect screenshot, viewport, snapshot and console in background. Never reach a page through a browser of your own: no chrome, chrome-headless-shell, Playwright, Puppeteer or WebKit binary, no CDP script, no --headless flag, no remote debugging port, and no dev server started only to feed one. The page this conversation's thread browser is on is readable in whatever box the user put it: pass page "user" when they refer to the page they are looking at (it stays on the tab it resolved for you), page "strip" for whatever that browser shows right now, and page "agent" for a page you opened. Drive a multi-step browser flow (open, navigate, click, type, snapshot, screenshot) through code mode in one model request instead of one invocation per step: every separate browser call is its own model step, and its result stays in context for the rest of the turn. Never substitute your own browser, headless Chromium, Playwright, Puppeteer or curl.`,
             `A live conversation you open or join in a browser page is yours to carry to an outcome: a business's support or billing chat, a sales or hosting desk, a queue with a bot, or another agent in a chat window. You speak for the user there, so send the message, then poll for the answer with ${UTILITY_INVOKE_TOOL_NAME} on ${APP_BROWSER_UTILITY_ID} (wait with changed, then snapshot) in bounded cycles for as long as it takes, answer every follow-up yourself from what the user already told you, and keep pressing for the fix rather than for activity. A slow human, a queued ticket or a minute of silence is normal and never a reason to end the turn, and asking the user to watch the tab and ping you when a reply arrives hands your work back to them. End that turn only with the outcome, or with the one thing only the user can supply, which you ask for and then use.`
           ]
         : []),
@@ -417,13 +427,31 @@ export class UtilityOrchestrationServiceTurnRuntime {
       cleanupPromise ??= this.cleanupTurn(id)
       await cleanupPromise
     }
+    // A turn that runs its harness somewhere else reaches the gateway through
+    // that machine's own listener, because this app's loopback means nothing
+    // there. The endpoint is decided here, where the turn's token and grants
+    // exist, and the machine's side registers exactly those grants.
+    const sharedEndpoint = await this.host.units['orchestration'].timed(
+      request,
+      'gatewayEndpoint',
+      request.resolveGatewayEndpoint
+        ? request.resolveGatewayEndpoint({
+            turnId: state.id,
+            token,
+            grants: gatewayTools.map(({ name }) => name),
+            appBaseUrl: bridgeUrl,
+            utilities: await this.host.units['oven-utilities'].snapshot(state)
+          })
+        : Promise.resolve(null)
+    )
+    if (sharedEndpoint?.close) state.closeGatewayEndpoint = sharedEndpoint.close
     return {
       id,
       resolvedUtilities: [...always, gateway],
       instructions: toolInstructions,
       directInstructions: toolInstructions,
       directEndpoint: {
-        url: bridgeUrl,
+        url: sharedEndpoint?.url ?? bridgeUrl,
         token,
         toolNames: initialGatewayTools(gatewayTools).map(({ name }) => name),
         timeoutMs: gatewayHarnessTimeoutMs((await this.host.storage.getConfig()).questionTimeoutMs)
@@ -438,6 +466,13 @@ export class UtilityOrchestrationServiceTurnRuntime {
     if (!turn) return
     this.host.turns.delete(id)
     this.host.turnIdsByToken.delete(turn.token)
+    // Before the clients go: an Oven's relay and its host hold the turn's
+    // capability, and a turn that is never retired keeps answering there.
+    try {
+      turn.state.closeGatewayEndpoint?.()
+    } catch (error) {
+      Logger.dev('Could not close the turn gateway endpoint:', error)
+    }
     await this.endComputerUseSessions(turn.state)
     await Promise.allSettled([...turn.state.clients.values()].map((client) => client.close()))
     // Last, so the claim covers the clients it was taken for: an unrestricted

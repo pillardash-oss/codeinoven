@@ -59,8 +59,14 @@
     '[contenteditable="true"]:not([aria-disabled="true"])'
   ].join(',')
 
-  /** The scrim is shared by every placement. A full screen panel covers it. */
-  const OVERLAY_CLASS = 'fixed inset-0 bg-overlay/70 backdrop-blur-[1px]'
+  /** The scrim is shared by every placement. A full screen panel covers it.
+   *
+   *  Deliberately no `backdrop-filter`: a full-window blur is the most expensive
+   *  thing the compositor can be asked for, and it has to be recomputed every
+   *  time anything underneath repaints   a terminal canvas streaming a build, a
+   *  device mirror, the conversation. A 1px blur is invisible on a 70% overlay
+   *  anyway, so the dimming alone is the whole visual result. */
+  const OVERLAY_CLASS = 'fixed inset-0 bg-overlay/70'
 
   /**
    * How the fixed wrapper positions the panel. Padding lives here rather than on
@@ -488,6 +494,15 @@
             if (!escapeCloses) event.preventDefault()
           }}
           onInteractOutside={(event) => {
+            // Only the presentation on screen may be dismissed. Once the native
+            // host has drawn this panel, the dialog here is invisible and inert:
+            // there is no backdrop of its own for the user to press, so an
+            // interaction that reaches this copy is never a gesture aimed at it,
+            // and honouring one closed a surface the user was working in.
+            if (!domPresented) {
+              event.preventDefault()
+              return
+            }
             // A toast (svelte-sonner stacks at `z-index: 999999999`) and Vite's
             // development compile-error overlay both draw above this modal and
             // stay interactive there, so a press that lands on either is not a

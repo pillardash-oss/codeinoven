@@ -63,11 +63,32 @@ export const MODEL_PROFILE_INFERENCE_MODES: readonly InferenceMode[] = [
   'ultrafast'
 ]
 
-/** Every permission level a profile may store. */
+/**
+ * Every permission level a profile may store.
+ *
+ * Oven Mode is deliberately absent, and must stay absent: a profile is applied
+ * from a picker to whatever thread is in front of it, while Oven Mode exists for
+ * one condition only   the thread the composer is sending to targets an external
+ * Oven (a remote machine) at that moment. Storing it would let one profile hand a
+ * local run the highest tier with nothing in the picker saying so, and a profile
+ * saved on a remote thread would outlive the machine it was about.
+ */
 export const MODEL_PROFILE_PERMISSION_LEVELS: readonly PermissionLevel[] = [
   'auto_review',
   'full_access'
 ]
+
+/**
+ * The level a profile is allowed to carry for a thread running at `level`.
+ *
+ * A level outside `MODEL_PROFILE_PERMISSION_LEVELS` is clamped to Full Access,
+ * the highest tier a profile may name. A profile surface then never shows Oven
+ * Mode and never stores it, whichever thread happened to be in front of the
+ * picker when the profile was saved.
+ */
+export function modelProfilePermissionLevel(level: PermissionLevel): PermissionLevel {
+  return MODEL_PROFILE_PERMISSION_LEVELS.includes(level) ? level : 'full_access'
+}
 
 /** The label a speed tier reads as in a profile row. */
 export const MODEL_PROFILE_INFERENCE_LABELS: Readonly<Record<InferenceMode, string>> = {

@@ -28,6 +28,8 @@ export interface AssistantHeaderActions {
   openAssistantBehaviour: (assistant: Assistant) => void
   /** Create a task inside an assistant. */
   createTask: (assistant: Assistant) => void
+  /** Open one more conversation for Don, with its own context and its own tab. */
+  createDonConversation: (assistant: Assistant) => void
   /** Remove an assistant and everything it owns. */
   deleteAssistant: (assistantId: string) => Promise<void>
 }
@@ -80,6 +82,10 @@ class AssistantHeaderTabsState {
 
   createTask(assistant: Assistant): void {
     this.#actions?.createTask(assistant)
+  }
+
+  createDonConversation(assistant: Assistant): void {
+    this.#actions?.createDonConversation(assistant)
   }
 
   openAssistantBehaviour(assistant: Assistant): void {

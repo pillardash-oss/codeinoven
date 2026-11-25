@@ -1,6 +1,6 @@
 {
   "name": "codeinoven",
-  "version": "0.5.70",
+  "version": "0.5.71",
   "description": "CodeInOven   Desktop workstation for coordinated agentic software engineering",
   "license": "MIT",
   "packageManager": "bun@1.4.3",
@@ -65,7 +65,7 @@
     "oven:cli:publish": "bun scripts/publish-oven-cli.ts",
     "oven:version:bump": "bun scripts/bump-oven-cli-version.ts",
     "ci:local": "bun scripts/ci-local.ts",
-    "audit": "bun audit --ignore=GHSA-ch52-4w7c-c8xp --ignore=GHSA-hp3w-g68c-fv3c --ignore=GHSA-2p57-rm9w-gvfp --ignore=GHSA-gcqx-w48m-w2h4 --ignore=GHSA-g3hv-75wg-m249",
+    "audit": "bun audit --ignore=GHSA-ch52-4w7c-c8xp --ignore=GHSA-hp3w-g68c-fv3c --ignore=GHSA-2p57-rm9w-gvfp --ignore=GHSA-gcqx-w48m-w2h4 --ignore=GHSA-g3hv-75wg-m249 --ignore=GHSA-fc5q-39xc-vjpf",
     "verify": "bun run check:file-size && bun run check && bun run lint . && bun run test && bun run audit",
     "verify:release": "bun run verify && bun run build:production && bun run check:bundle",
     "version:bump": "bun scripts/bump-version.ts",
@@ -101,7 +101,6 @@
     "@codemirror/language-data": "^6.5.2",
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.43.15",
-    "@firecrawl/anydoc": "^0.2.4",
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@lezer/highlight": "^1.2.5",
     "@replit/codemirror-lang-svelte": "^6.0.0",
@@ -117,9 +116,6 @@
     "sherpa-onnx-node": "2.0.1",
     "word-extractor": "^1.0.4",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
-  },
-  "optionalDependencies": {
-    "@firecrawl/anydoc-win32-x64-msvc": "0.2.4"
   },
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.325",

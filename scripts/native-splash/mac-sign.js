@@ -1,4 +1,5 @@
 import { sign as signAsync } from '@electron/osx-sign'
+import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -14,20 +15,26 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
  * into, so it keeps the product name and is never swapped for a helper. The
  * native splash is a flat helper under Contents/Helpers that the app spawns.
  *
- * The identity rules that remain are about updates, not appearance:
+ * The identity rules are about updates and about notifications:
  *
- *   - the bundle keeps the legacy signing identifier `<product>-electron`,
- *     because Squirrel.Mac validates every update against the running process's
- *     designated requirement, and installs signed with that identifier must keep
- *     accepting updates;
- *   - the bundle also carries a bridge requirement that accepts either the
- *     canonical bundle identifier or the legacy one, so a later move to the
- *     canonical identifier cannot strand existing installs.
+ *   - the bundle is signed with its canonical bundle identifier. macOS's
+ *     notification daemon (`usernotificationsd`) compares the *code-signing*
+ *     identifier of the requesting process with the bundle identifier the
+ *     request carries, and refuses every request when the two differ
+ *     (`addRequest not allowed: <bundle id>`), because posting on behalf of a
+ *     different identifier requires a private Apple entitlement. The result is
+ *     `UNErrorDomain error 1` on every `show()`: no card, no prompt and no row
+ *     in System Settings to switch on. Earlier builds inherited the signed
+ *     Electron app's `<product>-electron` identifier and hit exactly that;
+ *   - the bundle still carries a bridge requirement that accepts either the
+ *     canonical bundle identifier or that legacy one, because Squirrel.Mac
+ *     validates every update against the running process's designated
+ *     requirement, and installs shipped under the legacy identifier must keep
+ *     accepting updates.
  *
- * `codesign` signs `Foo.app/Contents/MacOS/Foo` as the bundle itself, so a
- * per-file identifier for the runtime never survives the bundle seal. The
- * identifier users and notifications see is the bundle identifier from
- * Info.plist (`com.pillardash.codeinoven`), which is unchanged.
+ * The identifier is asserted after signing: a build whose signature identity
+ * does not match its bundle identifier ships an app that silently cannot
+ * present a single macOS notification.
  */
 export default async function macSign(configuration) {
   const appPath = configuration.app
@@ -48,7 +55,9 @@ export default async function macSign(configuration) {
   }
 
   const runtimeExecutable = mainExecutable
-  const electronBinaryIdentifier = `${runtimeExecutable}-electron`
+  // What installs shipped with before the canonical identifier: the update
+  // requirement below has to keep accepting it.
+  const legacyBinaryIdentifier = `${runtimeExecutable}-electron`
 
   const teamId = process.env['APPLE_TEAM_ID']?.trim() ?? ''
   const isAdHocSigning = configuration.identity === '-'
@@ -59,7 +68,7 @@ export default async function macSign(configuration) {
   // `-r${requirements}` verbatim); codesign's -r then takes `=<requirements>`.
   const bridgeRequirement = isAdHocSigning
     ? undefined
-    : `=designated => (identifier "${bundleIdentifier}" or identifier "${electronBinaryIdentifier}") and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = ${teamId}`
+    : `=designated => (identifier "${bundleIdentifier}" or identifier "${legacyBinaryIdentifier}") and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = ${teamId}`
 
   // Match the runtime by path suffix — osx-sign may hand us normalized or
   // relative forms of the discovered file path.
@@ -75,11 +84,10 @@ export default async function macSign(configuration) {
       return {
         ...perFile,
         ...(bridgeRequirement !== undefined ? { requirements: bridgeRequirement } : {}),
-        additionalArguments: [
-          ...(perFile.additionalArguments ?? []),
-          '--identifier',
-          electronBinaryIdentifier
-        ]
+        // No `--identifier` override: codesign then stamps the bundle's own
+        // CFBundleIdentifier, which is the identity the notification daemon
+        // requires the requesting process to carry.
+        additionalArguments: [...(perFile.additionalArguments ?? [])]
       }
     }
     return perFile
@@ -90,4 +98,51 @@ export default async function macSign(configuration) {
     interval: 5000,
     backoff: 5000
   })
+
+  await assertNotificationIdentity(appPath, mainExecutable, bundleIdentifier)
+}
+
+/** The `Identifier=` line codesign prints for a signed target. */
+async function signatureIdentifier(target) {
+  return new Promise((resolve) => {
+    execFile('codesign', ['-d', '--verbose=2', target], (error, _stdout, stderr) => {
+      if (error !== null && !stderr) {
+        resolve(null)
+        return
+      }
+      const identifier = /^Identifier=(.+)$/m.exec(stderr)?.[1]?.trim()
+      resolve(identifier ?? null)
+    })
+  })
+}
+
+/**
+ * Fail the build when the signed bundle and its main executable do not carry the
+ * bundle identifier.
+ *
+ * This is not defensive padding: those identifiers are what macOS's notification
+ * daemon compares before it accepts a request. A mismatch produces no error the
+ * build can see, only an app whose notifications never appear and a Settings
+ * pane that offers nothing to switch on.
+ */
+async function assertNotificationIdentity(appPath, mainExecutable, bundleIdentifier) {
+  const targets = [
+    { label: 'app bundle', path: appPath },
+    { label: 'main executable', path: join(appPath, 'Contents', 'MacOS', mainExecutable) }
+  ]
+  for (const target of targets) {
+    const signedAs = await signatureIdentifier(target.path)
+    if (signedAs === null) {
+      throw new Error(
+        `Could not read the code-signing identifier of the ${target.label}; macOS notifications need it to match ${bundleIdentifier}`
+      )
+    }
+    if (signedAs !== bundleIdentifier) {
+      throw new Error(
+        `The ${target.label} is signed as "${signedAs}" but its bundle identifier is "${bundleIdentifier}". ` +
+          'macOS refuses every notification request whose signing identifier differs from the requested bundle identifier ' +
+          '(usernotificationsd: addRequest not allowed), so the app would never show a card.'
+      )
+    }
+  }
 }

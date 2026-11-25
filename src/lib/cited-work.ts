@@ -23,8 +23,11 @@ export const CITE_CAPABILITY_NAME = 'cio-cite-report'
 export const CITE_CAPABILITY_SUMMARY =
   'Cite the reports, documents and folders a turn produced, so the conversation shows each one as a card the user can open.'
 
-/** How many entries one turn may cite. */
-export const CITE_ENTRY_LIMIT = 12
+/** How many entries one turn may cite. A turn that splits its work into many
+ *  reports (a per-concern breakdown, a folder of findings, an inventory pass)
+ *  must be able to cite all of them in one call, so the ceiling is set well
+ *  above a typical turn rather than at a handful. */
+export const CITE_ENTRY_LIMIT = 60
 
 /** Ceiling for one cited path, so a pasted blob can never be a path. */
 export const CITE_PATH_LIMIT = 1024
@@ -41,6 +44,11 @@ description: ${CITE_CAPABILITY_SUMMARY}
 Use this when a turn produced something the user will open again outside the
 answer itself: a report, a document, a script folder, a generated project, a set
 of assets. Cite it as you finish the turn, before your final message.
+
+This is a rule, not a judgment call. A report you produced is cited, never
+recited: pasting its contents into the answer instead leaves the user with no
+card to open. The call is local and free, so its cost is never a reason to skip
+it.
 
 Do not cite what you only talked about. A cited path that does not exist is
 dropped, and a card for something the user never received is worse than no card.

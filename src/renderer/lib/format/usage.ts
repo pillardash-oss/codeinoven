@@ -153,3 +153,46 @@ export function bankedResetSummary(resets: AgentBankedResets | undefined): strin
   const label = `${expiry.charAt(0).toLowerCase()}${expiry.slice(1)}`
   return `${count} · next ${label}`
 }
+
+/** A longer window takes the shoe over from the session window once it is this full. */
+const BINDING_WINDOW_PERCENT = 90
+
+/**
+ * The one window the composer shoe states: the shortest account-wide window,
+ * unless a longer one is nearly spent and will stop the user first. Windows
+ * scoped to one model, and windows that have already reset, never headline.
+ */
+export function headlineQuotaWindow(
+  limits: readonly AgentRateLimitWindow[]
+): AgentRateLimitWindow | undefined {
+  const now = Date.now()
+  const windows = limits
+    .filter(
+      (limit) =>
+        !limit.model &&
+        quotaPercent(limit) !== undefined &&
+        (limit.resetsAt === undefined || limit.resetsAt > now)
+    )
+    // By length only: providers list their main window before its variants.
+    .toSorted((left, right) => (left.windowMinutes ?? Infinity) - (right.windowMinutes ?? Infinity))
+  let headline = windows[0]
+  for (const limit of windows.slice(1)) {
+    const percent = quotaPercent(limit) ?? 0
+    if (percent >= BINDING_WINDOW_PERCENT && percent > (quotaPercent(headline) ?? 0)) {
+      headline = limit
+    }
+  }
+  return headline
+}
+
+/** A window's name at shoe size: `5h`, `Day`, `Week`, `Month`. */
+export function shortWindowLabel(limit: AgentRateLimitWindow): string {
+  const minutes = limit.windowMinutes
+  const kind = quotaWindowKind(minutes)
+  if (kind === 'session' && minutes)
+    return minutes < 60 ? `${minutes}m` : `${Math.round(minutes / 60)}h`
+  if (kind === 'daily') return 'Day'
+  if (kind === 'weekly') return 'Week'
+  if (kind === 'monthly') return 'Month'
+  return 'Limit'
+}

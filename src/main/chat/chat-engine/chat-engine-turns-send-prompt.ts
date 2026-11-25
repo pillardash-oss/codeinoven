@@ -14,13 +14,13 @@ import {
 import type { SendPromptOptions } from '../../drivers/driver.interface'
 import { isAssistantNextStepsPrompt } from '../../../lib/assistant-next-steps'
 import { DON_ASSISTANT_ID } from '../../../lib/types/assistant'
-import { DON_THREAD_ID } from '../../don/don-bootstrap'
 import { isContinuationRelayPrompt } from '../../../lib/pending-request'
 import { composeAssistantInstruction } from '../../../lib/assistant-run'
 import { isCioUtilityRequest } from '../../utilities/cio-utility-prompt'
 import { isCioDesignRequest } from '../../utilities/cio-design-prompt'
 import { isCioVideoRequest } from '../../utilities/cio-video-prompt'
 import { isCioOrchestrateRequest } from '../../orchestration/cio-orchestrate-prompt'
+import { isOvenMode } from '../../../lib/permission-level'
 import { RunScopeGate } from '../run-scope-gate'
 import type { AuthoredWorkKind } from '../../../lib/ipc/design'
 import type { UtilityTurnBudgetContext } from '../../utilities/utility-orchestration-service'
@@ -33,7 +33,8 @@ import type {
   PromptReference,
   SpecActionIntent,
   UserMessagePresentation,
-  ThreadSettings
+  ThreadSettings,
+  Thread
 } from '../../../lib/types'
 import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID, isAssistantSetupThread } from '../../../lib/types'
 import {
@@ -71,6 +72,7 @@ import type {
   QueuedCoordinatorHandoff
 } from './chat-engine-types'
 import { rawErrorDetail, rawErrorMessage } from './chat-engine-errors'
+import { ovenPiRuntime, ovenPiTurnApplies } from '../../ovens/oven-pi-runtime'
 import { withoutTransportParts } from './chat-engine-message-merge'
 import { formatProjectReferenceContext } from './chat-engine-message-text'
 import { firstTurnForkNotice } from './chat-engine-fork-parent'
@@ -124,6 +126,89 @@ export class ChatEngineTurnsSendPrompt {
     this.runScopeGate = new RunScopeGate(host.scopeRoots)
   }
 
+  /**
+   * Prepare one pi turn on the Oven its thread is pinned to, and route its
+   * session there.
+   *
+   * Returns the checkout the turn runs in, or null when the turn is not a pi
+   * turn on an Oven and the one-shot Oven path owns it instead. Everything the
+   * Oven has to put in place first (harness, git, clone, account) is the same
+   * preparation the one-shot path performs, so the two cannot drift; the session
+   * is created before that work starts so the steps it publishes reach the
+   * thread's working trace.
+   */
+  private async bindOvenPiTurn(thread: Thread, settings: ThreadSettings): Promise<string | null> {
+    const runtime = ovenPiRuntime()
+    if (!runtime || !ovenPiTurnApplies(settings, true)) return null
+    const ovenId = settings.ovenId
+    if (!ovenId) return null
+    const account = await this.host.state.accountRegistry.resolveForProvider(
+      settings.harnessId,
+      settings.providerId,
+      settings.accountId
+    )
+    const sessionId = await this.host.ensureSession(thread.projectId, thread.id, 'pi')
+    const startedAt = Date.now()
+    this.host.registerSession(
+      sessionId,
+      thread.projectId,
+      thread.id,
+      thread.settings?.ovenPath ?? '',
+      settings.permissionLevel,
+      'pi'
+    )
+    // Reading the Oven's own state is the first round trip, and it happens
+    // before any preparation step exists to report. Say what the turn is doing
+    // now rather than leaving the trace empty until that answer arrives.
+    const ovenLabel = await this.host.state.ovenChat.nameFor(ovenId)
+    this.host.units['turns-sessions'].publishWorkingNote(sessionId, `Preparing ${ovenLabel}…`)
+    const prepared = await this.host.state.ovenChat.prepareForTurn(thread, settings, {
+      sessionId,
+      startedAt,
+      account,
+      ovenLabel
+    })
+    // The session id was minted here, but this turn runs the harness there: bind
+    // the record to the Oven's checkout, or the next request rejects a live
+    // session as unavailable.
+    await runtime.driver?.adoptSessionPath(prepared.root, sessionId, thread.title)
+    // Re-register with the root this turn actually runs in. `ovenPath` is only
+    // known once that root is resolved, and on a chat's first turn it is still
+    // empty, so the registry described the session as working in this app's own
+    // folder. The file-access policy reads its workspace from that record, which
+    // made every command inside the real workspace look like it reached outside
+    // it and asked for approval.
+    this.host.registerSession(
+      sessionId,
+      thread.projectId,
+      thread.id,
+      prepared.root,
+      settings.permissionLevel,
+      'pi'
+    )
+    // The route is what makes this session's `sendPrompt` start its process on
+    // the Oven, and the storage is what makes every handoff file this turn
+    // publishes land beside that process instead of on this machine.
+    await runtime.bind({
+      sessionId,
+      ovenId,
+      prepared,
+      config: () => this.host.storage.getConfig()
+    })
+    // Say on the session record itself which thread it belongs to. The record
+    // already carries the Oven's own pi session id and survives a restart, so
+    // stamping the thread is what lets the app find this conversation again from
+    // the thread alone   after a harness switch, or when the thread's session
+    // column is no longer the only key it can trust.
+    try {
+      await runtime.driver?.tagSessionThread?.(prepared.root, sessionId, thread.id)
+    } catch (error) {
+      // Best effort: an untagged record only costs relocation, never this turn.
+      Logger.dev('Oven session thread tagging failed:', error)
+    }
+    return prepared.root
+  }
+
   /** Send a prompt to the agent (non-blocking; the reply streams over events). */
   async sendPrompt(
     projectId: string,
@@ -142,6 +227,100 @@ export class ChatEngineTurnsSendPrompt {
     /** Persist this internal prompt as a visible user turn. Used by the
      *  Assignment worker dispatch so the task that started a worker reads as
      *  the first user prompt in its conversation. */
+    visiblePrompt = false
+  ): Promise<AgentMessage> {
+    try {
+      return await this.dispatchPrompt(
+        projectId,
+        threadId,
+        settings,
+        text,
+        attachments,
+        specAction,
+        userMessageId,
+        promptContext,
+        promptReferences,
+        projectReferences,
+        origin,
+        presentation,
+        taskReferences,
+        visiblePrompt
+      )
+    } catch (error) {
+      await this.settleFailedDispatch(projectId, threadId, error)
+      throw error
+    }
+  }
+
+  /**
+   * End a turn that failed before its own failure handler could run.
+   *
+   * A dispatch marks the thread `executing` and persists the user's message
+   * before it composes utilities, history and the prompt. Everything in that
+   * window used to sit outside the turn's failure contract, so a throw there
+   * (an Oven's capability host that would not start, a secret the vault could
+   * not resolve, a probe that timed out) left the row saying Executing for ever,
+   * with the message persisted, no reply, no error, and nothing to retry from.
+   * The turn's own handlers still own every failure they can catch; this only
+   * settles a row that is still marked as working after the throw has already
+   * escaped them, which is exactly the state nothing else repairs.
+   */
+  private async settleFailedDispatch(
+    projectId: string,
+    threadId: string,
+    error: unknown
+  ): Promise<void> {
+    try {
+      const thread = await this.host.threadManager.getThread(projectId, threadId)
+      if (!thread || (thread.status !== 'planning' && thread.status !== 'executing')) return
+      const message = rawErrorMessage(error)
+      Logger.info('A turn failed before its harness was dispatched', {
+        projectId,
+        threadId,
+        status: thread.status,
+        error: message
+      })
+      await this.host.units['utilities'].cleanupTurnUtilities(thread.sessionId ?? '')
+      await this.host.threadManager.setStatus(projectId, threadId, 'failed', {
+        read: false,
+        error: message,
+        errorDetail: rawErrorDetail(error)
+      })
+      await this.host.units['thread-lifecycle'].broadcastThreadSessionError(
+        projectId,
+        threadId,
+        thread.sessionId ?? '',
+        this.host.units['providers-accounts'].fallbackProviderIssue(
+          thread.sessionHarnessId ?? (thread.settings?.harnessId || DEFAULT_HARNESS),
+          message,
+          rawErrorDetail(error)
+        )
+      )
+    } catch (settleError) {
+      // Settling must never mask the failure the caller is about to report.
+      Logger.error('A failed turn could not be settled on its thread', {
+        projectId,
+        threadId,
+        error: settleError instanceof Error ? settleError.message : String(settleError)
+      })
+    }
+  }
+
+  /** The turn itself, from session setup to the harness call. */
+  private async dispatchPrompt(
+    projectId: string,
+    threadId: string,
+    settings: ThreadSettings,
+    text: string,
+    attachments: PromptAttachment[],
+    specAction?: SpecActionIntent,
+    userMessageId?: string,
+    promptContext?: string,
+    promptReferences?: PromptReference[],
+    projectReferences?: PromptProjectReference[],
+    origin: 'user' | 'internal' = 'user',
+    presentation?: UserMessagePresentation,
+    taskReferences?: PromptAssignmentTaskReference[],
     visiblePrompt = false
   ): Promise<AgentMessage> {
     projectId = validateEntityId(projectId, 'Project ID')
@@ -173,7 +352,44 @@ export class ChatEngineTurnsSendPrompt {
     settings = validateThreadSettings(settings)
     text = validateBoundedString(text, 'Prompt', 0, 200_000)
     const ovenThread = await this.host.threadManager.getThread(projectId, threadId)
-    if (ovenThread && this.host.state.ovenChat.remote(ovenThread, settings)) {
+    const ovenTurn = ovenThread !== null && this.host.state.ovenChat.remote(ovenThread, settings)
+    // The thread was still untouched before this turn, which auto-title reads
+    // after the working status below has already moved it on.
+    const threadWasCreated = ovenThread?.status === 'created'
+    // The composer accepted this turn, so every surface says the thread is
+    // working before anything slow begins. Binding an Oven turn is a network
+    // round trip (its session, its checkout, its capability host) that used to
+    // run with the row still reading as idle, which is indistinguishable from a
+    // send that never happened. Only a user's own prompt claims the row here:
+    // an internal turn has its own settling paths and must never strand a
+    // status on a thread it queues behind another one.
+    if (origin === 'user') {
+      await this.host.threadManager.setStatus(projectId, threadId, 'executing')
+      // A running conversation already has a session to draw the trace under;
+      // a first turn gets its first note with the session it creates.
+      if (ovenTurn && ovenThread?.sessionId) {
+        this.host.units['turns-sessions'].publishWorkingNote(
+          ovenThread.sessionId,
+          'Sending to the Oven…'
+        )
+      }
+    }
+    // A pi turn on an Oven speaks pi's RPC protocol to a process started on that
+    // machine, so it runs through the pi driver path below with the Oven's
+    // checkout as its project path. Binding is the whole Oven difference: every
+    // other harness, and every local thread, takes exactly the path it always
+    // has (`null` here means the one-shot Oven path below owns the turn).
+    const ovenPiRoot =
+      ovenTurn && ovenThread ? await this.bindOvenPiTurn(ovenThread, settings) : null
+    // Binding resolved the checkout and recorded it on the thread. This turn's
+    // settings still name the empty path the renderer sent, and the settings
+    // write below refuses an Oven change while the thread is busy, so a first
+    // Oven turn on a thread without a checkout failed here with "Stop or finish
+    // the active turn before changing Ovens" for a change the app itself had
+    // just made. Carry the resolved path, so every later write agrees with the
+    // record instead of looking like a switch to another workspace.
+    if (ovenPiRoot !== null) settings = { ...settings, ovenPath: ovenPiRoot }
+    if (ovenTurn && ovenThread && ovenPiRoot === null) {
       await this.host.threadManager.updateSettings(projectId, threadId, settings)
       const sessionId = await this.host.ensureSession(projectId, threadId)
       this.host.registerSession(
@@ -215,7 +431,7 @@ export class ChatEngineTurnsSendPrompt {
         1
       )
       const shouldAutoTitle =
-        ovenThread.status === 'created' &&
+        threadWasCreated &&
         ovenThread.titleSource !== 'manual' &&
         !isAssistantSetupThread(ovenThread) &&
         mirrorBeforePrompt.messages.length === 0
@@ -277,7 +493,7 @@ export class ChatEngineTurnsSendPrompt {
     if (text.length === 0 && !hasSendableContext) {
       throw new TypeError('Prompt must be a string between 1 and 200000 characters')
     }
-    this.host.units['turns'].markProjectActive(projectId)
+    this.host.units['turns'].markHarnessActive(projectId, settings.harnessId || undefined)
     let targetThread = await this.host.threadManager.getThread(projectId, threadId)
     if (
       specAction === 'implement' &&
@@ -481,8 +697,8 @@ export class ChatEngineTurnsSendPrompt {
       1
     )
     const shouldAutoTitle =
-      targetThread?.status === 'created' &&
-      targetThread.titleSource !== 'manual' &&
+      threadWasCreated &&
+      targetThread?.titleSource !== 'manual' &&
       !(targetThread && isAssistantSetupThread(targetThread)) &&
       mirrorBeforePrompt.messages.length === 0
 
@@ -540,12 +756,14 @@ export class ChatEngineTurnsSendPrompt {
       settings.accountId
     )
     settings = { ...settings, accountId: selectedAccount.id }
-    const { driver, projectPath } = await this.host.resolve(
-      projectId,
-      driverId,
-      threadId,
-      selectedAccount.id
-    )
+    const resolved = await this.host.resolve(projectId, driverId, threadId, selectedAccount.id)
+    // An Oven pi turn runs on the pi driver reserved for Oven sessions (the one
+    // whose launcher starts a bound session's process there), and works in the
+    // Oven's checkout: the handoff files, the workspace guard and the session all
+    // name the machine it actually runs on.
+    const driver =
+      ovenPiRoot === null ? resolved.driver : (ovenPiRuntime()?.driver ?? resolved.driver)
+    const projectPath = ovenPiRoot ?? resolved.projectPath
     // Branch metadata must use the same resolved cwd as the harness. Relative
     // thread directories are anchored to the project root by resolveThreadPath.
     // It is a label on the thread row, not an input to the turn, so the git read
@@ -609,10 +827,17 @@ export class ChatEngineTurnsSendPrompt {
     const ownedAssignment = this.host.state.assignmentEngine.getActive(projectId, threadId)
     const assignmentInProgress = ownedAssignment !== null && ownedAssignment.status !== 'draft'
     const explicitPlanningAction = specAction === 'request' || specAction === 'review'
+    // Achievement is an implementation stage, never a planning one: its loop owns
+    // the thread, and a plain message is work for the run rather than a request
+    // to plan. Sending it down the planning path found no Brainstorm entry to
+    // answer, created a `choice_pending` workflow nobody had asked for, parked
+    // the thread on `awaiting_approval`, and swallowed the message with nothing
+    // on screen but a Brainstorm entry card.
+    const achievementStage = lifecycleForMode?.activeStage === 'achievement'
     const planningSpecTurn =
       engineeringActive &&
       specAction !== 'implement' &&
-      (explicitPlanningAction || (!lifecycleParked && !assignmentInProgress))
+      (explicitPlanningAction || (!lifecycleParked && !assignmentInProgress && !achievementStage))
     // Persist the selected harness before resolving the session. The renderer
     // pre-binds this same harness immediately before dispatch; leaving the old
     // harness in thread settings would make ensureSession replace that session
@@ -928,8 +1153,12 @@ export class ChatEngineTurnsSendPrompt {
     // completed. Attribute the new checkpoint to that user message   label and
     // source id inherited from the thread's latest checkpoint   so the file
     // changes card reports the user's prompt, never the hidden internal text.
+    // An Oven turn's changes are on the other machine, so this device has no
+    // working tree to snapshot for it: the checkout and every file in it are
+    // reachable only through the Oven service, and a rollback card built from a
+    // local read of that path would describe a directory that does not exist.
     const checkpointPromise: Promise<string | undefined> =
-      planningSpecTurn || (isChatThread && !chatFileSystemEnabled)
+      ovenPiRoot !== null || planningSpecTurn || (isChatThread && !chatFileSystemEnabled)
         ? Promise.resolve(undefined)
         : this.host.checkpointManager
             .getLatestCompleted(projectId, threadId)
@@ -1079,8 +1308,9 @@ export class ChatEngineTurnsSendPrompt {
       // The conversation a group chat started can speak back into it while it
       // works, so a delegated run offers the group reply tool. The group's own
       // thread does not: it is the host, and a message there mid-turn is exactly
-      // the insertion that confused its closing answer.
-      Boolean(targetThread?.dispatchOrigin?.initiatorThreadId === DON_THREAD_ID),
+      // the insertion that confused its closing answer. Don holds one conversation
+      // per topic, so a run reports into whichever of them started it.
+      targetThread?.dispatchOrigin?.initiatorProjectId === ASSISTANT_SPACE_ID,
       // A real project thread may create its engineering artifacts through the
       // artifact tools. A chat, an assistant task, the inbox and an Assignment
       // worker are offered none of those routes.
@@ -1564,8 +1794,10 @@ export class ChatEngineTurnsSendPrompt {
             sessionId,
             // Full Access may skip native permission events. With File System
             // off, retain the native cwd sandbox so external paths still ask.
+            // Oven Mode is the exception: the machine is not the user's, the task
+            // was handed to it whole, and a sandboxed harness could not do it.
             settings:
-              isChatThread && !chatFileSystemEnabled
+              isChatThread && !chatFileSystemEnabled && !isOvenMode(settings.permissionLevel)
                 ? { ...settings, permissionLevel: 'auto_review' }
                 : settings,
             text,

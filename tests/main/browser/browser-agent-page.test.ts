@@ -13,6 +13,7 @@ import {
   agentFocusScript,
   agentFrameRectsScript,
   agentFrameRevealScript,
+  agentListboxOptionsScript,
   agentPageOffsetScript,
   agentScrollScript,
   agentSelectScript,
@@ -542,5 +543,71 @@ describe('agent file input', () => {
     expect(changes).toBe(1)
     expect(input.files?.[0]?.name).toBe('rules.pdf')
     expect(input.files?.[0]?.type).toBe('application/pdf')
+  })
+})
+
+interface ListboxReport {
+  listboxes: number
+  options: Array<{
+    ref: string
+    label: string
+    value: string
+    selected: boolean
+    disabled: boolean
+  }>
+}
+
+describe('agent listbox sweep', () => {
+  const originalRect = Element.prototype.getBoundingClientRect
+
+  beforeEach(() => {
+    Element.prototype.getBoundingClientRect = () =>
+      ({ x: 0, y: 0, width: 240, height: 32 }) as DOMRect
+  })
+
+  afterEach(() => {
+    Element.prototype.getBoundingClientRect = originalRect
+  })
+
+  it('reads every visible listbox in the document, wherever its layer was drawn', () => {
+    document.body.innerHTML = `
+      <div id="fluent-default-layer-portal">
+        <div role="listbox" aria-label="Regions">
+          <div role="option" data-value="southafricanorth">South Africa North</div>
+          <div role="option" data-value="eastus">East US</div>
+        </div>
+      </div>
+    `
+    const report = run<ListboxReport>(agentListboxOptionsScript({ refPrefix: 'f1' }))
+    expect(report.listboxes).toBe(1)
+    expect(report.options.map((option) => option.label)).toEqual(['South Africa North', 'East US'])
+    expect(report.options.map((option) => option.ref)).toEqual(['f1r1', 'f1r2'])
+  })
+
+  it('leaves a closed layer out, so a hidden list is not mistaken for an open one', () => {
+    document.body.innerHTML = `
+      <div id="layer" style="display:none">
+        <div role="listbox"><div role="option">South Africa North</div></div>
+      </div>
+    `
+    // The layout stub above would give hidden nodes a size, so this one measures the
+    // way a browser does for an element inside a closed layer.
+    Element.prototype.getBoundingClientRect = () =>
+      ({ x: 0, y: 0, width: 0, height: 0 }) as DOMRect
+    const report = run<ListboxReport>(agentListboxOptionsScript({}))
+    expect(report.listboxes).toBe(0)
+    expect(report.options).toEqual([])
+  })
+
+  it('reports the picked state and the disabled options it was told about', () => {
+    document.body.innerHTML = `
+      <ul role="listbox">
+        <li role="option" aria-selected="true">South Africa North</li>
+        <li role="option" aria-disabled="true">West US 2</li>
+      </ul>
+    `
+    const report = run<ListboxReport>(agentListboxOptionsScript({}))
+    expect(report.options[0]?.selected).toBe(true)
+    expect(report.options[1]?.disabled).toBe(true)
   })
 })

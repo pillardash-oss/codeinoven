@@ -66,5 +66,7 @@ The artifact is drawn flush in the conversation, inside the app's reading column
 
 The document's own html and body margin and padding are dropped in the conversation, because the message column already owns the gutter, so a page that opens with its own outer card or frame reads as a second box inside the message. Put any inset you want on your own wrappers, and open with the content itself.
 
+The full screen viewer owns a gutter of its own the same way: any side of your page that declares no padding is inset by the viewer, and a side that declares one keeps exactly the padding you authored. Never rely on the page box to space the content, because the conversation drops it: space your own wrappers and let the app supply the outer edge.
+
 Generation and presentation are separate responsibilities. The model creates the asset and supplies its path. The app renders it. Do not open a browser tab as a substitute for inline delivery.
 `

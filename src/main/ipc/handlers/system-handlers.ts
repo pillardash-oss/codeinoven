@@ -15,6 +15,10 @@ import { resolveImages } from '../../git/github-images'
 import { retainTemporaryAttachment } from '../../editor/temporary-attachment-retention'
 import { readDocumentPreviewHtml } from '../../drivers/document-attachment'
 import {
+  readDocumentPlainTextFile,
+  documentMimeForExtension
+} from '../../drivers/document-attachment-core'
+import {
   isMissingScopedPathError,
   validateFaviconHostnames,
   validateGitHubAvatarRequests,
@@ -22,9 +26,16 @@ import {
 } from '../ipc-validation'
 import { isMissingFilesystemError, requireString, validateAttachmentStorageScope } from './shared'
 import { rememberLocalDownloadName } from '../../system/local-download-names'
+import {
+  captureScreenshotForAgent,
+  retainScreenshot,
+  setScreenshotShortcut,
+  takePendingScreenshots
+} from '../../system/screenshot-service'
 import type { SaveCopyInput, SaveFileInput } from '../../../lib/ipc/invoke-app'
 import type { ProjectFilesService } from '../../editor/project-files-service'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
+import { resourcePressure } from '../../system/resource-pressure'
 import type { IpcHandlerContext } from './context'
 
 export function registerSystemHandlers(ctx: IpcHandlerContext): void {
@@ -36,6 +47,10 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
     privileged,
     attachmentStorageDirectory
   } = ctx
+
+  // The device reading behind every admission decision. The sampler only runs
+  // while the renderer is asking, so a quiet app holds no timer.
+  ipcMain.handle('system:resourceAdmission', () => resourcePressure.read())
 
   ipcMain.handle('community:getIssueUrl', () => {
     const platform =
@@ -108,6 +123,31 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
   })
 
   ipcMain.handle('clipboard:readText', () => clipboard.readText())
+
+  /** Claim the system-wide region-screenshot chord the keymap resolved. */
+  privileged('screenshot:setShortcut', (_event, rawAccelerator: unknown) => {
+    if (rawAccelerator === null || rawAccelerator === undefined) return setScreenshotShortcut(null)
+    const accelerator = requireString(rawAccelerator, 'Screenshot accelerator')
+    if (accelerator.length > 80 || /[\r\n\0]/u.test(accelerator)) {
+      throw new TypeError('Screenshot accelerator is not a single chord')
+    }
+    return setScreenshotShortcut(accelerator)
+  })
+
+  /** The in-app fallback for a chord the system refused to give the app. */
+  privileged('screenshot:capture', () => captureScreenshotForAgent())
+
+  /** Captures taken while the window was parked in the menu bar. */
+  privileged('screenshot:pending', () => takePendingScreenshots())
+
+  /** Copy one of the app's captures into the thread it will be sent from. */
+  privileged('screenshot:retain', async (_event, rawScope: unknown, rawPath: unknown) => {
+    const scope = validateAttachmentStorageScope(rawScope)
+    const sourcePath = requireString(rawPath, 'Screenshot path')
+    const retained = await retainScreenshot(sourcePath, await attachmentStorageDirectory(scope))
+    if (retained) await privilegedIpc.registerUserSelectedFile(retained)
+    return retained
+  })
 
   ipcMain.handle('spellcheck:addWord', (event, rawWord: unknown) => {
     const word = requireString(rawWord, 'word')
@@ -497,11 +537,12 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
   // no longer reads files directly; it delegates here so the path can be
   // constrained to registered project, config-root, or user-selected scopes.
   // Read a pasted-file source for the Sound Playground's read-aloud section:
-  // plain text files directly, and rich documents (PDF, Word, PowerPoint, Excel,
-  // OpenDocument, RTF, EPUB) through the `@firecrawl/anydoc` Rust library
-  // fully local, no network, OCR never invoked. Only scoped paths (e.g. a file
-  // the user just picked from the system dialog) are read.
-  // Text is capped below the prepared-playback text limit.
+  // plain text files directly, and rich documents (Word, PowerPoint, Excel,
+  // OpenDocument, CSV/TSV) through the in-house document pipeline, which runs
+  // fully locally and never invokes OCR. Formats with no local text extraction
+  // (PDF, EPUB, RTF) are rejected by name instead of being read as bytes. Only
+  // scoped paths (e.g. a file the user just picked from the system dialog) are
+  // read. Text is capped below the prepared-playback text limit.
   const PLAYGROUND_TEXT_EXTENSIONS = new Set([
     'txt',
     'md',
@@ -530,18 +571,6 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
     'srt',
     'vtt'
   ])
-  const PLAYGROUND_DOCUMENT_EXTENSIONS = new Set([
-    'pdf',
-    'docx',
-    'doc',
-    'odt',
-    'rtf',
-    'epub',
-    'pptx',
-    'xlsx',
-    'xls',
-    'ods'
-  ])
   const MAX_PLAYGROUND_TEXT_CHARS = 900_000
   privileged('speech:playgroundReadText', async (_event, rawPath: unknown) => {
     try {
@@ -552,41 +581,24 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
       const extension = extname(safePath).toLowerCase().replace(/^\./u, '')
       const fileName = basename(safePath)
       let text: string
-      if (PLAYGROUND_DOCUMENT_EXTENSIONS.has(extension)) {
-        const bytes = await readFile(safePath)
-        const { toMarkdownBytes, formatFromExtension } = await import('@firecrawl/anydoc')
-        const format = formatFromExtension(extension)
-        try {
-          text = await toMarkdownBytes(bytes, format)
-        } catch (parseError) {
-          if (
-            extension === 'pdf' &&
-            parseError instanceof Error &&
-            parseError.message.includes('NeedsOcr')
-          ) {
-            throw new RangeError(
-              'This PDF appears to be scanned   no local OCR is performed in the playground.',
-              { cause: parseError }
-            )
-          }
-          throw parseError
-        }
-        // Strip Markdown emphasis/heading markup so the TTS voice does not
-        // read out syntax characters from the converted document.
-        text = text
-          .replace(/^#{1,6}\s+/gmu, '')
-          .replace(/[*_~`]+/gu, '')
-          .replace(/\[([^\]]*)\]\([^)]*\)/gu, '$1')
-          .replace(/<[^>]+>/gu, '')
-      } else {
-        if (!PLAYGROUND_TEXT_EXTENSIONS.has(extension)) {
-          throw new RangeError(`Unsupported file type ".${extension}".`)
-        }
+      let truncated = false
+      if (PLAYGROUND_TEXT_EXTENSIONS.has(extension)) {
         text = await readFile(safePath, 'utf8')
+      } else {
+        // Rich documents go through the in-house pipeline, which flattens markup
+        // so the TTS voice does not read out syntax characters and refuses the
+        // formats it cannot extract text from (PDF, EPUB, RTF).
+        const extracted = await readDocumentPlainTextFile(safePath, MAX_PLAYGROUND_TEXT_CHARS)
+        if (!extracted) {
+          throw new RangeError(
+            `This ${extension.toUpperCase()} file could not be read for read-aloud.`
+          )
+        }
+        text = extracted.text
+        truncated = extracted.truncated
       }
       text = text.replace(/\r\n?/gu, '\n').trimEnd()
       if (text.trim().length === 0) throw new RangeError('The file contains no readable text.')
-      let truncated = false
       if (text.length > MAX_PLAYGROUND_TEXT_CHARS) {
         text = text.slice(0, MAX_PLAYGROUND_TEXT_CHARS)
         truncated = true
@@ -672,18 +684,7 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
     try {
       const safePath = await privilegedIpc.resolveScopedPath(filePath)
       const extension = extname(safePath).toLowerCase().replace(/^\./u, '')
-      const mimeByExtension: Record<string, string> = {
-        docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        doc: 'application/msword',
-        odt: 'application/vnd.oasis.opendocument.text',
-        pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-        xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        xls: 'application/vnd.ms-excel',
-        ods: 'application/vnd.oasis.opendocument.spreadsheet',
-        csv: 'text/csv',
-        tsv: 'text/tab-separated-values'
-      }
-      const mime = mimeByExtension[extension]
+      const mime = documentMimeForExtension(extension)
       if (!mime) return null
       return readDocumentPreviewHtml({
         mime,

@@ -103,6 +103,109 @@ sed -n 44,60p packages/shared/src/ui/floating-panel.ts`
     ])
   })
 
+  // Regression: the chained command usually `cd`s into a subdirectory first.
+  // The heredoc prefix consumed only the second `&` of the `&&` operator, which
+  // left a dangling `&&` that the working-directory reader refuses to end a
+  // `cd` on: the body's relative target resolved against the project root, the
+  // turn proved nothing about the file it wrote, and its card came up empty.
+  it('extracts a heredoc target against the subdirectory it runs in', () => {
+    const part: Extract<AgentPart, { type: 'tool' }> = {
+      type: 'tool',
+      id: 'part-subdir-script',
+      messageID: 'message-subdir-script',
+      callID: 'call-subdir-script',
+      tool: 'bash',
+      state: {
+        status: 'completed',
+        input: {
+          command: `cd /project/tools/generator && python3 - <<'PY'
+p='out/schema.ts'
+s=open(p).read()
+open(p,'w').write(s)
+PY
+cd /project && git status --porcelain`
+        }
+      }
+    }
+
+    expect(changedPathsFromTool('/project', part)).toEqual(['tools/generator/out/schema.ts'])
+  })
+
+  // Regression: an inline script that edits several places commonly wraps the
+  // write in a helper, `def edit(p, a, b)` plus `edit('app/attachments.ts', ...)`.
+  // Only the definition writes, and only the call names the file, so neither was
+  // read and the turn proved nothing it had just changed.
+  it('extracts the target of a helper that writes through its first parameter', () => {
+    const part: Extract<AgentPart, { type: 'tool' }> = {
+      type: 'tool',
+      id: 'part-helper-script',
+      messageID: 'message-helper-script',
+      callID: 'call-helper-script',
+      tool: 'bash',
+      state: {
+        status: 'completed',
+        input: {
+          command: `cd apps/application/src/lib/design/journal && python3 - <<'EOF'
+def edit(p,a,b):
+    s=open(p).read(); assert a in s,(p,a); open(p,'w').write(s.replace(a,b,1))
+edit('app/attachments.ts',"old","new")
+edit('viewer/carousel.ts',"one","two")
+open('attachments/mini.ts','w').write('audit')
+EOF`
+        }
+      }
+    }
+
+    expect(changedPathsFromTool('/project', part)).toEqual([
+      'apps/application/src/lib/design/journal/attachments/mini.ts',
+      'apps/application/src/lib/design/journal/app/attachments.ts',
+      'apps/application/src/lib/design/journal/viewer/carousel.ts'
+    ])
+  })
+
+  // Regression: the ordinary one-file shell edit names the path once, in an
+  // assignment, and hands the command a variable. The operand was rejected for
+  // holding `$`, so the turn proved nothing about the file it rewrote.
+  it('extracts a sed in-place target held in a shell variable', () => {
+    const part: Extract<AgentPart, { type: 'tool' }> = {
+      type: 'tool',
+      id: 'part-shell-var',
+      messageID: 'message-shell-var',
+      callID: 'call-shell-var',
+      tool: 'bash',
+      state: {
+        status: 'completed',
+        input: {
+          command: `f=apps/application/src/lib/components/AuthorizedDeviceGate.svelte && sed -i '' 's|>Recover your account<|>Use your email<|' $f && git add $f`
+        }
+      }
+    }
+
+    expect(changedPathsFromTool('/project', part)).toEqual([
+      'apps/application/src/lib/components/AuthorizedDeviceGate.svelte'
+    ])
+  })
+
+  it('extracts a perl in-place target and ignores an unknown variable', () => {
+    const part: Extract<AgentPart, { type: 'tool' }> = {
+      type: 'tool',
+      id: 'part-perl-var',
+      messageID: 'message-perl-var',
+      callID: 'call-perl-var',
+      tool: 'bash',
+      state: {
+        status: 'completed',
+        input: {
+          command: `cd apps/application/src && f=lib/components/Gate.svelte && perl -0pi -e 's/a/b/g' $f && sed -i '' 's/a/b/' $UNKNOWN`
+        }
+      }
+    }
+
+    expect(changedPathsFromTool('/project', part)).toEqual([
+      'apps/application/src/lib/components/Gate.svelte'
+    ])
+  })
+
   it('extracts paths from Codex file-change items', () => {
     const part: Extract<AgentPart, { type: 'tool' }> = {
       type: 'tool',

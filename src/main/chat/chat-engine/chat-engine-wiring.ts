@@ -24,6 +24,8 @@ import { MuseDriver } from '../../drivers/muse-driver'
 import { AcpDriver, configuredAcpAgents } from '../../drivers/acp-driver'
 import { PiDriver } from '../../drivers/pi-driver'
 import { OvenChat } from '../../ovens/oven-chat'
+import { installOvenPiRuntime } from '../../ovens/oven-pi-runtime'
+import { OvenUtilityRelays } from '../../ovens/oven-utility-relay'
 import { CheckpointManager } from '../../storage/checkpoint-manager'
 import { listHarnesses } from '../../agents/harness-registry'
 import { broadcastThreadDeleted, broadcastThreadUpdate } from '../thread-events'
@@ -187,11 +189,12 @@ export function wireChatEngine(
     )
     // The diagnostics tool is the one app capability every turn carries, so the
     // hybrid thread search hangs off it: an agent gathering context searches the
-    // user's conversation history by meaning, not only by the words it guessed.
-    engine.state.utilityOrchestration.setThreadSearchProvider(async (query) => {
+    // user's conversation history by meaning, not only by the words it guessed,
+    // and narrows the read to one project, scope, or assistant when it knows the id.
+    engine.state.utilityOrchestration.setThreadSearchProvider(async (query, options) => {
       const { results } = await engine.threadManager.searchThreadsWithIntent(
         query,
-        { limit: 20 },
+        { ...options, limit: 20 },
         12_000
       )
       return results
@@ -230,6 +233,18 @@ export function wireChatEngine(
     // promise when it is submitted or dismissed.
     engine.state.utilityOrchestration.setSecretRequestExecutor((input, context) =>
       engine.requestUtilitySecrets(input, context)
+    )
+    // Pi keeps one process across turns, so its launch environment cannot carry
+    // project ENV edited later: the extension asks for it at every agent run.
+    engine.state.utilityOrchestration.setSessionEnvironmentExecutor((context) =>
+      engine.state.agentSecrets.turnEnvironment(context)
+    )
+    // The app owns process lifecycle, so an agent that starts a long-running
+    // process ends it through the app rather than a shell kill it cannot prove.
+    // The engine supplies the executor because it owns the agent process
+    // service, which records the pid and re-verifies ownership before a stop.
+    engine.state.utilityOrchestration.setAgentProcessExecutor((action, input, context) =>
+      engine.runAgentProcessTool(action, input, context)
     )
     // A proposed capability is an app-owned gateway tool too, so the call has to
     // be able to wait for the user: the engine surfaces the card and settles a
@@ -323,5 +338,41 @@ export function wireChatEngine(
       driver.setProcessObserver?.(engine.state.agentProcesses)
       driver.onEvent((event) => engine.handleDriverEvent(driver.id, event, driver))
     }
+    // A pi turn on an Oven runs on the same driver machinery a local pi turn
+    // uses, with its process started on the Oven instead of here. The launcher
+    // is chosen per driver, so this has to be a driver of its own: installing it
+    // on the map's pi driver would start this machine's local pi turns remotely
+    // too. One instance serves every Oven thread for the life of the app, so no
+    // turn ever pays for a driver, and its events reach the same handler.
+    const ovenPi = installOvenPiRuntime(engine.state.ovenChat.service)
+    // A turn that runs on an Oven reaches its gateway through that machine's own
+    // host, and whatever the host cannot run itself comes back over this relay
+    // and is answered by the very same routes a local turn calls.
+    const ovenUtilityRelays = new OvenUtilityRelays(
+      engine.state.ovenChat.service.ssh,
+      {
+        callRouteForTurn: (turnId, route, input) =>
+          engine.state.utilityOrchestration.callRouteForTurn(turnId, route, input)
+      },
+      // The Oven's daemon owns its utility host and starts it on request, so the
+      // relay asks before it waits. This is also the step that replaces a service
+      // bundle from before the host existed.
+      {
+        ensureHost: async (ovenId, note) => {
+          await engine.state.ovenChat.service.utilityHost(ovenId, note)
+        }
+      }
+    )
+    ovenPi.attachUtilityRelays(ovenUtilityRelays)
+    engine.state.ovenUtilityRelays = ovenUtilityRelays
+    const ovenPiDriver = new PiDriver(
+      storage,
+      engine.state.baseUrlProviders,
+      engine.state.secretVault,
+      {},
+      ovenPi.launch
+    )
+    ovenPiDriver.onEvent((event) => engine.handleDriverEvent(ovenPiDriver.id, event, ovenPiDriver))
+    ovenPi.attachDriver(ovenPiDriver)
   }
 }

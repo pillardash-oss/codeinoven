@@ -41,3 +41,32 @@ export function traceSpanOfParts(parts: readonly AgentPart[]): TraceSpan | null 
 export function isCompactionPart(part: AgentPart): boolean {
   return part.type === 'compaction' || part.type === 'compaction-summary'
 }
+
+/**
+ * The instant a settled trace's duration ends at.
+ *
+ * A turn's close outranks the extent of its own rows. The harness writes its
+ * answer after its last step, and it can sit quiet far longer than the work it
+ * did: one run answered in four minutes, then spent forty more before it wrote
+ * anything, and a header measured to the last step reported the four while the
+ * turn's own duration reported all forty-four. The caller therefore reports the
+ * instant the turn's last message closed when it knows it, and the span stands in
+ * only when it does not (a turn whose work never mirrored a closing row, or one
+ * whose entries are not mounted at all, where `endTime` is the app's boundary).
+ *
+ * The close can never shorten a span: clock skew between a harness's step and the
+ * app's own stamp must not make a trace state less work than its rows show.
+ */
+export function traceEndInstant(input: {
+  span: TraceSpan | null
+  /** When this turn's last message closed, once the turn really has closed. */
+  closedAt?: number
+  /** The app's own end of the turn, for a trace with no span to measure. */
+  endTime?: number
+}): number | undefined {
+  if (input.closedAt !== undefined) {
+    return input.span ? Math.max(input.closedAt, input.span.end) : input.closedAt
+  }
+  if (input.span) return input.span.end
+  return input.endTime
+}

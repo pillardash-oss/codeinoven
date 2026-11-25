@@ -1,16 +1,25 @@
 import { readFile } from 'fs/promises'
 import { join } from 'path'
+import { handedOffQuestions } from '../thread-transfer-service/thread-transfer-attention'
 import { handedOffWorkersNote } from '../thread-transfer-service/thread-transfer-workers'
-import type { ThreadTransferRelease } from '../thread-transfer-service/thread-transfer-workers'
+import type {
+  HandedOffWorker,
+  ThreadTransferRelease
+} from '../thread-transfer-service/thread-transfer-workers'
 import type { HandoffReleaseDetails } from '../../system/instance-handoff-bus'
 import { createHash } from 'crypto'
 import { Logger } from '../../system/logger'
 import { broadcastThreadUpdate } from '../thread-events'
 import { estimateTokens } from '../memory-service'
+import { shouldRequestModelTitle } from '../title-generator'
 import { validateEntityId } from '../../ipc/ipc-validation'
-import type { HarnessDriver } from '../../drivers/driver.interface'
+import type { HarnessDriver, HandoffWorkerSession } from '../../drivers/driver.interface'
+import { DEFAULT_HARNESS } from '../../../lib/harness-default'
+import { cioCoreToolsDirectory } from '../../drivers/pi/pi-driver-cio-files'
 import { instanceRegistry } from '../../system/instance-registry'
 import type {
+  AgentMessage,
+  Thread,
   ThreadSettings,
   ThreadTransferResult,
   TurnCheckpointChangeSummary,
@@ -61,6 +70,17 @@ export class ChatEngineThreadsTitle {
   ): Promise<void> {
     const thread = await this.host.threadManager.getThread(projectId, threadId)
     if (!thread || thread.titleSource === 'manual' || isAssistantSetupThread(thread)) return
+    // A message of six words or fewer IS a title: the deterministic fallback
+    // already stored the user's own words, so a disposable model turn here
+    // would only rephrase them. No title request is made for that thread.
+    if (!shouldRequestModelTitle(text)) {
+      Logger.dev('Thread auto-title skipped: first message is already short enough', {
+        projectId,
+        threadId,
+        driverId
+      })
+      return
+    }
     // The first-message fallback is already visible, and it must never be the
     // only title a thread gets. An auxiliary assignment is a preference, not a
     // precondition: `generateTitleWithModel` tries the assigned model first and
@@ -352,6 +372,142 @@ export class ChatEngineThreadsTitle {
   }
 
   /**
+   * Hand a transferred thread's workers to the harness that just adopted it.
+   *
+   * A worker only survives a move as its own session file, so this is the
+   * adopting half of the hand-off: the roster the departing release stopped is
+   * published for the harness to reopen, and a worker with no session file is
+   * simply left out (the continuation names it as stopped). Best effort: a
+   * driver with no such surface keeps today's behaviour, and no worker can
+   * block the thread from resuming.
+   */
+  private async publishHandedOffWorkers(
+    thread: Thread,
+    workers: readonly HandedOffWorker[]
+  ): Promise<void> {
+    // The live roster is read even when the release carried nothing: a worker
+    // that was still running has no persisted card, which is exactly the case
+    // this fallback exists for.
+    if (!thread.sessionId) return
+    const resumable: HandoffWorkerSession[] = []
+    for (const worker of workers) {
+      if (worker.kind !== 'nested' || !worker.sessionFile) continue
+      resumable.push({
+        agentId: worker.agentId,
+        purpose: worker.label,
+        sessionFile: worker.sessionFile,
+        ...(worker.modelId ? { modelId: worker.modelId } : {}),
+        ...(worker.thinkingLevel ? { thinkingLevel: worker.thinkingLevel } : {}),
+        ...(worker.prompt ? { prompt: worker.prompt } : {})
+      })
+    }
+    if (resumable.length === 0) {
+      // A running worker has no persisted card yet, so the departed release may
+      // have had no roster to hand over. The harness writes one as it runs, into
+      // the shared storage root both instances read.
+      resumable.push(...(await this.liveWorkerRoster(thread.sessionId)))
+    }
+    Logger.info('Handed-off worker roster', {
+      projectId: thread.projectId,
+      threadId: thread.id,
+      workers: resumable.length
+    })
+    if (resumable.length === 0) return
+    try {
+      const driverId =
+        this.host.sessionRegistry.get(thread.sessionId)?.driverId ??
+        thread.sessionHarnessId ??
+        thread.settings?.harnessId
+      const accountId =
+        this.host.sessionRegistry.get(thread.sessionId)?.accountId ?? thread.sessionAccountId
+      const { driver, projectPath } = await this.host.resolve(
+        thread.projectId,
+        driverId ?? DEFAULT_HARNESS,
+        thread.id,
+        accountId
+      )
+      // The cards this thread already shows belong to the engine, not to the
+      // harness that will run its turn here. Handing them over is what lets a
+      // carried-over worker stamp its card when it settles.
+      await this.prefillSubagentCards(thread, driver, projectPath)
+      await driver.resumeHandedOffWorkers?.(projectPath, thread.sessionId, resumable)
+    } catch (error) {
+      Logger.dev('Handed-off worker publication failed:', {
+        projectId: thread.projectId,
+        threadId: thread.id,
+        error: rawErrorMessage(error)
+      })
+    }
+  }
+
+  /** Give the adopting harness the sub-agent cards this thread already shows. */
+  private async prefillSubagentCards(
+    thread: Thread,
+    driver: HarnessDriver,
+    projectPath: string
+  ): Promise<void> {
+    if (!thread.sessionId || !driver.prefillSubagentCards) return
+    const cards: Extract<AgentMessage['parts'][number], { type: 'subagent' }>[] = []
+    try {
+      const messages = await this.host.threadManager.loadMessages(thread.projectId, thread.id)
+      for (const message of messages) {
+        for (const part of message.parts) {
+          if (part.type === 'subagent') cards.push(part)
+        }
+      }
+    } catch (error) {
+      Logger.dev('Sub-agent card prefill skipped:', {
+        threadId: thread.id,
+        error: rawErrorMessage(error)
+      })
+      return
+    }
+    if (cards.length === 0) return
+    driver.prefillSubagentCards(projectPath, thread.sessionId, cards)
+  }
+
+  /** The workers a session's harness last reported as in flight. */
+  private async liveWorkerRoster(sessionId: string): Promise<HandoffWorkerSession[]> {
+    try {
+      const raw = await this.host.storage.readRaw(
+        join(cioCoreToolsDirectory(sessionId), 'live-subagents.json')
+      )
+      if (!raw) return []
+      const parsed: unknown = JSON.parse(raw)
+      const record = parsed as { workers?: unknown }
+      if (!Array.isArray(record.workers)) return []
+      const workers: HandoffWorkerSession[] = []
+      for (const entry of record.workers) {
+        if (typeof entry !== 'object' || entry === null) continue
+        const item = entry as Record<string, unknown>
+        const agentId = typeof item['agentId'] === 'string' ? item['agentId'] : ''
+        const sessionFile = typeof item['sessionFile'] === 'string' ? item['sessionFile'] : ''
+        if (agentId === '' || sessionFile === '') continue
+        workers.push({
+          agentId,
+          purpose: typeof item['purpose'] === 'string' ? item['purpose'] : 'sub-agent',
+          sessionFile,
+          ...(typeof item['childSessionId'] === 'string'
+            ? { childSessionId: item['childSessionId'] }
+            : {}),
+          ...(typeof item['modelId'] === 'string' ? { modelId: item['modelId'] } : {}),
+          ...(typeof item['thinkingLevel'] === 'string'
+            ? { thinkingLevel: item['thinkingLevel'] }
+            : {}),
+          ...(typeof item['prompt'] === 'string' ? { prompt: item['prompt'] } : {})
+        })
+      }
+      return workers
+    } catch (error) {
+      Logger.dev('Live worker roster read failed:', {
+        sessionId,
+        error: rawErrorMessage(error)
+      })
+      return []
+    }
+  }
+
+  /**
    * Stop this process's run for a thread another instance asked to take over.
    *
    * Nothing here is inferred: the shared `active_turns` ledger already names
@@ -387,6 +543,13 @@ export class ChatEngineThreadsTitle {
       threadId
     )
     const ownerPid = await this.host.checkpointManager.activeTurnOwnerPid(projectId, threadId)
+    // The card the user owes an answer to is the one thing the stop below would
+    // destroy: it lives in this process's memory, so it is read before the abort
+    // clears the queue and travels with the release.
+    const questions = handedOffQuestions(this.host.pendingQuestions.values(), {
+      projectId,
+      threadId
+    })
     // A pawn agent runs on a thread of its own, so this thread's own turn can be
     // idle while a pawn it spawned is still working here.
     const pawns = await this.host.units['assignment-workers'].runningPawnThreads(
@@ -462,10 +625,18 @@ export class ChatEngineThreadsTitle {
       pawnThreadIds.push(pawn.id)
     }
     if (pawnThreadIds.length > 0) instanceRegistry.publishTurnActivity()
+    Logger.info('Transfer release read its attention and worker roster', {
+      projectId,
+      threadId,
+      workers: workers.length,
+      pawns: pawnThreadIds.length,
+      questions: questions.length
+    })
     return {
       released: true,
       ...(workers.length > 0 ? { workers } : {}),
-      ...(pawnThreadIds.length > 0 ? { pawnThreadIds } : {})
+      ...(pawnThreadIds.length > 0 ? { pawnThreadIds } : {}),
+      ...(questions.length > 0 ? { questions } : {})
     }
   }
 
@@ -597,14 +768,62 @@ export class ChatEngineThreadsTitle {
     if (!thread.sessionId || !thread.settings) {
       return { ok: false, reason: 'This thread has no resumable session.' }
     }
-    // The workers the departure had to stop cannot be resumed anywhere: they
-    // were sessions inside the process that has just released the thread. What
-    // the agent returning here must not do is read its own interrupted trace as
-    // a pile of failures, so the continuation names them.
+    // The workers the departure had to stop are named for the resuming agent, so
+    // it never reads its own interrupted trace as a pile of failures. The roster
+    // also says which of them came along, because those are still working here.
     const note = handedOffWorkersNote(released?.workers ?? [], {
       pawnsResumed: (released?.pawnThreadIds?.length ?? 0) > 0
     })
+    // Workers the move carried over continue HERE, not in the departed
+    // process: publish their sessions before this turn is prompted, so the
+    // harness resumes them from their own transcripts on its first agent start.
+    await this.publishHandedOffWorkers(thread, released?.workers ?? [])
+    // A pawn is a thread of its own, so it can carry workers too. They were
+    // handed off exactly like this thread's, and their roster is read from the
+    // shared rows here instead of travelling with the release: nothing else
+    // would ever resume them, and a card nobody owns would spin forever.
+    for (const pawnThreadId of released?.pawnThreadIds ?? []) {
+      const pawn = await this.host.threadManager.getThread(projectId, pawnThreadId)
+      if (!pawn) continue
+      const pawnWorkers = await this.host.units['assignment-workers'].runningWorkersOf(
+        projectId,
+        pawn.id
+      )
+      await this.publishHandedOffWorkers(pawn, pawnWorkers)
+    }
     try {
+      // A card the departure was holding is the user's to answer before anything
+      // runs here: the move stopped the turn that asked, so resuming now would
+      // spend the continuation on a question nobody can answer any more. The card
+      // is re-raised instead, and the answer starts the turn that carries the
+      // worker note below.
+      let cardIsWaiting = false
+      try {
+        cardIsWaiting = await this.host.units['questions-ask'].adoptTransferredQuestions(
+          thread,
+          released?.questions,
+          note || undefined
+        )
+      } catch (error) {
+        // A card that cannot be re-raised must not fail the transfer: the thread
+        // is already here, and the plain resume is the fallback it had before.
+        Logger.error('A transferred question card could not be re-raised:', {
+          projectId,
+          threadId,
+          error: rawErrorMessage(error)
+        })
+      }
+      if (cardIsWaiting) {
+        // A pawn is a thread of its own with its own turn, so it continues here
+        // even while the thread that spawned it waits on the user.
+        await this.host.units['assignment-workers'].resumeTransferredPawns(
+          projectId,
+          threadId,
+          released?.pawnThreadIds ?? []
+        )
+        instanceRegistry.publishTurnActivity()
+        return { ok: true }
+      }
       let resumed = await this.host.units['thread-lifecycle'].resumeThreadFromPersistedSession(
         thread,
         {
@@ -614,9 +833,10 @@ export class ChatEngineThreadsTitle {
       )
       if (!resumed && thread.settings.loopMode === true) {
         // An Achievement loop resumes through its own driver, not a plain
-        // Continue; mirror the loop branch restart recovery uses.
+        // Continue; mirror the loop branch restart recovery uses, including the
+        // goal an Achievement started without an approved specification carries.
         const activeSpec = await this.host.units['spec'].getActiveSpec(projectId, threadId)
-        if (activeSpec?.status === 'approved') {
+        if (activeSpec?.status === 'approved' || (thread.achievementGoal ?? '').trim().length > 0) {
           void this.host.units['misc'].continueLoop(projectId, threadId)
           resumed = true
         }

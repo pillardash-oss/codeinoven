@@ -60,7 +60,7 @@ describe.skipIf(process.platform === 'win32')('buildHarnessEnvironment   unix nv
 
 it('sets the owned process marker', () => {
   const env = buildHarnessEnvironment({}, process.platform)
-  expect(env[OWNED_PROCESS_MARKER]).toBe('1')
+  expect(env[OWNED_PROCESS_MARKER]).toMatch(new RegExp(`^i-${process.pid}-`, 'u'))
 })
 
 describe('buildHarnessEnvironment   windows (nvm-windows)', () => {

@@ -7,6 +7,7 @@ import { join, resolve } from 'path'
 import { build, type Plugin, type PluginOption } from 'vite'
 import packageJson from './package.json'
 import { compatSourcePlugin } from './scripts/lib/vite-compat-source-plugin.ts'
+import { photonWasmPlugin } from './scripts/lib/vite-photon-wasm-plugin.ts'
 
 // Nightly CI resolves the full prerelease semver (e.g. 0.5.53-nightly.4) before
 // packaging and passes it here so the splash/about surfaces show the exact
@@ -205,9 +206,13 @@ function standaloneOvenService(): Plugin {
   }
 }
 
+// `var`, not `const`: a bundled package may declare its own `__filename` or
+// `__dirname` at module scope (the bundled Pi coding agent's config does), and a
+// second `var` declaration is legal where a `const` followed by a `var` is a
+// SyntaxError that kills the whole chunk at load.
 const mainCommonJsBanner = `import { createRequire as __cioCreateRequire } from 'node:module';
-const __filename = import.meta.filename;
-const __dirname = import.meta.dirname;
+var __filename = import.meta.filename;
+var __dirname = import.meta.dirname;
 const require = __cioCreateRequire(import.meta.url);`
 
 /**
@@ -255,6 +260,10 @@ export default defineConfig(({ mode }) => {
     main: {
       plugins: [
         compatSourcePlugin(),
+        // Pi reads images through Photon, whose wasm payload the bundler emits
+        // as JavaScript only. Ship it beside the chunk that reads it, or every
+        // attached image is dropped before the model ever sees it.
+        photonWasmPlugin(),
         refuseEmptyChunks('main'),
         useModuleScopeCommonJsShim(),
         standaloneOvenService()
@@ -277,7 +286,14 @@ export default defineConfig(({ mode }) => {
         // The team identifier the WebAuthn keychain group is derived from. See
         // `resolveMacTeamId`; an empty value simply leaves the macOS platform
         // authenticator unarmed.
-        __CODEINOVEN_MAC_TEAM_ID__: JSON.stringify(resolveMacTeamId())
+        __CODEINOVEN_MAC_TEAM_ID__: JSON.stringify(resolveMacTeamId()),
+        // Pi's extension loader decides where its SDK specifiers resolve from
+        // this flag. This build inlines the Pi SDK, so the loader's packaged-mode
+        // alias (`<dist>/../..` -> `index.js`) points at a file that does not
+        // exist here and every extension that imports the SDK fails to load. The
+        // flag sends it to the embedded module map instead, which is the same
+        // route Pi's own compiled binary takes.
+        PI_BUNDLED_NODE: 'true'
       },
       build: {
         outDir: 'out/main',
@@ -301,7 +317,14 @@ export default defineConfig(({ mode }) => {
             'sharp'
           ],
           input: {
-            index: resolve(__dirname, 'src/main/entry.ts')
+            index: resolve(__dirname, 'src/main/entry.ts'),
+            // The CIO Pi host runs as its own utility process, so it is its own
+            // entry beside the main bundle rather than part of it. It must stay
+            // an explicit entry: reaching it through electron-vite's
+            // `?modulePath` query builds it a second time under a chunk name
+            // (`entry-<hash>.js`) that collides with the main bundle's shared
+            // chunk, which merges the two builds into one broken file.
+            'pi-session-host': resolve(__dirname, 'src/main/drivers/pi/session-host/entry.ts')
           },
           output: {
             format: 'es',
@@ -321,7 +344,10 @@ export default defineConfig(({ mode }) => {
             index: resolve(__dirname, 'src/preload/index.ts'),
             // A window built with no bridge at all points here: Electron rejects
             // an empty `preload` string, so "none" has to be a real file.
-            blank: resolve(__dirname, 'src/preload/blank.ts')
+            blank: resolve(__dirname, 'src/preload/blank.ts'),
+            // The region selector shows the whole screen, so it gets its own
+            // five-call bridge instead of the app's.
+            'screenshot-overlay': resolve(__dirname, 'src/preload/screenshot-overlay.ts')
           },
           // Sandboxed Electron preloads execute in a CommonJS-like isolated
           // context. Emitting ESM here makes production fail before the bridge
@@ -427,7 +453,10 @@ export default defineConfig(({ mode }) => {
             // browser's page in a transparent window of its own. It is an entry
             // of its own because it draws the card with the app's stylesheet,
             // and runs nothing else of the app.
-            'permission-prompt': resolve(__dirname, 'src/renderer/permission-prompt.html')
+            'permission-prompt': resolve(__dirname, 'src/renderer/permission-prompt.html'),
+            // The Windows and X11 region selector: a still of one display, opened
+            // only while a screenshot is being selected.
+            'screenshot-overlay': resolve(__dirname, 'src/renderer/screenshot-overlay.html')
           },
           // Chunks are left to the bundler's own splitter. Naming groups was
           // tried and reverted: forcing the Svelte packages into a `vendor`

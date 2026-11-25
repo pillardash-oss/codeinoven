@@ -13,6 +13,7 @@
   import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
   import AppConfirmDialog from '$lib/components/ui/AppConfirmDialog.svelte'
   import TextSelectionContextMenu from '$lib/components/shared/TextSelectionContextMenu.svelte'
+  import PromptFlightLayer from '$lib/components/chats/PromptFlightLayer.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import {
     isSettingsView,
@@ -243,6 +244,10 @@
        question outlives the surface that asked it. -->
   <AppConfirmDialog />
   <TextSelectionContextMenu />
+  <!-- The words a reader just sent, crossing from the composer into the
+       transcript. It floats over every view because the send happens in a thread
+       and the words must keep their bearings while the column settles. -->
+  <PromptFlightLayer />
   <TooltipHost />
   {#if scopeConfirmations.current}
     <!-- An agent's destructive scope action is parked in main until this dialog
@@ -415,16 +420,14 @@
     {/await}
   {/if}
 
-  {#if projectEnvDock.projectId}
-    <!-- One env editor for the project tree and the file explorer, mounted at the
-         root so leaving a view never closes what the user is typing into. Keyed by
-         project so opening another project starts from that project's file. The
-         dock's module loads on the first open, because nothing on the first screen
-         edits a project's env file. -->
-    {#await loadCachedPanelModule('module:lib/components/secrets/ProjectEnvDock.svelte', () => import('$lib/components/secrets/ProjectEnvDock.svelte')) then { default: ProjectEnvDock }}
-      {#key projectEnvDock.projectId}
-        <ProjectEnvDock />
-      {/key}
+  {#if projectEnvDock.docks.length}
+    <!-- One env editor per project, mounted at the root so leaving a view never
+         closes what the user is typing into, and so opening another project's
+         secrets keeps the one already open instead of replacing it. The dock's
+         module loads on the first open, because nothing on the first screen edits
+         a project's env file. -->
+    {#await loadCachedPanelModule('module:lib/components/secrets/ProjectEnvDockHost.svelte', () => import('$lib/components/secrets/ProjectEnvDockHost.svelte')) then { default: ProjectEnvDockHost }}
+      <ProjectEnvDockHost />
     {/await}
   {/if}
 

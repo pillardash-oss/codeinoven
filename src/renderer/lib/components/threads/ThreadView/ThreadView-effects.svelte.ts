@@ -8,11 +8,12 @@ import { onVoiceComposerReset, onVoiceDraftLanded } from '../../../speech/voice-
 import { findNavState } from '$lib/stores/find-nav.svelte'
 import { appQuitState } from '$lib/stores/app-quit.svelte'
 import { isImageMime, isVideoMime, isAudioMime } from '$lib/mime'
-import { mayReanchorToLatest } from '$lib/scroll-anchor'
+import { isAtTrueLatest, mayReanchorToLatest } from '$lib/scroll-anchor'
 import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { chatDraft } from '$lib/stores/chat-draft'
 import { loadIndependentAuditIntent } from '$lib/stores/lifecycle-intent'
+import { accountRefreshDelay } from '$lib/stores/account-usage.svelte'
 import { modelRuntime } from '$lib/stores/model-runtime.svelte'
 import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -25,23 +26,35 @@ import { pawnAgentsState } from '$lib/stores/pawn-agents.svelte'
 import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
 import { publishDraftActivity, onRemoteDraftCleared } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
+import { composerAttachmentRequests } from '$lib/stores/composer-attachment-request.svelte'
 import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
 import { reportError } from '$lib/stores/app-errors.svelte'
 import { WORKING_TRACE_PAGE_SIZE, isGroupThread } from '$shared/types'
-import type { Thread, AgentEvent, RemoteAgentEventPayload } from '$shared/types'
+import type { Thread, AgentEvent, RemoteAgentEventPayload, AgentMessage } from '$shared/types'
 import { releaseAnnotationHighlights } from '$lib/selection-anchors'
 import { registerSelectionAnnotationClaim, trackLiveSelection } from '$lib/selection-menu'
 import { captureResponseSelection, RESPONSE_HIGHLIGHT_NAME } from '../thread-response-ranges'
 import { messageText, tracePreviewByUserMessage } from '../thread-message-presentation'
 import { mergedUserMessageSummaries } from '../thread-history'
 import { threadScrollPositions } from '../thread-scroll-memory'
+import { traceStepExpansion, traceStepScope } from '$lib/stores/trace-step-expansion.svelte'
 import type { ThreadView } from './ThreadView-board.svelte'
 import { BoardUnit } from '$lib/components/board-unit'
+
+const RESET_READ_DELAY_MS = 5_000
+const MAX_TIMER_DELAY_MS = 2_147_483_647
+
 /** One concern of the ThreadView board. */
 export class ThreadViewEffects extends BoardUnit<ThreadView> {
+  /** Attachment requests this view has already answered, so one ask is one re-seed.
+   *  `-1` until the first effect run: a request made while this view was not
+   *  mounted needs no re-seed, because the composer mounting now reads the
+   *  persisted attachment itself. */
+  private servedAttachmentRequests = -1
+
   constructor(root: ThreadView) {
     super(root)
   }
@@ -57,6 +70,13 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
    * so every effect here is owned by the component.
    */
   init(): void {
+    // Hold this thread's transcript as read for exactly as long as its view is
+    // mounted, so the store knows which streaming threads a reader is watching and
+    // which ones it may publish more slowly.
+    const releaseMessages = threadMessages.retain(
+      this.root.handleAgentEvent.thread.projectId,
+      this.root.handleAgentEvent.thread.id
+    )
     // A trace the reader expanded on a settled turn belongs to the visit that
     // expanded it: opening this thread again starts from the fold each turn asks
     // for, so a settled thread never returns with an old turn's work expanded.
@@ -69,6 +89,21 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     agentRuns.resetTraceView(
       this.root.handleAgentEvent.thread.projectId,
       this.root.handleAgentEvent.thread.id
+    )
+    // A trace step the reader opened belongs to the visit that opened it too.
+    // Leaving the thread forgets it, so a conversation re-entered later starts
+    // from the trace's own defaults instead of a pile of cards left open.
+    traceStepExpansion.forgetScope(
+      traceStepScope(
+        this.root.handleAgentEvent.thread.projectId,
+        this.root.pollStreamParts.conversationId
+      )
+    )
+    traceStepExpansion.forgetScope(
+      traceStepScope(
+        this.root.handleAgentEvent.thread.projectId,
+        this.root.handleAgentEvent.thread.id
+      )
     )
     // A persisted in-flight status is only a recovery hint. Start every mount in
     // a settled idle state unless this thread is already receiving live activity;
@@ -105,6 +140,23 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
      */
     $effect(() => {
       modelRuntime.ensure(this.root.currentWorkingTraceAttribution.modelRuntimeSelection)
+    })
+
+    // A conversation attached from another surface (a side chat attached to this
+    // chat) targets a composer that is already mounted, and a mounted composer
+    // seeds its attachment row once and owns it from then on. Re-seeding it is a
+    // remount, exactly what a relocation of a reference does, so the attachment
+    // appears without discarding the draft it is being attached to.
+    $effect(() => {
+      const requests = composerAttachmentRequests.countFor(
+        this.root.handleAgentEvent.thread.projectId,
+        this.root.handleAgentEvent.thread.id
+      )
+      if (requests === this.servedAttachmentRequests) return
+      const firstRun = this.servedAttachmentRequests === -1
+      this.servedAttachmentRequests = requests
+      if (firstRun || requests === 0) return
+      this.root.currentWorkingTraceAttribution.composerRestoreKey += 1
     })
 
     $effect(() => {
@@ -178,6 +230,33 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       }
     })
 
+    // Keep the shoe's limit current only while there is cause: an opened thread, an
+    // account switch, or turn activity. Nothing polls an idle thread; activity
+    // inside the throttle moves the one pending read, it never adds another.
+    $effect(() => {
+      if (this.root.props.controller || !this.root.loadOlderMessages.settings.modelId) return
+      const account = this.root.contextUsage.selectedAccount
+      void this.root.switchProject.busy
+      void this.root.contextUsage.usageActivity
+      const timer = setTimeout(
+        () => this.root.contextUsage.refreshShoeLimit(),
+        accountRefreshDelay(account)
+      )
+      return () => clearTimeout(timer)
+    })
+
+    // One read when the stated window resets, so an idle thread drops a spent limit.
+    $effect(() => {
+      if (this.root.props.controller) return
+      const resetsAt = this.root.contextUsage.shoeLimit?.resetsAt
+      if (resetsAt === undefined) return
+      const wait = resetsAt - Date.now() + RESET_READ_DELAY_MS
+      // A longer delay overflows setTimeout and would fire immediately.
+      if (wait <= 0 || wait > MAX_TIMER_DELAY_MS) return
+      const timer = setTimeout(() => this.root.contextUsage.refreshShoeLimit(), wait)
+      return () => clearTimeout(timer)
+    })
+
     /**
      * Follow the selection while the menu is open.
      *
@@ -217,7 +296,7 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     // and a range that failed to rebuild in that state was never retried. That is
     // what left a comment with no bubble and no highlight on return.
     $effect(() => {
-      void this.root.steerQueuedMessage.annotationReferences.length
+      const anchors = this.root.steerQueuedMessage.annotationAnchorKey
       void this.root.composerScope.visibleMessages.length
       void this.root.pollStreamParts.conversationBusy
       void threadMessages.streamRevision(
@@ -225,7 +304,7 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
         this.root.pollStreamParts.conversationId
       )
       void this.root.props.active
-      if (this.root.steerQueuedMessage.annotationReferences.length === 0) return
+      if (!anchors) return
       this.root.unmirroredTraceStartTime.responseRangeRetriesLeft =
         this.root.unmirroredTraceStartTime.RESPONSE_RANGE_RETRIES
       void tick().then(() => {
@@ -445,8 +524,10 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
 
     // Convert file:// image/media URLs to blob: Object URLs for reliable display
     // in the Electron renderer (file:// URLs are blocked on http:// origins).
+    // Reads the coarse snapshot: this walk covers the whole transcript, and
+    // file parts appear when messages land, never per streamed token.
     $effect(() => {
-      for (const msg of this.root.loadOlderMessages.messages) {
+      for (const msg of this.root.loadOlderMessages.scanMessages) {
         for (const part of msg.parts) {
           if (
             part.type === 'file' &&
@@ -485,9 +566,14 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     // in the mirror, deduped and kept in chronological order. Each message carries
     // a short work-trace preview from the turn that follows it.
     $effect(() => {
-      const tracePreviews = tracePreviewByUserMessage(this.root.loadOlderMessages.messages)
+      // The coarse snapshot: both walks are O(transcript) and feed a panel the
+      // user reads per turn, not per token. Publishing global state at the
+      // snapshot cadence also stops every sidebar row from re-deriving on
+      // each 16 ms flush of the active stream.
+      const scanMessages = this.root.loadOlderMessages.scanMessages
+      const tracePreviews = tracePreviewByUserMessage(scanMessages)
       const userMessages = mergedUserMessageSummaries(
-        this.root.loadOlderMessages.messages,
+        scanMessages,
         this.root.editVideoNote.fullUserMessageHistory
       ).map(({ id, content, isAction }) => ({
         id,
@@ -518,9 +604,12 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
 
     // Controller-driven views (temporary chats) never feed the spec-conversation
     // sidebar: their responses belong to the side chat, not the studio thread.
-    $effect(() => {
-      if (this.root.loadOlderMessages.hasController) return
-      workspaceState.specAgentResponses = this.root.loadOlderMessages.messages
+    const SPEC_RESPONSES_REFRESH_MS = 500
+    let specResponsesPublishedAt = 0
+    let specResponsesTimer: ReturnType<typeof setTimeout> | null = null
+    const publishSpecResponses = (messages: readonly AgentMessage[]): void => {
+      specResponsesPublishedAt = Date.now()
+      workspaceState.specAgentResponses = messages
         .filter((message) => message.role === 'assistant')
         .map((message) => ({
           id: message.id,
@@ -528,6 +617,26 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
           createdAt: message.createdAt
         }))
         .filter((message) => message.content.trim().length > 0)
+    }
+    $effect(() => {
+      if (this.root.loadOlderMessages.hasController) return
+      const messages = this.root.loadOlderMessages.messages
+      const elapsed = Date.now() - specResponsesPublishedAt
+      if (elapsed >= SPEC_RESPONSES_REFRESH_MS) {
+        publishSpecResponses(messages)
+        return
+      }
+      // Re-running clears this first, so the tail of a stream is published once
+      // the updates stop arriving rather than never.
+      specResponsesTimer = setTimeout(() => {
+        specResponsesTimer = null
+        publishSpecResponses(messages)
+      }, SPEC_RESPONSES_REFRESH_MS - elapsed)
+      return () => {
+        if (specResponsesTimer === null) return
+        clearTimeout(specResponsesTimer)
+        specResponsesTimer = null
+      }
     })
 
     // A persisted studio document remains available from the header. A missing
@@ -720,6 +829,15 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       const observer = new ResizeObserver(() => {
         const scroller = this.root.loadOlderMessages.scrollEl
         if (!scroller) return
+        // A viewport resting on the true bottom is reading the latest message
+        // whatever an earlier scroll event concluded, so re-attach here rather
+        // than waiting for another scroll: a browser clamp (content shrinking
+        // above a bottom-pinned reader) or a stale gesture must never leave a
+        // reader who scrolled back to the latest message untailed from a tail
+        // that keeps growing below them.
+        if (this.root.loadOlderMessages.userScrolledAway && isAtTrueLatest(scroller)) {
+          this.root.loadOlderMessages.reattachToLatest()
+        }
         if (!mayReanchorToLatest(this.root.loadOlderMessages.userScrolledAway)) {
           // The reader owns the viewport here. Hold the block they are reading
           // where it was, so work that mounts, folds, reveals or measures above
@@ -1320,6 +1438,7 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     })
 
     onDestroy(() => {
+      releaseMessages()
       this.root.handleAgentEvent.liveTokenRate.clear()
       if (this.root.steerQueuedMessage.responseRangeRetryFrame)
         cancelAnimationFrame(this.root.steerQueuedMessage.responseRangeRetryFrame)

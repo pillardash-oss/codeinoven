@@ -79,6 +79,7 @@
   import SeekBar from '../ui/SeekBar.svelte'
   import ArchivesSettingsTab from './ArchivesSettingsTab.svelte'
   import SecretsSettingsTab from './SecretsSettingsTab.svelte'
+  import AccountSettingsTab from './AccountSettingsTab.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
   import AboutCommunity from './AboutCommunity.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
@@ -835,13 +836,32 @@
                 <p class="text-xs leading-relaxed text-dimmed">
                   Send a test to check that notifications reach you
                 </p>
-                {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'granted'}
+                {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'granted' && !notificationTestFailed}
                   <p class="mt-2 flex items-center gap-1.5 text-xs text-primary">
                     <CioCheckCircle size={13} />
                     Notifications are allowed
                   </p>
                 {/if}
-                {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'denied'}
+                {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'denied' && notificationPermission.reason === 'signing-identity-mismatch'}
+                  <div
+                    class="mt-3 flex items-start gap-3 border border-warning/30 bg-warning/10 px-3 py-2"
+                    role="alert"
+                  >
+                    <CioAttention size={14} class="mt-0.5 shrink-0 text-warning" />
+                    <div>
+                      <p class="text-xs font-medium text-warning">
+                        This build cannot show notification cards
+                      </p>
+                      <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-muted">
+                        macOS refused every request this build made before it read any setting,
+                        because the app is signed under a different identity than its bundle
+                        identifier. No System Settings toggle changes that. Update {APP_NAME} to a build
+                        with the corrected packaging.
+                      </p>
+                    </div>
+                  </div>
+                {/if}
+                {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'denied' && notificationPermission.reason !== 'signing-identity-mismatch'}
                   <div
                     class="mt-3 flex items-start justify-between gap-3 border border-warning/30 bg-warning/10 px-3 py-2"
                     role="alert"
@@ -881,7 +901,7 @@
               <button
                 class="flex shrink-0 items-center gap-1.5 border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
                 disabled={notificationTestBusy}
-                title="Request permission and send a test system notification"
+                title="Send a test system notification"
                 onclick={() => void testSystemNotification()}
               >
                 {#if notificationTestBusy}
@@ -1533,6 +1553,8 @@
       <ArchivesSettingsTab />
     {:else if section === 'secrets'}
       <SecretsSettingsTab />
+    {:else if section === 'account'}
+      <AccountSettingsTab />
     {:else if section === 'about'}
       <div class="px-6 pb-8 pt-2">
         <!-- Identity: icon, version, copyright -->
@@ -1653,8 +1675,18 @@
             </div>
           {:else if updaterState.status.state === 'error'}
             <div class="mb-3 flex items-center gap-2 text-xs text-danger">
-              <CioAlertCircle size={13} />
+              <CioAlertCircle size={13} class="shrink-0" />
               <span>{updaterState.status.errorMessage ?? 'Update check failed'}</span>
+              {#if updaterState.status.installRetryable}
+                <button
+                  type="button"
+                  class="shrink-0 whitespace-nowrap border border-danger/40 px-2 py-1 font-medium text-danger transition-colors hover:bg-danger/10"
+                  title="Install the cached update again without downloading it"
+                  onclick={() => void updaterState.installUpdate()}
+                >
+                  Retry install
+                </button>
+              {/if}
             </div>
           {:else if updaterState.status.state === 'idle' && updaterState.status.canAutoUpdate}
             <div class="mb-3 flex items-center gap-2 text-xs text-dimmed">

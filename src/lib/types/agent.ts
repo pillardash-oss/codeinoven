@@ -301,11 +301,23 @@ export interface PromptReference {
    * freehand mark the user drew on a picture an inline artifact published, which
    * is a still image or one frame of a video; `svg` is an element the user
    * picked inside an inline SVG artifact, and `html` is an element the user
-   * picked inside an inline HTML artifact. Main validates only `id`, `label`,
-   * `text` and `comment`, so this drives presentation rather than the send:
-   * every kind reaches the model the same way a selection does.
+   * picked inside an inline HTML artifact.
+   *
+   * `thread` is a whole conversation attached as context: its `label` is that
+   * conversation's title and `threadId` names it, so the chip on the message
+   * opens the thread itself instead of a passage. The agent is told which thread
+   * it may read through the turn's hidden context, exactly as any other attached
+   * conversation, so no excerpt travels with this one.
+   *
+   * Main validates `id`, `label`, `text`, `comment`, plus the thread identity for
+   * a `thread` reference, and keeps `kind` with the message, so every kind is
+   * still drawn as the attachment it was when the message is reloaded.
    */
-  kind?: 'selection' | 'design' | 'page' | 'file' | 'video' | 'image' | 'svg' | 'html'
+  kind?: 'selection' | 'design' | 'page' | 'file' | 'video' | 'image' | 'svg' | 'html' | 'thread'
+  /** The attached conversation, for `kind: 'thread'`. */
+  threadId?: string
+  /** The project the attached conversation lives in, for `kind: 'thread'`. */
+  projectId?: string
 }
 
 /**

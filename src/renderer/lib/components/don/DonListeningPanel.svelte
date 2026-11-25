@@ -234,7 +234,7 @@
   {/snippet}
 
   {#snippet dock()}
-    <DockRow storageKey={STORAGE_KEY} label="Move the docked Don Listening panel">
+    <DockRow storageKey={STORAGE_KEY} layer="top" label="Move the docked Don Listening panel">
       <div class="flex items-center gap-1 border bg-surface p-1.5 shadow-xl">
         <button
           type="button"

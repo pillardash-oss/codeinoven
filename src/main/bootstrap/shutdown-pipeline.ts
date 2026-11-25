@@ -258,6 +258,11 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   state.stopInstanceTakeOverListener?.()
   state.stopInstanceTakeOverListener = null
 
+  // The sweep watches the thread corpus, so it must stop before the rows it
+  // would read are closed out from under it.
+  state.stopCoordinatorChildSettleSweep?.()
+  state.stopCoordinatorChildSettleSweep = null
+
   state.foreignRuns?.dispose()
   state.foreignRuns = null
   state.crossInstanceThreads?.dispose()

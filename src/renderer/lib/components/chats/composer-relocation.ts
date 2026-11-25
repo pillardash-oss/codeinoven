@@ -87,16 +87,20 @@ export type ComposerRelocationRequest = (
 /** The reference kinds whose content belongs to the project, not the thread. */
 const RELOCATABLE_REFERENCE_KINDS: readonly NonNullable<PromptReference['kind']>[] = [
   'file',
-  'design'
+  'design',
+  'page'
 ]
 
 /**
  * Whether a reference can be carried to another chat.
  *
  * A doc comment and an inspector comment name a document and an element that
- * every thread of the project can reach; a conversation comment names a message
- * range, and an inline-artifact annotation names a picture a single message
- * published, so both are left where they were written.
+ * every thread of the project can reach. An inspector comment has two spellings:
+ * a pick from a served design folder names the folder, and a pick from an
+ * ordinary page names the page's URL, and both are carried by the same rule
+ * because the element outlives the chat it was written in. A conversation comment
+ * names a message range, and an inline-artifact annotation names a picture a
+ * single message published, so both are left where they were written.
  */
 export function isRelocatableReference(reference: Pick<PromptReference, 'kind'>): boolean {
   return RELOCATABLE_REFERENCE_KINDS.includes(reference.kind ?? 'selection')
@@ -123,7 +127,9 @@ export function relocationNoun(item: ComposerRelocationItem): string {
 
 /** One reference's noun, which is what its kind means to the user. */
 function referenceNoun(reference: PromptReference): string {
-  return reference.kind === 'design' ? 'inspector comment' : 'doc comment'
+  return reference.kind === 'design' || reference.kind === 'page'
+    ? 'inspector comment'
+    : 'doc comment'
 }
 
 /** The references an item carries, in their own order. */

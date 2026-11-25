@@ -20,6 +20,8 @@
  */
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
+import { queuedResourceWait } from '$lib/stores/queued-resource-wait.svelte'
+import type { ThreadResourceGateAnswer } from '$shared/resource-admission'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import {
@@ -71,6 +73,11 @@ class QueuedMessageDispatcher {
     this.#mounted.delete(threadKey(projectId, threadId))
   }
 
+  /** Deliver the queue now instead of waiting for the next idle event. */
+  sweepNow(): void {
+    this.#sweep()
+  }
+
   /**
    * An idle transition means some agent just became free — re-check every
    * queued message. The authoritative per-thread status check in #dispatch
@@ -101,6 +108,11 @@ class QueuedMessageDispatcher {
       // A scope worktree still building for this thread holds the queue behind
       // the scope switch; the mounted view flushes it once the run settles.
       if (scopeJobs.hasPendingScopeJob(projectId, threadId)) return
+      // A temporary side chat parks its queue under its own id, which is no
+      // thread row at all: only its mounted view can deliver it through the
+      // side-chat transport, so this headless sweep steps aside. A thread that
+      // is not durable yet is treated the same way and retried on the next idle.
+      if ((await invoke('thread:get', projectId, threadId)) === null) return
       const settings = await resolveThreadDeliverySettings(projectId, threadId)
       // Nothing may have changed while we waited — verify before dispatching.
       if (this.#mounted.has(key)) return
@@ -112,6 +124,8 @@ class QueuedMessageDispatcher {
       ) {
         return
       }
+      // The device, not the thread, can be what holds this turn back.
+      if (await this.#holdForResources(projectId, threadId)) return
       if (!(await threadAgentIsIdle(projectId, threadId))) return
       dispatched = entry
       userMessageId = createMessageId()
@@ -151,12 +165,34 @@ class QueuedMessageDispatcher {
             dispatched.taskReferences,
             dispatched.promptReferences
           )
+          // The restored draft is the last durable copy of words the database
+          // never saw; the debounce must not be able to lose it.
+          rendererRecovery.persistQueuedNow()
         }
       }
     } finally {
       this.#inFlight.delete(key)
       releaseQueuedMessage(projectId, threadId)
     }
+  }
+
+  /**
+   * Ask the device whether the turn may start. A machine short on CPU and memory
+   * holds the message here, and the shared watch re-runs the sweep once it clears.
+   */
+  async #holdForResources(projectId: string, threadId: string): Promise<boolean> {
+    let answer: ThreadResourceGateAnswer
+    try {
+      answer = await invoke('system:threadResourceGate', projectId, threadId)
+    } catch {
+      return false
+    }
+    if (answer.wait === null) {
+      queuedResourceWait.clear(projectId, threadId)
+      return false
+    }
+    queuedResourceWait.hold(projectId, threadId, answer.wait, answer.target, () => this.#sweep())
+    return true
   }
 
   /** True when every thread this parked message waits on has settled. */

@@ -60,6 +60,31 @@ class TemporaryChatUnreadState {
     return this.#unreadByThread.get(threadKey(projectId, threadId))?.has(temporaryChatId) ?? false
   }
 
+  /**
+   * Every parent thread that still holds an unread side chat, one entry per
+   * thread however many of its chats are waiting.
+   *
+   * The per-thread flag answers "is this row unread". A surface that counts
+   * unread work per family (the view rail) has to know *which* threads those are,
+   * because a finished side chat leaves the parent thread's own `read` flag
+   * untouched: without this list the rail counted only the threads whose own run
+   * settled, and a side chat that answered while the user was on the parent
+   * thread raised no notice to stand in for it.
+   */
+  unreadThreads(): Array<{ projectId: string; threadId: string }> {
+    const threads: Array<{ projectId: string; threadId: string }> = []
+    for (const [key, chats] of this.#unreadByThread) {
+      if (chats.size === 0) continue
+      const separator = key.lastIndexOf(':')
+      if (separator < 0) continue
+      threads.push({
+        projectId: key.slice(0, separator),
+        threadId: key.slice(separator + 1)
+      })
+    }
+    return threads
+  }
+
   /** When the most recent unread side chat of this thread landed, or 0 when
    *  none is waiting. Used for "last action wins" badge ordering. */
   lastUnreadAt(projectId: string, threadId: string): number {

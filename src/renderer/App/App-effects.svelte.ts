@@ -12,6 +12,10 @@ import { loadBrowser } from '$lib/stores/browser-access.svelte'
 import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import { installBrowserShortcutPublishing } from '$lib/keymap/browser-shortcuts'
+import {
+  installScreenshotCapture,
+  setScreenshotShortcutKeys
+} from '$lib/screenshot/screenshot-capture'
 import { visionModels } from '$lib/stores/vision-models.svelte'
 import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
 import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
@@ -65,6 +69,15 @@ export class AppEffects extends BoardUnit<App> {
       const view = workspaceState.consumeViewTourRequest()
       if (!view) return
       guideState.start(view)
+    })
+
+    /**
+     * The region-screenshot chord is claimed by the operating system, so main
+     * cannot read the keymap itself. This reads the effective entry reactively,
+     * which republishes it when the config loads and when the user rebinds it.
+     */
+    $effect(() => {
+      setScreenshotShortcutKeys(keymapState.keysFor('screenshot-region'))
     })
 
     /**
@@ -154,6 +167,9 @@ export class AppEffects extends BoardUnit<App> {
       window.addEventListener('auxclick', this.root.openAssistantFromSearch.onMouseHistoryButton)
       const uninstallVoiceShortcut = initVoiceShortcutListener()
       const uninstallComposerFocusShortcut = initComposerFocusShortcut()
+      const uninstallScreenshotCapture = installScreenshotCapture(() =>
+        keymapState.keysFor('screenshot-region')
+      )
 
       // The renderer half of the app-control bridge, plus the shell-owned
       // navigation actions. Both are idempotent: a remount re-registers nothing.
@@ -265,6 +281,7 @@ export class AppEffects extends BoardUnit<App> {
         )
         uninstallVoiceShortcut()
         uninstallComposerFocusShortcut()
+        uninstallScreenshotCapture()
         restoreWorkspaceCallbacks()
         unsubscribeIpc()
         unsubscribeShutdown()

@@ -214,6 +214,18 @@ export interface RawFileChunk {
   size: number
 }
 
+/** Read the keymap overrides tolerantly: a hand-edited `config.json` whose
+ *  `keybindings` is not a string map must not stop the app from starting, so
+ *  every value that is not a string is dropped instead of reaching the keymap. */
+function readKeybindings(value: unknown): Record<string, string> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  const keybindings: Record<string, string> = {}
+  for (const [id, tokens] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof tokens === 'string') keybindings[id] = tokens
+  }
+  return keybindings
+}
+
 export class StorageEngine {
   private readonly writeListeners = new Map<string, Set<() => void>>()
 
@@ -243,6 +255,17 @@ export class StorageEngine {
    * dropped as soon as their chain drains, so an idle file holds no queue.
    */
   private readonly appendQueues = new Map<string, Promise<void>>()
+
+  /**
+   * Directories this engine has already created, by absolute path.
+   *
+   * `appendRaw` runs once per streamed log line, so a `mkdir` before every
+   * append spent a threadpool round trip per token for a directory that is
+   * created once and then never changes. An entry is only trusted until an
+   * append reports the directory missing, at which point it is dropped and the
+   * append retries after recreating it.
+   */
+  private readonly createdDirectories = new Set<string>()
 
   constructor(rootPath?: string) {
     this.root = rootPath ?? getConfigRoot()
@@ -343,6 +366,7 @@ export class StorageEngine {
     return {
       ...DEFAULT_CONFIG,
       ...(config ?? {}),
+      keybindings: readKeybindings(config?.keybindings),
       bundledPiSensitiveFilePatterns: sensitiveFilePolicy.patterns,
       bundledPiSensitiveFileProtectionEnabled: sensitiveFilePolicy.enabled,
       fontFamily: normalizeAppFontFamily(config?.fontFamily),
@@ -969,9 +993,29 @@ export class StorageEngine {
   async appendRaw(relativePath: string, content: string): Promise<void> {
     const fullPath = this.resolve(relativePath)
     return this.enqueueRawWrite(fullPath, async () => {
-      await ensureDir(join(fullPath, '..'))
-      await appendFile(fullPath, content, 'utf-8')
+      const directory = join(fullPath, '..')
+      await this.ensureCreatedDirectory(directory)
+      try {
+        await appendFile(fullPath, content, 'utf-8')
+      } catch (error) {
+        // The cache can only be as fresh as the last append: cleanup outside
+        // this engine can remove a directory after it was cached, so a missing
+        // directory is recreated once and the append retried inside the same
+        // queue slot. Ordering is untouched   the retry still lands before any
+        // later append to this file.
+        if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error
+        this.createdDirectories.delete(directory)
+        await this.ensureCreatedDirectory(directory)
+        await appendFile(fullPath, content, 'utf-8')
+      }
     })
+  }
+
+  /** Create a directory once per engine, skipping the syscall afterwards. */
+  private async ensureCreatedDirectory(directory: string): Promise<void> {
+    if (this.createdDirectories.has(directory)) return
+    await ensureDir(directory)
+    this.createdDirectories.add(directory)
   }
 
   /**

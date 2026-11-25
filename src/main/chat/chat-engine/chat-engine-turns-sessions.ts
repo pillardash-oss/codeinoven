@@ -11,6 +11,7 @@ import type {
   AgentProviderIssue,
   AgentSessionStatus,
   AssignmentTaskReport,
+  HarnessSessionMoveResult,
   Thread,
   ThreadSettings
 } from '../../../lib/types'
@@ -493,6 +494,9 @@ export class ChatEngineTurnsSessions {
     updateRetryWakeWindow(sessionId, null)
     this.host.state.reasoningTimes.delete(sessionId)
     this.host.state.toolTimes.delete(sessionId)
+    // The reconcile gate is per-session state like the two maps above: leaving
+    // the stamp behind would keep the entry in a process-lifetime map.
+    this.host.state.workingStatusReconciledAt.delete(sessionId)
     this.host.state.generationClock.dropSession(sessionId)
     this.host.handledIdleSessions.delete(sessionId)
     this.host.state.userAbortedSessions.delete(sessionId)
@@ -856,6 +860,14 @@ export class ChatEngineTurnsSessions {
     // last event and read as stalled the moment the watchdog first fired.
     const info = this.host.sessionRegistry.get(sessionId)
     if (info) info.lastWorkEventAt = Date.now()
+    // Arm the same inactivity watchdog a harness `working` status arms. The
+    // optimistic working state is set here, before the harness reports
+    // anything, so a turn whose harness accepts the prompt and then never
+    // emits a single event (no status, no stream) would otherwise have no
+    // watchdog at all and park the thread in silence for the life of the
+    // process. Nothing here kills a live turn: the watchdog's own grace window
+    // and its silence ceiling decide, exactly as they do for a reported one.
+    this.host.units['lifecycle'].startSessionWatchdog(sessionId)
     if (changed) {
       this.host.sessionStatuses.set(sessionId, { state: 'working' })
       this.host.broadcast({
@@ -865,6 +877,86 @@ export class ChatEngineTurnsSessions {
       })
     }
     void this.host.units['thread-lifecycle'].reconcileWorkingThreadStatus(sessionId)
+  }
+
+  /**
+   * Publish one line about the work this app is doing before the harness runs.
+   *
+   * A remote turn spends real time on preparation the harness never sees (an
+   * Oven's capability host, its service bundle, its checkout), and a trace that
+   * stays silent through it reads as a send that did nothing. The note replaces
+   * the previous one instead of opening a turn of its own, and the start time
+   * the running turn already reported is kept, so the trace's clock never
+   * restarts on a note.
+   */
+  publishWorkingNote(sessionId: string, note: string): void {
+    const current = this.host.sessionStatuses.get(sessionId)
+    const status: AgentSessionStatus = {
+      state: 'working',
+      note,
+      ...(current?.state === 'working' && current.startedAt !== undefined
+        ? { startedAt: current.startedAt }
+        : {})
+    }
+    this.host.sessionStatuses.set(sessionId, status)
+    this.host.broadcast({ type: 'session.status', sessionId, status })
+  }
+
+  /**
+   * Move this thread's session to a host process of its own.
+   *
+   * The transcript is the session, so a move is a resume on another host: the
+   * thread keeps its history, its native session id, and its place in the
+   * conversation. Used when one host is crowded or when a diagnosis needs the
+   * session isolated, and it is the app-level entry the supervisor's move has.
+   */
+  async moveSessionToNewHost(
+    projectId: string,
+    threadId: string
+  ): Promise<HarnessSessionMoveResult> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    const thread = await this.host.threadManager.getThread(projectId, threadId)
+    if (!thread?.sessionId) {
+      throw new Error('No active session for this thread')
+    }
+    const driverId = thread.settings?.harnessId ?? DEFAULT_HARNESS
+    const account = await this.host.state.accountRegistry.resolveForProvider(
+      driverId,
+      thread.settings?.providerId,
+      thread.sessionAccountId ?? thread.settings?.accountId
+    )
+    const { driver, projectPath } = await this.host.resolve(
+      projectId,
+      driverId,
+      threadId,
+      account.id
+    )
+    if (!driver.moveSessionToHost) {
+      return {
+        moved: false,
+        harnessId: driverId,
+        hostPid: null,
+        nativeSessionId: thread.sessionId,
+        detail: `${driver.name} runs a session as one process and cannot move it.`
+      }
+    }
+    if (this.host.state.activeCompactions.has(thread.sessionId)) {
+      return {
+        moved: false,
+        harnessId: driverId,
+        hostPid: null,
+        nativeSessionId: thread.sessionId,
+        detail: 'The session is compacting; move it once the checkpoint finishes.'
+      }
+    }
+    const moved = await driver.moveSessionToHost(projectPath, thread.sessionId)
+    return {
+      moved: true,
+      harnessId: driverId,
+      hostPid: moved.hostPid,
+      nativeSessionId: moved.nativeSessionId
+    }
   }
 
   /** Ask the active harness to summarize and compact this thread's context. */
@@ -1578,6 +1670,22 @@ export class ChatEngineTurnsSessions {
   ): Promise<unknown | undefined> {
     const labelForMessage = label
     return new Promise((resolve, reject) => {
+      // A session runs one turn at a time, so a second waiter for the same
+      // session is a caller starting a turn over one that is still running.
+      // Overwriting the previous waiter would orphan its promise forever, which
+      // the renderer can only report as an opaque `reply was never sent`. The
+      // previous turn is settled with a real error instead.
+      const pending = this.host.state.completionWaiters.get(sessionId)
+      if (pending) {
+        Logger.info(
+          `${labelForMessage}: a new turn started before the previous one settled; failing the stale wait.`
+        )
+        this.host.state.completionWaiters.delete(sessionId)
+        if (pending.timer !== undefined) clearTimeout(pending.timer)
+        pending.reject(
+          new Error(`${labelForMessage} was replaced by a newer turn before it finished`)
+        )
+      }
       const armTimer = (): ReturnType<typeof setTimeout> | undefined => {
         if (timeoutMs === null) return undefined
         return setTimeout(() => {

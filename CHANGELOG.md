@@ -75,10 +75,42 @@ All notable changes to CodeInOven are documented here. This project follows
   browser inherits from Chromium's root store without a code change; 45.3.2
   saves cookies set shortly before quitting, which is the same race the
   embedded browser's own flush closes (`src/main/browser/browser-service/
-  browser-session-cookies.ts`), plus upstream ANGLE, Skia and V8 backports and
+browser-session-cookies.ts`), plus upstream ANGLE, Skia and V8 backports and
   the Chromium patch above.
 
 ### Fixed
+
+- **A working trace keeps counting while its turn is still running, so a stuck
+  run can no longer read as minutes of work.** The header measured the turn's
+  mirrored rows: once the harness closed a message and went quiet between steps,
+  the transcript read the turn as completed and the trace froze at the last step
+  it had written, so a run that had been going 44 minutes showed 4 while the row
+  underneath it kept spinning. A live session on the turn now keeps its trace
+  live whatever the mirrored rows say, and a settled trace ends its duration at
+  the instant the turn's closing message landed instead of at its last step, so
+  the header states what the turn's own duration states
+  (`ThreadViewConversation-turn-trace.svelte`, `WorkingTrace.svelte`,
+  `working-trace-span.ts`).
+- **Answering an agent's question no longer restarts the trace's clock.** The
+  app's record of an answer is a user-role row, and the live trace measured from
+  the newest such row, so answering mid-turn made minutes of work look like the
+  whole turn. The anchor now skips every row that rides mid-turn instead of
+  opening one — activity notices, answered-question records and a steer the
+  harness has not taken — the same boundary the main process folds its turn
+  stream by (`thread-turn-parts.ts`, `ThreadView-poll-stream-parts.svelte.ts`).
+- **The menu bar icon no longer keeps an exclamation for a problem nothing on
+  screen shows.** The attention predicate counted every `working-paused`,
+  `awaiting_approval` and unread `failed` row, including orchestration children:
+  a worker or pawn left parked when its coordinator settled is never listed by
+  the rail (it is folded into the coordinator's row), so the light had nothing to
+  open and no action could clear it, and a paused child even kept its retry armed
+  on a session no task was waiting for. The predicate now counts what a surface
+  can actually show (archived rows and children of a settled coordinator are out,
+  `main/system/background-work-state.ts`), and a new sweep closes those children
+  out as `interrupted` when their coordinator settles or when a launch finds them
+  stranded, keeping their activity stamp so no finished orchestration resurfaces
+  in a list (`main/chat/coordinator-child-settle.ts`, wired to the thread corpus
+  and the launch repair pass).
 
 - **A page can no longer drag the app window, which is what made an Azure
   sign-in impossible to click.** Opening Microsoft's "You don't have access to

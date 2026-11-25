@@ -296,8 +296,48 @@ export function validatePromptReferences(
     const comment = reference.comment
       ? validateBoundedString(reference.comment, `Prompt reference ${index + 1} comment`, 1, 2_000)
       : undefined
-    return { id, label, text, ...(comment ? { comment } : {}) }
+    const kind = validatePromptReferenceKind(reference.kind, index)
+    if (kind === 'thread') {
+      // An attached conversation travels by identity: the chip on the message
+      // opens it, and the turn's hidden context already names it to the agent.
+      return {
+        id,
+        label,
+        text,
+        ...(comment ? { comment } : {}),
+        kind,
+        threadId: validateEntityId(reference.threadId, `Prompt reference ${index + 1} thread`, 256),
+        projectId: reference.projectId
+          ? validateEntityId(reference.projectId, `Prompt reference ${index + 1} project`, 256)
+          : undefined
+      }
+    }
+    return { id, label, text, ...(comment ? { comment } : {}), ...(kind ? { kind } : {}) }
   })
+}
+
+/** The kinds a prompt reference may carry. */
+const PROMPT_REFERENCE_KINDS: ReadonlySet<string> = new Set([
+  'selection',
+  'design',
+  'page',
+  'file',
+  'video',
+  'image',
+  'svg',
+  'html',
+  'thread'
+])
+
+function validatePromptReferenceKind(
+  kind: unknown,
+  index: number
+): PromptReference['kind'] | undefined {
+  if (kind === undefined || kind === null) return undefined
+  if (typeof kind !== 'string' || !PROMPT_REFERENCE_KINDS.has(kind)) {
+    throw new TypeError(`Prompt reference ${index + 1} kind is not a known kind`)
+  }
+  return kind as PromptReference['kind']
 }
 
 export function budgetHiddenContext(context: string, availableInputTokens: number): string {

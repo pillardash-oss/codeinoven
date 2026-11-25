@@ -14,10 +14,12 @@ import {
 import { CREATE_ASSIGNMENT_TOOL_NAME } from '../../../../lib/engineering-tools'
 import { PAWN_AGENT_TOOL_NAME } from '../../../../lib/pawn-tools'
 import {
+  unmanagedBrowserShellReason,
   unmanagedCuaShellReason,
   unmanagedProcessKillReason
 } from '../../../../lib/agent-control-policy'
 import { sensitiveFileTargets } from '../../../../lib/sensitive-file-targets'
+import { tempWorkspaceReferences, tempWorkspaceRefusal } from '../../../../lib/temp-workspace'
 import { CIO_SENSITIVE_ACCESS_REASON_TOOL_NAME } from '../../../../lib/core-tools'
 import {
   DEFAULT_BUNDLED_PI_FILE_PATTERNS,
@@ -29,9 +31,9 @@ export function piCoreToolsHeaderSource(
   sensitiveSecretRoot?: string
 ): string {
   return `import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { open, readdir, rm, stat } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import {
@@ -64,6 +66,56 @@ const CIO_PERMANENT_SENSITIVE_FILE_PATTERNS = ${JSON.stringify(
   )}
 
 const sensitiveFileTargets = ${sensitiveFileTargets.toString()}
+
+// <cio-temp-workspace-policy>
+// The OS temp directory is banned for agent work, and the ban is enforced here
+// rather than left to a card: a temp path is never something to approve, it is
+// work in the wrong place. Reads stay allowed so a file the user attached from
+// temp still opens; writes, edits and every shell command are refused with the
+// session's own scratch folder named.
+const tempWorkspaceReferences = ${tempWorkspaceReferences.toString()}
+const tempWorkspaceRefusal = ${tempWorkspaceRefusal.toString()}
+const CIO_TEMP_READ_TOOLS = new Set(['read', 'ls', 'grep', 'find'])
+const CIO_TEMP_PATH_FIELDS = [
+  'path',
+  'paths',
+  'file_path',
+  'filePath',
+  'filename',
+  'sourcePath',
+  'destinationPath',
+  'targetPath',
+  'oldPath',
+  'newPath',
+  'directory',
+  'root'
+]
+
+function tempWorkdirTexts(toolName, input) {
+  if (toolName === 'bash' || toolName === 'powershell' || toolName === 'cmd') {
+    return typeof input['command'] === 'string' ? [input['command']] : []
+  }
+  const texts = []
+  for (const field of CIO_TEMP_PATH_FIELDS) {
+    const value = input[field]
+    if (typeof value === 'string') texts.push(value)
+    else if (Array.isArray(value)) {
+      for (const entry of value) if (typeof entry === 'string') texts.push(entry)
+    }
+  }
+  return texts
+}
+
+function tempWorkdirReason(toolName, input, cwd) {
+  // App-owned tools carry whatever the user or the app handed them (a requested
+  // file, a blocked path recorded for a reason), so they are not agent work.
+  if (typeof toolName !== 'string' || toolName.startsWith('cio_')) return undefined
+  if (CIO_TEMP_READ_TOOLS.has(toolName)) return undefined
+  const references = tempWorkspaceReferences(tempWorkdirTexts(toolName, input))
+  if (references.length === 0) return undefined
+  return tempWorkspaceRefusal(references, join(cwd, '.cio', 'tmp'))
+}
+// </cio-temp-workspace-policy>
 
 // Why the run says it needs a protected file, recorded before the card asks and
 // spent once when that card appears. A reason is only accepted for a path this
@@ -203,6 +255,11 @@ function bundledPiSensitiveFileGate(toolName, input, cwd) {
 }
 
 const unmanagedCuaShellReason = ${unmanagedCuaShellReason.toString()}
+
+// A browser the agent launches itself proves nothing about the page the app is
+// serving, so this is the same kind of block: never a card, so no tier approves
+// it. It is a parser, not a keyword search, so reading about browsers still works.
+const unmanagedBrowserShellReason = ${unmanagedBrowserShellReason.toString()}
 
 // Process lifecycle belongs to whoever started the process. A server the user
 // started is unreachable by any rule this session could justify, so this check
@@ -528,6 +585,61 @@ function isSafeNetworkCurl(toolName, input) {
   if (/(?:^|\\s)(?:-o|-O|--output|--remote-name|--remote-header-name|--output-dir|-T|--upload-file|-K|--config|--unix-socket|--netrc-file|--cookie|--cookie-jar|--cert|--key|--cacert|--capath)(?:\\s|=|$)/u.test(command)) return false
   return !/(?:^|\\s)(?:-d|--data|--data-ascii|--data-binary|--data-raw|--data-urlencode|--json|--form|-F)(?:\\s|=)["']?[^\\s"']*@/u.test(command)
 }
+
+// <cio-network-command-policy>
+// A network request is not file access, so a curl must not raise a card: not the
+// bare one-liner above, and not the probe loop an agent writes by habit
+// ('for p in 3000 5173; do curl -s -o /tmp/o.txt http://127.0.0.1:$p/; head -c 300 /tmp/o.txt; done').
+//
+// What still decides is what the command *writes*: every output path a download
+// names must land inside the session's own workspace or that machine's temp
+// directory, which is exactly the scratch the app already pre-authorised. A
+// download to anywhere else keeps its ordinary gate, and so does everything this
+// cannot prove: uploads, config reads, local file inputs, redirections, command
+// substitution, and every destructive verb.
+function isSafeNetworkCommand(command, cwd) {
+  if (typeof command !== 'string') return false
+  const text = command.trim()
+  if (!text) return false
+  if (text.charCodeAt(0) === 96 || text.includes('$(') || text.includes(String.fromCharCode(96)))
+    return false
+  if (/(?:^|[;&|]\\s*)(?:rm|rmdir|mv|chmod|chown|dd|mkfs|sudo|doas|tee|xargs|eval|exec|shutdown|reboot|poweroff|launchctl|systemctl|scp|rsync|nc|netcat)(?:\\s|$)/u.test(text)) return false
+  if (/[<>]/u.test(text)) return false
+  if (!/https?:\\/\\//iu.test(text) || /file:\\/\\//iu.test(text)) return false
+  if (/(?:^|\\s)(?:-T|--upload-file|-K|--config|--unix-socket|--netrc-file|--cookie|--cookie-jar|--cert|--key|--cacert|--capath)(?:\\s|=|$)/u.test(text)) return false
+  if (/(?:^|\\s)(?:-d|--data|--data-ascii|--data-binary|--data-raw|--data-urlencode|--json|--form|-F)(?:\\s|=)["']?[^\\s"']*@/u.test(text)) return false
+  for (const outputPath of networkOutputPaths(text)) {
+    if (!isScratchPath(outputPath, cwd)) return false
+  }
+  return true
+}
+
+// Every path a download in this command would write to.
+function networkOutputPaths(command) {
+  const paths = []
+  const pattern = /(?:^|\\s)(?:-o|--output|--output-dir)(?:\\s+|=)(?:"([^"]*)"|'([^']*)'|([^\\s"';&|]+))/gu
+  let match = pattern.exec(command)
+  while (match !== null) {
+    const value = match[1] ?? match[2] ?? match[3]
+    if (value) paths.push(value)
+    match = pattern.exec(command)
+  }
+  return paths
+}
+
+// The session's own workspace: the scratch the app pre-authorises, named the
+// same way a chat's own workspace is. The machine's temp directory is NOT
+// scratch any more, because agent work there is refused outright (see
+// tempWorkspaceReferences above), so a command that names it is refused instead
+// of being quietly treated as confined.
+function isScratchPath(candidate, cwd) {
+  // A leading tilde is the shell's home, not a path this can resolve, so it is
+  // never assumed to be scratch.
+  if (candidate.startsWith('~')) return false
+  const resolved = isAbsolute(candidate) ? resolve(candidate) : resolve(cwd, candidate)
+  return isWithinPath(resolved, cwd)
+}
+// </cio-network-command-policy>
 
 function isProtectedPath(candidatePath) {
   return PROTECTED_PATH_PATTERNS.some((pattern) => pattern.test(candidatePath)) ||

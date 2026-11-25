@@ -33,6 +33,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { relativeTimeClock } from '$lib/relative-time.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
+  import type { ThreadStatusTone } from '$shared/thread-status-policy'
   import { DON_ASSISTANT_ID, isAssistantSetupThread, type Thread } from '$shared/types'
 
   /**
@@ -85,8 +86,9 @@
     groupAssistant ? assistantAccentColor(groupAssistant) : 'var(--color-muted)'
   )
   /**
-   * Don holds one thread for its whole life, so tabs, a count and a per-thread
-   * close would say nothing its name does not.
+   * Don's conversations are tabs like any other assistant's threads: one per topic,
+   * each with its own context and its own name. The mark, the plus and the strip
+   * therefore behave exactly as they do for the rest of the roster.
    */
   let isDon = $derived(groupAssistant?.id === DON_ASSISTANT_ID)
 
@@ -111,15 +113,38 @@
   let openGroup = $derived(groupThreads.filter((thread) => !thread.pinned))
 
   /**
-   * Whether the open assistant is working anywhere.
+   * The state the open assistant's mark reports, taken from its own threads.
    *
-   * The mark beside its name is the one thing that always stays on screen, so it
-   * is where its work has to be visible: walking to another view and back landed
-   * on a conversation with no trace, no spinner and nothing to say a run was
-   * still going. The same rule the rows and tabs use decides it, so the header
-   * can never disagree with a badge about whether this assistant is working.
+   * The assistant's colour is its identity; its state is not. The mark reads the
+   * same badge every row and tab reads and wears that badge's own tone: the
+   * thread working, parked on the user, holding a reviewable spec, or failed. The
+   * most urgent state wins, because the mark stands for the whole assistant.
    */
-  let assistantWorking = $derived(groupThreads.some((thread) => isThreadLiveWorking(thread)))
+  const ASSISTANT_STATE_PRIORITY: Record<ThreadStatusTone, number> = {
+    error: 6,
+    attention: 5,
+    missed: 5,
+    spec: 4,
+    'working-paused': 3,
+    working: 2,
+    done: 1,
+    todo: 0
+  }
+
+  let assistantState = $derived.by(
+    (): { tone: ThreadStatusTone; label: string; working: boolean } | null => {
+      let best: { tone: ThreadStatusTone; label: string; working: boolean } | null = null
+      for (const thread of groupThreads) {
+        const liveWorking = isThreadLiveWorking(thread)
+        const badge = statusBadgeForThread(thread, liveWorking)
+        const tone = badge.tone
+        if (!tone || tone === 'todo' || tone === 'done') continue
+        if (best && ASSISTANT_STATE_PRIORITY[tone] <= ASSISTANT_STATE_PRIORITY[best.tone]) continue
+        best = { tone, label: badge.label, working: tone === 'working' && liveWorking }
+      }
+      return best
+    }
+  )
 
   /** Whose arrangement the strip remembers, per group. */
   let orderKey = $derived(groupAssistant?.id ?? UNASSIGNED_ORDER_KEY)
@@ -480,18 +505,20 @@
           >
             <CioEllipsis size={11} class="text-muted" />
           </span>
-          <!-- Its work belongs on the mark itself: under the pointer the mark
-               turns into the menu ellipsis, so the dot sits at its foot and
+          <!-- Its state belongs on the mark itself: under the pointer the mark
+               turns into the menu ellipsis, so the badge sits at its foot and
                stays visible either way. -->
-          {#if assistantWorking}
+          {#if assistantState}
             <span
-              class="pointer-events-none absolute -right-1 -bottom-1 flex size-2 items-center justify-center"
-              role="img"
-              aria-label="{groupLabel} is working"
-              title="{groupLabel} is working"
+              class="pointer-events-none absolute -right-1.5 -bottom-1.5 flex items-center justify-center"
             >
-              <span class="absolute size-2 animate-ping rounded-full bg-accent opacity-60"></span>
-              <span class="relative size-2 rounded-full bg-accent"></span>
+              <StatusBadge
+                tone={assistantState.tone}
+                variant={assistantState.working ? 'spinner' : 'dot'}
+                size="sm"
+                title={assistantState.label}
+                class="rounded-full"
+              />
             </span>
           {/if}
         </span>
@@ -503,15 +530,19 @@
     {/if}
     <span class="max-w-40 truncate">{groupLabel}</span>
     {#if groupAssistant}
-      <!-- New task belongs to the assistant named right beside it, so it lives
-           here instead of with the view's other actions. -->
+      <!-- New work belongs to the assistant named right beside it, so it lives
+           here instead of with the view's other actions. For Don the thing to
+           create is another conversation, not a task: a task is a scheduled job
+           of an assistant, and Don's job is the conversation itself. -->
       <button
         type="button"
         class="flex size-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        aria-label="New task in {groupLabel}"
-        title="New task"
+        aria-label={isDon ? `New conversation with ${groupLabel}` : `New task in ${groupLabel}`}
+        title={isDon ? 'New conversation' : 'New task'}
         onclick={() => {
-          if (groupAssistant) assistantHeaderTabs.createTask(groupAssistant)
+          if (!groupAssistant) return
+          if (isDon) assistantHeaderTabs.createDonConversation(groupAssistant)
+          else assistantHeaderTabs.createTask(groupAssistant)
         }}
       >
         <CioPlus size={12} />
@@ -519,106 +550,104 @@
     {/if}
   </span>
 
-  {#if !isDon}
-    <div
-      data-tab-scroll
-      class="min-w-0 flex-1 overflow-x-auto overscroll-x-contain"
-      aria-label="{groupLabel} threads"
-    >
-      <!-- Pinned threads hold the left edge, right beside the assistant they
+  <div
+    data-tab-scroll
+    class="min-w-0 flex-1 overflow-x-auto overscroll-x-contain"
+    aria-label="{groupLabel} threads"
+  >
+    <!-- Pinned threads hold the left edge, right beside the assistant they
            belong to, and the open group keeps the right: the spacer between them
            is what keeps the two apart when both are narrow. -->
-      <div class="flex h-full w-full max-w-full items-center gap-0.5">
-        <div class="flex shrink-0 items-center gap-0.5">
-          {#each visiblePinned as thread (thread.id)}
-            {@render threadTab(thread, true)}
-          {/each}
+    <div class="flex h-full w-full max-w-full items-center gap-0.5">
+      <div class="flex shrink-0 items-center gap-0.5">
+        {#each visiblePinned as thread (thread.id)}
+          {@render threadTab(thread, true)}
+        {/each}
 
-          {#if hiddenPinned.length > 0}
-            <button
-              type="button"
-              class="flex min-h-8 shrink-0 items-center px-2 text-[0.6875rem] font-medium tabular-nums transition-colors {overflow ===
-              'pinned'
-                ? 'bg-selected text-foreground'
-                : 'text-muted hover:bg-elevated hover:text-foreground'}"
-              aria-haspopup="menu"
-              aria-expanded={overflow === 'pinned'}
-              aria-label="Show {hiddenPinned.length} more pinned threads"
-              title="Show {hiddenPinned.length} more pinned threads"
-              onclick={(event: MouseEvent) => toggleOverflow('pinned', event)}
-            >
-              +{hiddenPinned.length}
-            </button>
-          {/if}
-        </div>
-
-        {#if pinnedGroup.length > 0 && openGroup.length > 0}
-          <!-- The two groups never mix: the rule is the boundary a tab crosses
-               when it is pinned or unpinned. -->
-          <div class="mx-1 h-5 w-px shrink-0 bg-border" aria-hidden="true"></div>
+        {#if hiddenPinned.length > 0}
+          <button
+            type="button"
+            class="flex min-h-8 shrink-0 items-center px-2 text-[0.6875rem] font-medium tabular-nums transition-colors {overflow ===
+            'pinned'
+              ? 'bg-selected text-foreground'
+              : 'text-muted hover:bg-elevated hover:text-foreground'}"
+            aria-haspopup="menu"
+            aria-expanded={overflow === 'pinned'}
+            aria-label="Show {hiddenPinned.length} more pinned threads"
+            title="Show {hiddenPinned.length} more pinned threads"
+            onclick={(event: MouseEvent) => toggleOverflow('pinned', event)}
+          >
+            +{hiddenPinned.length}
+          </button>
         {/if}
+      </div>
 
-        <div class="flex-1"></div>
+      {#if pinnedGroup.length > 0 && openGroup.length > 0}
+        <!-- The two groups never mix: the rule is the boundary a tab crosses
+               when it is pinned or unpinned. -->
+        <div class="mx-1 h-5 w-px shrink-0 bg-border" aria-hidden="true"></div>
+      {/if}
 
-        <div class="flex shrink-0 items-center gap-0.5">
-          {#each visibleOpen as thread (thread.id)}
-            {@render threadTab(thread, false)}
-          {/each}
+      <div class="flex-1"></div>
 
-          {#if hiddenOpen.length > 0}
-            <button
-              type="button"
-              class="flex min-h-8 shrink-0 items-center px-2 text-[0.6875rem] font-medium tabular-nums transition-colors {overflow ===
-              'open'
-                ? 'bg-selected text-foreground'
-                : 'text-muted hover:bg-elevated hover:text-foreground'}"
-              aria-haspopup="menu"
-              aria-expanded={overflow === 'open'}
-              aria-label="Show {hiddenOpen.length} more threads"
-              title="Show {hiddenOpen.length} more threads"
-              onclick={(event: MouseEvent) => toggleOverflow('open', event)}
-            >
-              +{hiddenOpen.length}
-            </button>
-          {/if}
-        </div>
+      <div class="flex shrink-0 items-center gap-0.5">
+        {#each visibleOpen as thread (thread.id)}
+          {@render threadTab(thread, false)}
+        {/each}
+
+        {#if hiddenOpen.length > 0}
+          <button
+            type="button"
+            class="flex min-h-8 shrink-0 items-center px-2 text-[0.6875rem] font-medium tabular-nums transition-colors {overflow ===
+            'open'
+              ? 'bg-selected text-foreground'
+              : 'text-muted hover:bg-elevated hover:text-foreground'}"
+            aria-haspopup="menu"
+            aria-expanded={overflow === 'open'}
+            aria-label="Show {hiddenOpen.length} more threads"
+            title="Show {hiddenOpen.length} more threads"
+            onclick={(event: MouseEvent) => toggleOverflow('open', event)}
+          >
+            +{hiddenOpen.length}
+          </button>
+        {/if}
       </div>
     </div>
+  </div>
 
-    {#if overflow}
-      <div
-        popover="manual"
-        class="fixed bottom-auto left-auto m-0 overflow-visible border-0 bg-transparent p-0"
-        {@attach captureOverflowSurface}
-        {@attach topLayer}
+  {#if overflow}
+    <div
+      popover="manual"
+      class="fixed bottom-auto left-auto m-0 overflow-visible border-0 bg-transparent p-0"
+      {@attach captureOverflowSurface}
+      {@attach topLayer}
+    >
+      <PickerMenuShell
+        bind:query={overflowQuery}
+        label={overflow === 'pinned' ? 'More pinned threads' : 'More threads'}
+        placeholder="Filter threads"
+        autofocusSearch
+        onSearchInput={() => {}}
+        onSearchKeydown={onOverflowKeydown}
       >
-        <PickerMenuShell
-          bind:query={overflowQuery}
-          label={overflow === 'pinned' ? 'More pinned threads' : 'More threads'}
-          placeholder="Filter threads"
-          autofocusSearch
-          onSearchInput={() => {}}
-          onSearchKeydown={onOverflowKeydown}
-        >
-          {#each filteredOverflow as thread (thread.id)}
-            <button
-              type="button"
-              role="menuitem"
-              class="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground hover:bg-elevated"
-              title={thread.title}
-              onclick={() => pickOverflow(thread)}
+        {#each filteredOverflow as thread (thread.id)}
+          <button
+            type="button"
+            role="menuitem"
+            class="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground hover:bg-elevated"
+            title={thread.title}
+            onclick={() => pickOverflow(thread)}
+          >
+            <span class="min-w-0 flex-1 truncate">{thread.title}</span>
+            <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed"
+              >{formatCompactAge(thread.lastActivity, relativeTimeClock.now)}</span
             >
-              <span class="min-w-0 flex-1 truncate">{thread.title}</span>
-              <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed"
-                >{formatCompactAge(thread.lastActivity, relativeTimeClock.now)}</span
-              >
-            </button>
-          {:else}
-            <p class="px-2 py-1.5 text-xs text-dimmed">No thread matches</p>
-          {/each}
-        </PickerMenuShell>
-      </div>
-    {/if}
+          </button>
+        {:else}
+          <p class="px-2 py-1.5 text-xs text-dimmed">No thread matches</p>
+        {/each}
+      </PickerMenuShell>
+    </div>
   {/if}
 
   <!-- The right-clicked tab's own actions, anchored exactly where that tab is. -->
@@ -708,12 +737,16 @@
     {/if}
     <!-- The state slot: a thin square that fills with the state's colour while
          work is live or waiting on the user, and keeps only its outline once the
-         thread is done. -->
+         thread is done. A state that names itself with a glyph (a run owned by
+         another instance, a turn blocked on a sub-agent) draws that glyph
+         instead of the square, because the still icon is the whole point of
+         those states. -->
     <StatusBadge
       stage={status.stage}
       tone={status.tone}
       kind={status.kind}
-      variant="square"
+      variant={status.variant === 'icon' ? 'icon' : 'square'}
+      icon={status.icon}
       hollow={status.stage === 'done'}
       title={status.label}
       class="shrink-0"

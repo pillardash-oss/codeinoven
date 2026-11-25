@@ -37,7 +37,7 @@ const USAGE_EVENT_FEATURE_LIST_SQL = USAGE_EVENT_FEATURES.map((feature) => `'${f
  * already on disk. A data repair that has to run exactly once per install earns
  * a version the same way, with no DDL in it.
  */
-export const DATABASE_SCHEMA_VERSION = 12
+export const DATABASE_SCHEMA_VERSION = 13
 
 export const SCHEMA_SQL = `
 -- ─── Metadata ────────────────────────────────────────────────────────────
@@ -191,6 +191,7 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
 
 export const THREAD_INDEXES_SQL = `
 CREATE INDEX IF NOT EXISTS idx_threads_status ON threads(status);
+CREATE INDEX IF NOT EXISTS idx_threads_project_scope ON threads(project_id, scope_bucket_id);
 CREATE INDEX IF NOT EXISTS idx_threads_project_listing
   ON threads(project_id, archived, pinned DESC, pinned_at DESC, sort_order, last_activity DESC);
 CREATE INDEX IF NOT EXISTS idx_threads_activity_listing

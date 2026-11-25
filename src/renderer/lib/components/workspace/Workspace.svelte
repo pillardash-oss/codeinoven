@@ -104,6 +104,9 @@
     createTask: (assistant: Assistant) => {
       void board.mergeThreadsInList.createTaskInAssistant(assistant)
     },
+    createDonConversation: (assistant: Assistant) => {
+      void board.mergeThreadsInList.createDonConversation(assistant)
+    },
     deleteAssistant: board.mergeThreadsInList.deleteAssistant
   })
   $effect(() => {
@@ -522,15 +525,13 @@
           board.switcherPanelTabs.browser.unfinishedDownloadCount > 0
             ? String(board.switcherPanelTabs.browser.unfinishedDownloadCount)
             : undefined,
-        menu: board.switcherPanelTabs.browser.menuOpen ? browserMenu : undefined,
-        onSelect: () => {
-          board.switcherPanelTabs.browser.menuOpen = false
-          board.switcherPanelTabs.toggleDockPanel('browser', board.state.focusBrowser)
-        },
+        onSelect: () =>
+          board.switcherPanelTabs.toggleDockPanel('browser', board.state.focusBrowser),
         // Wrapped rather than passed by reference: the controller's handler reads
         // `this`, and the dock calls whatever it was given without a receiver, so a
         // bare method reference threw before it could open the menu.
-        onContextMenu: (event: MouseEvent) => board.switcherPanelTabs.browser.openContextMenu(event)
+        onContextMenu: (event: MouseEvent) =>
+          void board.switcherPanelTabs.browser.openContextMenu(event)
       })
     }
 
@@ -695,7 +696,10 @@
   }
 </script>
 
-<svelte:document onpointerdowncapture={board.switcherPanelTabs.handleComposerPointerDown} />
+<svelte:document
+  onpointerdowncapture={board.switcherPanelTabs.handleComposerPointerDown}
+  onbeforeinputcapture={board.switcherPanelTabs.handleComposerTyping}
+/>
 
 <div class="flex h-full">
   <!-- Shared board.switcherPanelTabs.sidebar   Projects/Chats/Threads use WorkspaceSidebar; Assistant has its own.
@@ -831,6 +835,7 @@
               if (tab?.kind === 'coordinator') board.openThreadFromSwitcher.closeContextTab(tab.id)
             }}
             onContinueInThread={board.switcherPanelTabs.handleContinueInThread}
+            onAttachToParent={board.switcherPanelTabs.handleAttachToParentChat}
             onOpenSubagent={board.openThreadFromSwitcher.openNestedSubagent}
             navigate={board.props.navigate}
             onOpenAssistantTask={board.markThreadReadAndApply.openAssistantTask}
@@ -951,12 +956,6 @@
     onClose={() => (board.jumpToHistoryMessage.showHistoryMenu = false)}
     onSelect={board.jumpToHistoryMessage.jumpToHistoryMessage}
   />
-{/snippet}
-
-{#snippet browserMenu()}
-  {#await loadCachedPanelModule('module:lib/components/workspace/WorkspaceBrowserMenu.svelte', () => import('./WorkspaceBrowserMenu.svelte')) then { default: WorkspaceBrowserMenu }}
-    <WorkspaceBrowserMenu browser={board.switcherPanelTabs.browser} />
-  {/await}
 {/snippet}
 
 <!-- The Changes rail item's hover preview: the current change set's line totals

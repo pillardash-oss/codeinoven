@@ -1,5 +1,6 @@
 import type {
   DisplayControlAction,
+  DisplayControlOutcome,
   DisplayInputGesture,
   DisplaySourceKind
 } from '../../lib/ipc/display'
@@ -22,9 +23,19 @@ export interface DisplayCapture {
    *
    * Only the targets that answer for hardware keys implement it, and only for the
    * actions their kind advertises in `DISPLAY_CONTROLS_BY_KIND`: a screen has no
-   * home button, and offering one would be a lie in the rail.
+   * home button, and offering one would be a lie in the rail. The answer is what
+   * the press revealed, so the panel can label the next one.
    */
-  control?(action: DisplayControlAction): Promise<void>
+  control?(action: DisplayControlAction): Promise<DisplayControlOutcome | void>
+  /**
+   * What the target cannot do right now, as a sentence, or null when it can.
+   *
+   * A target has states a mirror cannot show and no press explains: a phone behind
+   * its lock screen, a simulator whose window is not on the desktop. Asked only
+   * while the panel is saying such a sentence, and again as it starts, so the
+   * sentence is a fact about this moment rather than a scolding that stays up.
+   */
+  hint?(): Promise<string | null>
   /**
    * Work the target's own screen.
    *

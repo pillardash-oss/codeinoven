@@ -1,9 +1,21 @@
 import type { Statement } from 'better-sqlite3'
 import type { Database } from '../database/database'
 import { AgentMessageRepo } from '../database/repositories/agent-message-repo'
+import { AssistantRepo } from '../database/repositories/assistant-repo'
 import { ProjectRepo } from '../database/repositories/project-repo'
-import { ThreadRepo } from '../database/repositories/thread-repo'
-import type { AgentMessage, Thread } from '../../lib/types'
+import {
+  ThreadRepo,
+  threadMatchesSearchScope,
+  type ThreadSearchOptions
+} from '../database/repositories/thread-repo'
+import {
+  ASSISTANT_SPACE_ID,
+  DEFAULT_SCOPE_BUCKET_ID,
+  GLOBAL_BROWSER_PROJECT_ID,
+  INBOX_PROJECT_ID,
+  type AgentMessage,
+  type Thread
+} from '../../lib/types'
 import {
   ERROR_LOG_FILE,
   LOGS_DIRECTORY,
@@ -83,10 +95,45 @@ export interface DiagnosticThreadSummary {
   harnessIds: string[]
   createdAt: number
   lastActivity: number
+  /** The scope bucket (sidebar group) the thread sits in, when it has one. */
+  scopeId?: string
+  /** The assistant that owns a scheduled thread, when it has one. */
+  assistantId?: string
   /** The matching passage, when the thread was found by its conversation. */
   snippet?: string
   /** How it matched: a title, a message, or meaning rather than words. */
   matchedIn?: 'title' | 'message' | 'intent'
+}
+
+/** One scope bucket (sidebar group) a search can be narrowed to. */
+export interface DiagnosticScopeGroup {
+  id: string
+  name: string
+  threadCount: number
+  archived?: boolean
+}
+
+/** One project and the scopes inside it, as container ids to narrow a search. */
+export interface DiagnosticProjectGroup {
+  id: string
+  name: string
+  /** The hidden container a project id resolves to, when it is not a project. */
+  kind: 'project' | 'inbox' | 'assistant' | 'browser'
+  threadCount: number
+  scopes: DiagnosticScopeGroup[]
+}
+
+/** One assistant, the container a scheduled thread search can be narrowed to. */
+export interface DiagnosticAssistantGroup {
+  id: string
+  name: string
+  paused: boolean
+  threadCount: number
+}
+
+export interface DiagnosticGroupsResult {
+  projects: DiagnosticProjectGroup[]
+  assistants: DiagnosticAssistantGroup[]
 }
 
 export interface DiagnosticMessage {
@@ -247,8 +294,60 @@ function summarizeDiagnosticThread(
     lastActivity: thread.lastActivity
   }
   if (matchedIn) summary.matchedIn = matchedIn
+  if (thread.scopeBucketId) summary.scopeId = thread.scopeBucketId
+  if (thread.assistantId) summary.assistantId = thread.assistantId
   if (snippet) summary.snippet = redactSensitiveText(snippet).slice(0, MAX_MESSAGE_TEXT_LENGTH)
   return summary
+}
+
+/** Which hidden container a project id resolves to, for the group listing. */
+function projectGroupKind(projectId: string): DiagnosticProjectGroup['kind'] {
+  if (projectId === INBOX_PROJECT_ID) return 'inbox'
+  if (projectId === ASSISTANT_SPACE_ID) return 'assistant'
+  if (projectId === GLOBAL_BROWSER_PROJECT_ID) return 'browser'
+  return 'project'
+}
+
+/**
+ * Read one project's scope board (a JSON document) into boundable group ids.
+ * A project that never used the board still has its Default scope, which is
+ * where every one of its threads lives until the user creates another.
+ */
+function summarizeScopeGroups(
+  data: unknown,
+  projectId: string,
+  scopeCounts: Map<string, number>
+): DiagnosticScopeGroup[] {
+  const scopes: DiagnosticScopeGroup[] = []
+  let parsed: unknown = null
+  if (typeof data === 'string') {
+    try {
+      parsed = JSON.parse(data)
+    } catch {
+      parsed = null
+    }
+  }
+  const buckets = isRecord(parsed) && Array.isArray(parsed['buckets']) ? parsed['buckets'] : []
+  for (const raw of buckets) {
+    if (!isRecord(raw)) continue
+    const id = typeof raw['id'] === 'string' ? raw['id'] : ''
+    if (!id) continue
+    const scope: DiagnosticScopeGroup = {
+      id,
+      name: redactSensitiveText(typeof raw['name'] === 'string' ? raw['name'] : id),
+      threadCount: scopeCounts.get(`${projectId}\u0000${id}`) ?? 0
+    }
+    if (typeof raw['archivedAt'] === 'number') scope.archived = true
+    scopes.push(scope)
+  }
+  if (scopes.length === 0) {
+    scopes.push({
+      id: DEFAULT_SCOPE_BUCKET_ID,
+      name: 'Default',
+      threadCount: scopeCounts.get(`${projectId}\u0000${DEFAULT_SCOPE_BUCKET_ID}`) ?? 0
+    })
+  }
+  return scopes.sort((left, right) => left.name.localeCompare(right.name))
 }
 
 /** Parse a main.jsonl-style JSONL record into a bounded, redacted log entry. */
@@ -284,22 +383,26 @@ export class CioDiagnosticsService {
   private readonly threadRepo: ThreadRepo
   private readonly messageRepo: AgentMessageRepo
   private readonly projects: ProjectRepo
+  private readonly assistants: AssistantRepo
 
   constructor(
     private readonly db: Database,
     private readonly projectNameById: () => Map<string, string>,
     /**
      * Hybrid thread search (keyword plus semantic), supplied by the turn's
-     * thread manager. Absent in a session without one, and the title search
-     * below is then the whole answer.
+     * thread manager. It takes the same narrowing options a caller passes, so a
+     * search can be scoped to a project, a scope, or an assistant. Absent in a
+     * session without one, and the title search below is then the whole answer.
      */
     private readonly threadSearch?: (
-      query: string
+      query: string,
+      options: ThreadSearchOptions
     ) => Promise<import('../../lib/types').ThreadSearchResult[]>
   ) {
     this.threadRepo = new ThreadRepo(db)
     this.messageRepo = new AgentMessageRepo(db)
     this.projects = new ProjectRepo(db)
+    this.assistants = new AssistantRepo(db)
   }
 
   /** Find a thread by id, falling back to an exact (case-insensitive) title match. */
@@ -334,13 +437,17 @@ export class CioDiagnosticsService {
    * search provider, or a search that found nothing, falls back to matching
    * titles, which is what this action answered before.
    */
-  async searchThreads(query: string): Promise<DiagnosticThreadSummary[]> {
+  async searchThreads(
+    query: string,
+    options: ThreadSearchOptions = {}
+  ): Promise<DiagnosticThreadSummary[]> {
     const needle = query.trim()
     if (!needle) return []
     if (this.threadSearch) {
-      const results = await this.threadSearch(needle).catch(() => [])
+      const results = await this.threadSearch(needle, options).catch(() => [])
       if (results.length > 0) {
         return results
+          .filter((result) => threadMatchesSearchScope(result.thread, options))
           .slice(0, MAX_THREAD_LIST_RESULTS)
           .map((result) =>
             this.summarize(
@@ -356,9 +463,79 @@ export class CioDiagnosticsService {
     const all = await this.threadRepo.listAllForHydrationViaWorker({ limit: 500 })
     const names = this.projectNameById()
     return all
-      .filter((thread) => thread.title.toLocaleLowerCase().includes(lowered))
+      .filter(
+        (thread) =>
+          threadMatchesSearchScope(thread, options) &&
+          thread.title.toLocaleLowerCase().includes(lowered)
+      )
       .slice(0, MAX_THREAD_LIST_RESULTS)
       .map((thread) => this.summarize(thread, names.get(thread.projectId) ?? '', 'title'))
+  }
+
+  /**
+   * List the containers a thread search can be narrowed to: every project with
+   * its scope buckets (the sidebar groups), and every assistant.
+   *
+   * These are exactly the ids `search_threads` accepts as `project_id`,
+   * `scope_id`, and `assistant_id`, so an agent looks them up here instead of
+   * guessing an id or reading every project. Counts are live, unarchived rows.
+   */
+  async listGroups(projectId?: string): Promise<DiagnosticGroupsResult> {
+    const wanted = projectId?.trim() || null
+    const [projects, assistants] = await Promise.all([
+      this.projects.listViaWorker(),
+      this.assistants.listViaWorker()
+    ])
+    const [boards, counts] = await Promise.all([
+      this.db.queryViaWorker('SELECT project_id, data FROM scope_boards', [], 0),
+      this.db.queryViaWorker(
+        `SELECT project_id, scope_bucket_id, assistant_id, COUNT(*) AS thread_count
+           FROM threads WHERE archived = 0
+          GROUP BY project_id, scope_bucket_id, assistant_id`,
+        [],
+        0
+      )
+    ])
+    const projectCounts = new Map<string, number>()
+    const scopeCounts = new Map<string, number>()
+    const assistantCounts = new Map<string, number>()
+    for (const row of counts.ok ? counts.rows : []) {
+      const rowProjectId = typeof row['project_id'] === 'string' ? row['project_id'] : ''
+      const rowScopeId = typeof row['scope_bucket_id'] === 'string' ? row['scope_bucket_id'] : ''
+      const rowAssistantId = typeof row['assistant_id'] === 'string' ? row['assistant_id'] : ''
+      const count = typeof row['thread_count'] === 'number' ? row['thread_count'] : 0
+      if (!rowProjectId) continue
+      projectCounts.set(rowProjectId, (projectCounts.get(rowProjectId) ?? 0) + count)
+      if (rowScopeId) {
+        const scopeKey = `${rowProjectId}\u0000${rowScopeId}`
+        scopeCounts.set(scopeKey, (scopeCounts.get(scopeKey) ?? 0) + count)
+      }
+      if (rowAssistantId) {
+        assistantCounts.set(rowAssistantId, (assistantCounts.get(rowAssistantId) ?? 0) + count)
+      }
+    }
+    const boardData = new Map<string, unknown>()
+    for (const row of boards.ok ? boards.rows : []) {
+      const boardProjectId = typeof row['project_id'] === 'string' ? row['project_id'] : ''
+      if (boardProjectId) boardData.set(boardProjectId, row['data'])
+    }
+    return {
+      projects: projects
+        .filter((project) => !wanted || project.id === wanted)
+        .map((project) => ({
+          id: project.id,
+          name: redactSensitiveText(project.name),
+          kind: projectGroupKind(project.id),
+          threadCount: projectCounts.get(project.id) ?? 0,
+          scopes: summarizeScopeGroups(boardData.get(project.id), project.id, scopeCounts)
+        })),
+      assistants: assistants.map((assistant) => ({
+        id: assistant.id,
+        name: redactSensitiveText(assistant.name),
+        paused: assistant.paused === true,
+        threadCount: assistantCounts.get(assistant.id) ?? 0
+      }))
+    }
   }
 
   /**

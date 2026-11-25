@@ -9,13 +9,20 @@
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { NativeFloatingPanel } from '$lib/native-floating-panel.svelte'
-  import { registerOverlayClose } from '$lib/overlay-close.svelte'
+  import {
+    registerOverlayClose,
+    isTopOverlay,
+    promoteOverlay,
+    type CloseHandler
+  } from '$lib/overlay-close.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { dockStack, type DockLayer } from '$lib/dock-stack.svelte'
   import {
     registerModalPrimaryAction,
     findPanelPrimaryAction,
     findFirstTextField,
-    focusOwnsEnter
+    focusOwnsEnter,
+    panelHoldsFocus
   } from '$lib/modal-primary-action.svelte'
 
   interface Props {
@@ -52,13 +59,18 @@
      */
     storageKey?: string
     /**
-     * Stacking layer. `surface` sits with the app's other floating panels at
+     * Stacking band. `surface` sits with the app's other floating panels at
      * `z-50`. `top` lifts the panel above the full screen surfaces (terminal,
      * browser, file editor and the pull request reader all render through
      * `ui/Modal.svelte` at `z-60`), which the pull request sheet needs because
      * it can be opened from the full screen reader. Portaled menus and confirms
      * inside a `top` panel belong at `z-90` so they still clear the panel
      * itself.
+     *
+     * Inside a band the panel takes its `z-index` from the shared dock stack
+     * (`$lib/dock-stack.svelte`), so the panel (or the chip row it minimised
+     * into) that the user last worked in is the one in front. A dock snippet
+     * rendered from a `top` panel passes the same band to its `DockRow`.
      */
     layer?: 'surface' | 'top'
     /**
@@ -71,8 +83,30 @@
      * surface on top.
      */
     recordingTargets?: () => readonly string[]
+    /**
+     * Whether a navigation the user asked for elsewhere (a notification, a
+     * spotlight thread or file result) steps this panel aside.
+     *
+     * A sheet answers a question about the thing it covers, so going somewhere
+     * else closes it. A dockable editor is work in progress that the user keeps
+     * while they move around the app, so it opts out: the panel still answers
+     * Escape and the close-surface shortcut, it simply stops counting as a
+     * surface a navigation must close.
+     */
+    closesOnNavigation?: boolean
     /** Initial panel height before viewport clamping. */
     defaultHeight?: number
+    /**
+     * The panel's place among the panels opened before it.
+     *
+     * A panel with no remembered rectangle opens at the top right, which is the
+     * only spot it can be sure is empty when it is the only one. Several panels of
+     * the same kind can be open at once (one env editor per project, for
+     * instance), and stacking them exactly would leave only the last one visible,
+     * so each one steps down and in from the previous. It never moves a panel the
+     * user already placed, because the saved rectangle wins.
+     */
+    cascadeIndex?: number
     /** Tooltip/aria label shown on the draggable header. */
     dragLabel?: string
     /**
@@ -132,7 +166,9 @@
     storageKey = `${APP_SLUG}.harnessTasksPanel.v1`,
     layer = 'surface',
     recordingTargets,
+    closesOnNavigation = true,
     defaultHeight = 560,
+    cascadeIndex = 0,
     dragLabel = 'Drag to move the task panel',
     headerActions,
     headerTitle,
@@ -143,6 +179,8 @@
   }: Props = $props()
 
   const PANEL_MARGIN = 12
+  /** How far a cascade step moves a panel down and in from the previous one. */
+  const CASCADE_STEP = 28
   const MIN_PANEL_WIDTH = 360
   const MAX_PANEL_WIDTH = 640
   const MIN_PANEL_HEIGHT = 240
@@ -167,6 +205,12 @@
 
   function preferredHeight(): number {
     return Math.max(MIN_PANEL_HEIGHT, defaultHeight)
+  }
+
+  /** How far a panel with no remembered rectangle steps from the first one. */
+  function cascadeOffset(): number {
+    if (saved) return 0
+    return Math.max(0, cascadeIndex) * CASCADE_STEP
   }
 
   /**
@@ -235,11 +279,14 @@
 
   let width = $state(initialWidth)
   let height = $state(initialHeight)
+  const initialOffset = cascadeOffset()
   let position = $state({
     x: saved
       ? clampX(saved.x, initialWidth)
-      : Math.max(PANEL_MARGIN, window.innerWidth - initialWidth - PANEL_MARGIN),
-    y: saved ? clampY(saved.y, initialHeight) : PANEL_MARGIN * 2
+      : clampX(window.innerWidth - initialWidth - PANEL_MARGIN - initialOffset, initialWidth),
+    y: saved
+      ? clampY(saved.y, initialHeight)
+      : clampY(PANEL_MARGIN * 2 + initialOffset, initialHeight)
   })
 
   let dragging = $state(false)
@@ -402,17 +449,54 @@
   // not an overlay on view, so the shortcut belongs to the surface actually in
   // front of the user, and `isOverlayOpen()` must not keep reporting an overlay
   // for an off-screen chip.
+  //
+  // Several panels of the same kind can be open at once, so the handler is kept
+  // here too: the Escape listener below and a click inside the panel both have
+  // to know whether this panel is the one that owns the key.
+  let closeHandler: CloseHandler | null = null
+
+  /**
+   * This panel's place among the floating dock surfaces.
+   *
+   * Several dockable panels can be open at once, and the minimized chip rows
+   * share the same band, so a fixed `z-index` left the front-most panel to the
+   * DOM order. The panel joins the shared stack while it is expanded and
+   * promotes itself whenever the user works in it, which is what keeps the
+   * panel (or the chip row just dragged) above every other dock in the band.
+   */
+  const stackId = `dockable-modal-${crypto.randomUUID()}`
+  const stackLayer = $derived<DockLayer>(layer === 'top' ? 'top' : 'surface')
+  const zIndex = $derived(dockStack.zIndex(stackLayer, stackId))
+
   $effect(() => {
+    // A minimized panel is not on view: its chip row carries the stack place
+    // instead, so the pair never competes for the front of the band.
     if (!open || minimized) return
+    dockStack.promote(stackLayer, stackId)
+    return () => dockStack.leave(stackLayer, stackId)
+  })
+
+  function promote(): void {
+    if (closeHandler) promoteOverlay(closeHandler)
+    if (open && !minimized) dockStack.promote(stackLayer, stackId)
+  }
+
+  $effect(() => {
+    if (!open || minimized) {
+      closeHandler = null
+      return
+    }
+    const handler = (): void => {
+      if (closable) {
+        onClose()
+      } else {
+        onMinimize()
+      }
+    }
+    closeHandler = handler
     return registerOverlayClose(
-      () => {
-        if (closable) {
-          onClose()
-        } else {
-          onMinimize()
-        }
-      },
-      true,
+      handler,
+      closesOnNavigation,
       // A recording in this panel keeps Escape for itself (see the prop).
       () => recordingTargets?.() ?? []
     )
@@ -510,10 +594,16 @@
   // focus, so its resolver yields). The owner hook runs first so a panel can
   // claim the chord deterministically; otherwise the shared selector chain
   // finds the panel's own primary action.
+  //
+  // A floating panel does not own the window, so it answers the chord only while
+  // the keyboard is working in it. Without that, a panel left open beside the
+  // chat composer ran its own primary action when the user pressed the chord to
+  // send a message.
   $effect(() => {
     if (!open || minimized) return
     return registerModalPrimaryAction(() => {
       if (!panelEl || focusOwnsEnter(panelEl)) return false
+      if (!panelHoldsFocus(panelEl)) return false
       if (onPrimaryAction?.()) return true
       const action = findPanelPrimaryAction(panelEl)
       if (!action) return false
@@ -530,6 +620,9 @@
     // user restores the panel from it, and the key stays free for everything
     // else that owns Escape behind the chip.
     if (!open || minimized || !keymapState.matches('ui-close-modal', e)) return
+    // Every open panel hears this key, so only the one the user last worked in
+    // answers it; otherwise one Escape would close every panel on screen.
+    if (closeHandler && !isTopOverlay(closeHandler)) return
     // A recording in this panel owns the key and consumes the event in its own
     // capture-phase listener, so reaching this point means nothing is being
     // recorded here and the panel closes (or minimizes) as usual.
@@ -557,17 +650,17 @@
     completely dead to the mouse. That is the whole reason `layer="top"` exists.
   -->
     <div
-      class="fixed {layer === 'top'
-        ? 'z-80'
-        : 'z-50'} flex flex-col overflow-hidden border bg-surface shadow-xl outline-none {minimized
+      class="fixed flex flex-col overflow-hidden border bg-surface shadow-xl outline-none {minimized
         ? 'invisible pointer-events-none'
         : 'pointer-events-auto'}"
-      style="left: {position.x}px; top: {position.y}px; width: {width}px; height: {height}px;{nativeArmed &&
+      style="left: {position.x}px; top: {position.y}px; width: {width}px; height: {height}px; z-index: {zIndex};{nativeArmed &&
       !native.live
         ? ' opacity: 0;'
         : ''}"
       bind:this={panelEl}
       {@attach nativeMount}
+      onpointerdowncapture={promote}
+      onfocusincapture={promote}
       role="dialog"
       tabindex="-1"
       aria-label={title}
@@ -694,7 +787,14 @@
     </div>
 
     {#if minimized}
-      <div class="pointer-events-auto fixed right-4 bottom-4 {layer === 'top' ? 'z-80' : 'z-50'}">
+      <!--
+        No `z-index` here: the chip row inside is fixed and takes its own place in
+        the shared dock stack, so the row itself is the thing that comes to the
+        front when it is dragged. A `z-index` on this wrapper would make it a
+        stacking context and trap the row's place, leaving the wrapper's fixed
+        value to decide which dock covers which.
+      -->
+      <div class="pointer-events-auto fixed right-4 bottom-4">
         {@render dock()}
       </div>
     {/if}

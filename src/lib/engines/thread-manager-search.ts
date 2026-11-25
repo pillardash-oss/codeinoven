@@ -274,11 +274,15 @@ export class ThreadSearchService {
     // The same bounded FTS read the keyword pass runs, with the worker and the
     // primary connection as its two homes: this is a ranking read, not a
     // transcript scan, so it follows `keywordSearch`'s degradation instead of
-    // answering "no threads found" on an instance whose worker is down.
+    // answering "no threads found" on an instance whose worker is down. It runs
+    // on the async lane for the same reason the keyword halves do: on the
+    // interactive lane each evidence pass held every click behind it for up to
+    // a second while the user typed.
     const candidates = await this.db.queryViaWorker(
       built.fts.sql,
       built.fts.params,
-      threadSearchMessageLimit(limit) * 2
+      threadSearchMessageLimit(limit) * 2,
+      { lane: 'async' }
     )
     if (!candidates.ok) return []
     const scored = candidates.rows
@@ -342,7 +346,13 @@ export class ThreadSearchService {
     allFailed: boolean
     timedOut: boolean
   }> {
-    const options = deadlineMs === undefined ? {} : { deadlineMs }
+    // Both halves are the query the durable log shows at 5,960 ms. They are not
+    // deferrable (the palette is waiting for them) and they are not click
+    // blocking either (the palette shows its own busy state and the reads are
+    // already deadline-bounded), so they run on the async lane: their own thread
+    // and connection, where a long MATCH can never make the next click queue
+    // behind it.
+    const options = { lane: 'async' as const, ...(deadlineMs === undefined ? {} : { deadlineMs }) }
     const [title, message] = await Promise.all([
       this.db.queryViaWorker(built.title.sql, built.title.params, built.limit, options),
       built.fts

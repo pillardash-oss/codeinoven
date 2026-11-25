@@ -13,9 +13,11 @@ import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
 import { ipcErrorMessage } from '$lib/ipc-errors'
 import { composeMarkAttachments } from '$lib/annotation-composite'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
+import { turnWaitsOnSubagents } from '$lib/subagent-wait'
 import { messageId as createMessageId } from '$shared/id'
 import { classifyProviderIssue, parseUsageResetAt } from '$shared/provider-issue'
 import { ThreadMessagesCache } from './thread-messages-cache.svelte'
+import { rendererRecovery } from './renderer-recovery.svelte'
 import { threadTraceCache } from './thread-trace-cache.svelte'
 import { ThreadMessagesEvents } from './thread-messages-events.svelte'
 import {
@@ -67,6 +69,76 @@ async function withMarkAttachments(
   return composed.length > 0 ? [...attachments, ...composed] : attachments
 }
 
+/** What a user message needs to be built from, on the optimistic side of a send
+ *  or an edit. */
+interface UserMessageParts {
+  id: string
+  text: string
+  attachments: PromptAttachment[]
+  promptReferences?: PromptReference[]
+  projectReferences?: PromptProjectReference[]
+  presentation?: UserMessagePresentation
+  createdAt: number
+}
+
+/**
+ * The user message the transcript shows before the mirror answers.
+ *
+ * One builder for both paths that put words on screen: a send appends it at the
+ * tail, an edit rewrites the row it already occupies. Keeping them identical is
+ * what lets an edited message keep its identity instead of being re-created.
+ */
+function buildUserMessage(input: UserMessageParts): AgentMessage {
+  const { id, text, attachments, promptReferences, projectReferences, presentation, createdAt } =
+    input
+  return {
+    id,
+    role: 'user',
+    origin: 'user',
+    visibility: 'conversation',
+    parts: [
+      ...(!presentation
+        ? [
+            {
+              type: 'text' as const,
+              id: `${id}-text`,
+              messageID: id,
+              text
+            }
+          ]
+        : []),
+      ...attachments.map((file, index): AgentPart => ({
+        type: 'file',
+        id: `${id}-file-${index}`,
+        messageID: id,
+        mime: file.mime,
+        url: file.url,
+        filename: file.filename
+      })),
+      ...(presentation
+        ? [
+            {
+              type: 'user-presentation' as const,
+              id: `${id}-presentation`,
+              messageID: id,
+              presentation
+            }
+          ]
+        : [])
+    ],
+    references: promptReferences?.length ? promptReferences : undefined,
+    projectReferences: projectReferences?.length ? projectReferences : undefined,
+    createdAt,
+    completedAt: createdAt
+  }
+}
+
+/** The app action a message records, when it records one instead of typed text. */
+function userMessagePresentation(message: AgentMessage): UserMessagePresentation | undefined {
+  const part = message.parts.find((candidate) => candidate.type === 'user-presentation')
+  return part?.type === 'user-presentation' ? part.presentation : undefined
+}
+
 /** One older page fetched to reach the newest turn's opening prompt. A long
  *  working trace spans dozens of rows (one row per step), so this is sized to
  *  cover a whole turn in one or two round trips instead of walking it twelve
@@ -79,6 +151,10 @@ const MAX_TURN_ALIGNMENT_PAGES = 4
 
 class ThreadMessagesStore {
   #loadPromises = new Map<string, Promise<void>>()
+  /** Rows an edit rewrote, waiting for the send that owns them. A send under one
+   *  of these ids brings the row up to date in place instead of reusing it
+   *  untouched, and never appends a second copy of the same prompt. */
+  #editedMessageIds = new Set<string>()
   private cache = new ThreadMessagesCache()
   private events = new ThreadMessagesEvents(this.cache, (projectId, threadId) => {
     void this.mergeTurnAlignedTail(projectId, threadId, THREAD_MESSAGE_PRELOAD_WINDOW).catch(
@@ -118,6 +194,30 @@ class ThreadMessagesStore {
   /** Current message list for a thread, safe to use in deriveds/effects. */
   messages(projectId: string, threadId: string): AgentMessage[] {
     return this.cache.messages(projectId, threadId)
+  }
+
+  /**
+   * Whether this thread's live turn is blocked on a sub-agent.
+   *
+   * Read straight off the cached transcript, the same reactive list the trace
+   * renders, so the row's mark and the step card that caused it can never
+   * disagree. A thread with no cached messages has no turn to wait on and
+   * answers false.
+   */
+  waitsOnSubagents(projectId: string, threadId: string): boolean {
+    return turnWaitsOnSubagents(this.cache.messages(projectId, threadId))
+  }
+
+  /**
+   * Hold a thread's transcript as read by a mounted view.
+   *
+   * Returns the release. A streaming thread nobody is watching publishes on a
+   * slow cadence instead of the frame cadence, which is what keeps a dozen
+   * background runs from costing the renderer anything while the reader is
+   * looking at one conversation.
+   */
+  retain(projectId: string, threadId: string): () => void {
+    return this.cache.retain(projectId, threadId)
   }
 
   /**
@@ -199,6 +299,11 @@ class ThreadMessagesStore {
   }
 
   /** Ask the engine to drop a held steer before it reaches the harness. */
+  /** Drop a message the agent never received, after recall put it back in the composer. */
+  removeUnsentMessage(projectId: string, threadId: string, messageId: string): void {
+    this.cache.removeUnsentMessage(projectId, threadId, messageId)
+  }
+
   async discardSteer(projectId: string, threadId: string, messageId: string): Promise<void> {
     await invoke('agent:discardSteer', projectId, threadId, messageId)
   }
@@ -463,54 +568,114 @@ class ThreadMessagesStore {
     this.cache.flushReveal(threadKey(projectId, threadId))
     const entry = this.cache.entry(projectId, threadId)
     const messageId = userMessageId ?? createMessageId()
-    // A pre-seeded message (the side chat's explain prompt committed at open
-    // time) already occupies this ID, reuse it instead of appending a duplicate.
-    if (entry.messages.some((candidate) => candidate.id === messageId)) {
-      return { entry, messageId }
-    }
-    const optimistic: AgentMessage = {
+    const index = entry.messages.findIndex((candidate) => candidate.id === messageId)
+    const existing = index >= 0 ? entry.messages[index] : undefined
+    // A message already holding this ID is normally reused as-is: a pre-seeded
+    // prompt (the side chat's explain prompt committed at open time) is already
+    // exactly the row the send would build, and rewriting it would change part
+    // ids the mirror later merges by. An edit is the exception   it owns its row
+    // and the send has to bring the row up to what the agent actually receives
+    // (annotated attachments included) without appending a second prompt.
+    const edited = this.#editedMessageIds.delete(messageId)
+    if (existing && !edited) return { entry, messageId }
+    const optimistic = buildUserMessage({
       id: messageId,
-      role: 'user',
-      origin: 'user',
-      visibility: 'conversation',
-      parts: [
-        ...(!presentation
-          ? [
-              {
-                type: 'text' as const,
-                id: `${messageId}-text`,
-                messageID: messageId,
-                text
-              }
-            ]
-          : []),
-        ...attachments.map((file, index): AgentPart => ({
-          type: 'file',
-          id: `${messageId}-file-${index}`,
-          messageID: messageId,
-          mime: file.mime,
-          url: file.url,
-          filename: file.filename
-        })),
-        ...(presentation
-          ? [
-              {
-                type: 'user-presentation' as const,
-                id: `${messageId}-presentation`,
-                messageID: messageId,
-                presentation
-              }
-            ]
-          : [])
-      ],
-      references: promptReferences?.length ? promptReferences : undefined,
-      projectReferences: projectReferences?.length ? projectReferences : undefined,
-      createdAt: Date.now(),
-      completedAt: Date.now()
-    }
-    entry.messages = [...entry.messages, optimistic]
+      text,
+      attachments,
+      promptReferences,
+      projectReferences,
+      presentation,
+      // An edit keeps the row's own timestamp, so the bubble is not replayed as
+      // a brand-new arrival the reader has to watch fly in.
+      createdAt: existing?.createdAt ?? Date.now()
+    })
+    entry.messages = existing
+      ? [...entry.messages.slice(0, index), optimistic, ...entry.messages.slice(index + 1)]
+      : [...entry.messages, optimistic]
     this.cache.notify(projectId, threadId)
     return { entry, messageId }
+  }
+
+  /**
+   * Rewrite a user message in place and drop the history it replaces, in one
+   * publish, before any IPC happens.
+   *
+   * Editing is a replacement of everything below the message, never of the
+   * message itself: the reader's own words must never leave the conversation,
+   * not for a frame and not while the mirror is truncated and the turn is
+   * re-persisted. The message keeps its id and its position, so its bubble is
+   * the same element before and after, and the new text is on screen at the
+   * instant the edit is submitted.
+   */
+  beginEdit(
+    projectId: string,
+    threadId: string,
+    messageId: string,
+    text: string,
+    attachments: PromptAttachment[],
+    projectReferences: PromptProjectReference[]
+  ): AgentMessage | null {
+    this.#editedMessageIds.add(messageId)
+    return this.cache.applyEdit(projectId, threadId, messageId, (message) => {
+      const edited = buildUserMessage({
+        id: message.id,
+        text,
+        attachments,
+        projectReferences,
+        presentation: userMessagePresentation(message),
+        createdAt: message.createdAt
+      })
+      // Keep the telemetry the row already carries: an edit replaces the words
+      // and the history below them, not what the previous turn reported.
+      return {
+        ...edited,
+        origin: message.origin,
+        visibility: message.visibility,
+        ...(message.references ? { references: message.references } : {})
+      }
+    })
+  }
+
+  /**
+   * Put a composer send on screen before the checks that decide where it goes.
+   *
+   * The composer empties on submit, and the gate reading, the Engineering stage
+   * lookups and the session binding that follow are all IPC. Without this the
+   * words leave the composer and reach the transcript a round-trip later, which
+   * reads as the message vanishing. The row is marked as owned by the send, so
+   * `send` rewrites it in place (annotated attachments included) instead of
+   * reusing it as-is; `unstage` takes it back when the send is parked instead.
+   */
+  stage(
+    projectId: string,
+    threadId: string,
+    messageId: string,
+    text: string,
+    attachments: PromptAttachment[],
+    promptReferences?: PromptReference[],
+    projectReferences?: PromptProjectReference[],
+    presentation?: UserMessagePresentation
+  ): void {
+    this.appendOptimistic(
+      projectId,
+      threadId,
+      text,
+      attachments,
+      messageId,
+      promptReferences,
+      projectReferences,
+      presentation
+    )
+    this.#editedMessageIds.add(messageId)
+  }
+
+  /** Remove a staged row whose send never left (parked, refused or failed early). */
+  unstage(projectId: string, threadId: string, messageId: string): void {
+    this.#editedMessageIds.delete(messageId)
+    const entry = this.cache.entry(projectId, threadId)
+    if (!entry.messages.some((message) => message.id === messageId)) return
+    entry.messages = entry.messages.filter((message) => message.id !== messageId)
+    this.cache.notify(projectId, threadId)
   }
 
   private confirmOptimistic(
@@ -552,7 +717,10 @@ class ThreadMessagesStore {
       // Keep the optimistic user prompt as-is; the card carries the failure.
       return
     }
-    const messageError = error instanceof Error ? error.message : 'Message failed to send.'
+    // The invoke rejection still carries Electron's wrapper, which names the
+    // channel instead of the problem; the shared normalizer strips it so the
+    // card reads as the failure the user has to act on.
+    const messageError = ipcErrorMessage(error, 'Message failed to send.')
     entry.error = messageError
     // Keep the user's prompt when transport fails. Removing it makes a send
     // failure look like the conversation was wiped and loses retry context.
@@ -628,6 +796,12 @@ class ThreadMessagesStore {
       projectReferences,
       presentation
     )
+    // The turn now carries this draft, so the composer slot empties here for
+    // every surface at once: the words, the annotations, and the shared row
+    // other instances and windows read. Every delivery path comes through here
+    // (composer, queued card, headless dictation), so no path can leave a draft
+    // behind that another window would restore as a message already sent.
+    rendererRecovery.clearSentDraft(projectId, threadId)
 
     try {
       await prepare?.()
@@ -679,6 +853,8 @@ class ThreadMessagesStore {
       projectReferences,
       presentation
     )
+    // A steered message is also the draft leaving the composer.
+    rendererRecovery.clearSentDraft(projectId, threadId)
     // Hold the steered message optimistically: while the engine waits for the
     // turn's in-flight tool to end, the run stays anchored to the prompt it is
     // steering, so the held message renders under that turn's live working
@@ -931,10 +1107,33 @@ class ThreadMessagesStore {
     return kept
   }
 
+  /**
+   * The truncation half of an edit: drop the history below the edited message
+   * in the mirror, and keep that message in the cache where the optimistic
+   * rewrite already put it.
+   *
+   * The message is read back from the cache rather than passed in, so whatever
+   * the send has rewritten it to by the time the mirror answers (its annotated
+   * attachments, say) is what survives.
+   */
+  async truncateForEdit(
+    projectId: string,
+    threadId: string,
+    messageId: string
+  ): Promise<AgentMessage[]> {
+    const kept = await invoke('agent:truncateMessages', projectId, threadId, messageId)
+    const edited = this.cache
+      .messages(projectId, threadId)
+      .find((message) => message.id === messageId)
+    this.cache.applyRemoval(projectId, threadId, kept, edited)
+    return kept
+  }
+
   /** Replace the cached messages of a conversation with the kept set returned
-   *  by a temporary-chat history deletion. */
-  applyKept(projectId: string, threadId: string, kept: AgentMessage[]): void {
-    this.cache.applyRemoval(projectId, threadId, kept)
+   *  by a temporary-chat history deletion, keeping the message an edit rewrote
+   *  at the end of that set. */
+  applyKept(projectId: string, threadId: string, kept: AgentMessage[], keep?: AgentMessage): void {
+    this.cache.applyRemoval(projectId, threadId, kept, keep)
   }
 
   /**

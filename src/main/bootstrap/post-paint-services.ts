@@ -26,7 +26,7 @@ import { settingsWithAssistantTarget } from '../../lib/assistant-execution'
 import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { loadProjectWorkRoots } from '../design/work-roots-state'
-import { installAuthoredWorkScopeRoots } from '../design/authored-work-root'
+import { installAuthoredWorkScopeRoots } from '../design/authored-work'
 import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
 import { recruitedAssistantKnowledge } from '../../lib/assistant-recruit'
 import { actionEnvironmentDirectories } from '../../lib/project-env'
@@ -39,7 +39,9 @@ import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
 import {
+  backfillChangeProvenanceOnLaunch,
   prepareCheckpointIndexes,
+  prepareBackgroundCheckpointIndexes,
   runOneTimeCheckpointRepairs,
   trimHistoricalCheckpointMapsOnLaunch
 } from '../storage/checkpoint/checkpoint-startup-maintenance'
@@ -53,8 +55,13 @@ import {
   subscribeThreadCorpus,
   setBackgroundTray,
   setNotificationService,
-  setPowerWakeService
+  setPowerWakeService,
+  updateRetryWakeWindow
 } from '../chat/thread-events'
+import {
+  settleAbandonedCoordinatorChildren,
+  startCoordinatorChildSettleSweep
+} from '../chat/coordinator-child-settle'
 import { setTranscriptChangeListener } from '../../lib/engines/thread-manager-transcripts'
 import { instanceEventBus } from '../system/instance-event-bus'
 import { instanceRegistry } from '../system/instance-registry'
@@ -217,6 +224,7 @@ export async function attachWindowServices(
   }
 }
 import { reconcileInterruptedWork, watchForInstanceTakeOver } from './interrupted-work-recovery'
+import { installProbeControl } from './probe-control'
 
 declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
 
@@ -235,6 +243,13 @@ export interface PostPaintBootContext {
 export async function bootPostPaintServices(context: PostPaintBootContext): Promise<void> {
   const { state, storage, database } = context
   if (state.chatEngine || state.featuresReady) return
+  // The data gate can release this boot after recovery or shutdown has already
+  // begun: a launcher that gave up on a dead renderer, or a quit that started
+  // while the gate was still pending. Everything below is imported, constructed
+  // and queried before the graph reaches its own shutdown checks, so refuse here
+  // instead of building a service graph the process is already tearing down.
+  if (state.startupRecovery || state.quitCleanupStarted)
+    throw new Error('Feature startup was cancelled during shutdown')
   // Windows Git preparation is deliberately NOT started at boot. Its first
   // step is a GitHub lookup, then a ~50 MB PortableGit download and extract,
   // and a fresh install with no projects needs none of it. On a low-end
@@ -323,9 +338,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     scopeManager,
     scopeWorktreeService
   )
-  // Authored work (a design's or a composition's folder) belongs under the
-  // checkout the thread's scope runs in, so the design and video services ask
-  // the same authority the session and the file tree ask.
+  // Authored work is listed from every checkout a project writes it into, so a
+  // design kept in a scope's worktree is reachable from every thread instead of
+  // disappearing with the scope that happened to be on screen.
   installAuthoredWorkScopeRoots(scopeRootProvider(scopeRootResolver))
   const projectFilesService = new ProjectFilesService(
     projectManager,
@@ -1267,6 +1282,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   })
   state.threadTransfer.registerIpc()
   state.threadTransfer.start()
+  // A probe launched with CODEINOVEN_PROBE_CONTROL can start and move a turn
+  // from here, because the composer cannot be driven by synthetic input and the
+  // hand-off is exactly the thing that has to be exercised across two instances.
+  // A normal launch never arms it.
+  if (state.threadTransfer) {
+    installProbeControl({ chatEngine: state.chatEngine, threadTransfer: state.threadTransfer })
+  }
   // Custom vendor artwork is read by every `VendorIcon` the first frame mounts,
   // and the renderer only invokes feature channels once `app:featuresReady` has
   // fired. Register it ahead of that signal so the gate is truthful: registering
@@ -1318,6 +1340,27 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       }
     })
     registerProjectEnvIpc(projectEnvService)
+    // An agent's shell starts at the project root and moves into packages the way
+    // an action script does, so it sees the root env and then every group's env,
+    // deeper groups last so the nearest value wins.
+    state.chatEngine?.state.agentSecrets.setProjectEnvironmentSource(
+      async ({ projectId, threadId, projectPath }) => {
+        const groups = [
+          ...new Set((await projectEnvService.listProjectEnv(projectId)).map((file) => file.group))
+        ].sort((left, right) => left.split('/').length - right.split('/').length)
+        let environment: Record<string, string> = {}
+        for (const directory of ['', ...groups.filter((group) => group !== '')]) {
+          const resolved = await projectEnvService.environmentForLaunch({
+            projectId,
+            threadId,
+            cwd: projectPath,
+            directory
+          })
+          environment = { ...environment, ...resolved.environment }
+        }
+        return environment
+      }
+    )
 
     // `node-pty` is the only compiled native module in this graph, and it is
     // built on whichever machine packages the app. A build whose binary will not
@@ -1582,6 +1625,28 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     // the threads that are actually running.
     if (state.backgroundLifecycle) setBackgroundTray(state.backgroundLifecycle)
 
+    // The children of an orchestration exist only to serve it: the rail folds
+    // them into the coordinator's row and never lists them. The moment that
+    // coordinator settles they are unreachable, so they are closed out here
+    // instead of being left parked in `working-paused` (with a retry still armed
+    // on a session nobody is waiting for) or `awaiting_approval` forever. The
+    // same corpus that feeds the icon triggers the sweep, so a settle closes its
+    // children whether the window is open or the app is parked.
+    const coordinatorChildSettleHost =
+      state.chatEngine === null
+        ? null
+        : {
+            database,
+            threadManager: state.chatEngine.threadManager,
+            clearRetry: (sessionId: string): void => {
+              state.retryScheduler?.clear(sessionId)
+              updateRetryWakeWindow(sessionId, null)
+            }
+          }
+    state.stopCoordinatorChildSettleSweep = coordinatorChildSettleHost
+      ? startCoordinatorChildSettleSweep(coordinatorChildSettleHost)
+      : null
+
     // Everything below is independent background work: services starting plus
     // one bounded database repair sequence. None of it reads another task's
     // result, and every task already reports its own failure as non-fatal, so
@@ -1750,6 +1815,14 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
           // Settles and resumes work left in flight by a process that stopped, while
           // leaving every turn a sibling instance is still running alone.
           await reconcileInterruptedWork(state, database, 'launch')
+          // Recovery above is one of the ways a coordinator settles, and a launch
+          // that never ran a sweep leaves the children of every orchestration
+          // that finished while the app was closed still parked. One indexed read
+          // finds them, and the write is a bookkeeping settle that keeps its own
+          // activity stamp so no finished orchestration resurfaces in a list.
+          if (coordinatorChildSettleHost) {
+            await settleAbandonedCoordinatorChildren(coordinatorChildSettleHost)
+          }
         } catch (error) {
           Logger.error('Restart recovery failed (non-fatal):', error)
         }
@@ -1757,6 +1830,19 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         // Legacy checkpoint repairs, in order on the database worker. A pass that
         // has already finished is skipped instead of rescanning every checkpoint.
         await runOneTimeCheckpointRepairs(database)
+        // A turn's tool calls are often mirrored after its checkpoint settled,
+        // so its card read `Detected` on every file. These bounded passes fill in
+        // the sources its own transcript proves, and the interval below keeps
+        // doing it for turns that finish while the app stays open.
+        await backfillChangeProvenanceOnLaunch(database).catch((error: unknown) => {
+          Logger.dev('Change provenance backfill failed (non-fatal):', error)
+          return 0
+        })
+        // The trim's candidate index is built here, as background work: it holds
+        // the worker for seconds on a large install, so it waits for a quiet
+        // queue and then runs behind everything a person is waiting on. The trim
+        // below reads through it.
+        await prepareBackgroundCheckpointIndexes(database)
         // Six workers writing checkpoints made this table hundreds of megabytes
         // of project-wide file maps that no reader needs once a turn is old,
         // which is what slowed every database read until the app stalled. It is
@@ -1827,6 +1913,15 @@ function scheduleCheckpointTrim(database: Database): void {
         Logger.dev('Checkpoint trim failed (non-fatal):', error)
         return 0
       })
+      .then(() =>
+        // The same tick reads the provenance of the turns that finished since the
+        // last one: their tool calls are mirrored after the checkpoint settles,
+        // which is why their cards read `Detected` on every file.
+        backfillChangeProvenanceOnLaunch(database).catch((error: unknown) => {
+          Logger.dev('Change provenance backfill failed (non-fatal):', error)
+          return 0
+        })
+      )
       .finally(() => scheduleCheckpointTrim(database))
   }, CHECKPOINT_TRIM_INTERVAL_MS)
   timer.unref?.()

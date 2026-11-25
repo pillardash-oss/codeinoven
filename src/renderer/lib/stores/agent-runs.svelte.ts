@@ -33,6 +33,15 @@ interface AgentRunEntry {
   parkedAt: number | null
   /** User message ID that started the current turn; used as the trace key. */
   currentTurnUserMessageId: string | null
+  /** The prompt this run was last working on, kept across the idle blips a
+   *  harness reports between steps.
+   *
+   *  A harness goes idle when a tool call finishes and busy again for the next
+   *  one, and every idle clears `currentTurnUserMessageId`. Without this, the
+   *  next part read as a brand-new turn, and a new turn resets the trace's fold
+   *  state   which closed the trace   and the tool call expanded inside it   once
+   *  per step for a reader who was inspecting it. */
+  lastTurnUserMessageId: string | null
   /** Whether the working trace is currently open. */
   traceOpen: boolean
   /** Provider retry deadline (epoch ms) while this thread waits on a
@@ -44,6 +53,11 @@ interface AgentRunEntry {
    *  stays folded across remounts (a window re-bound, "Load earlier messages")
    *  instead of being force-opened again by the busy state. */
   traceUserFolded: boolean
+  /** True once a settled turn has closed its trace on its own. The close
+   *  happens once per turn, so a trace the reader watched and opened DURING the
+   *  work still folds when the answer lands; only an open from after that close
+   *  is theirs to keep. */
+  traceAutoClosed: boolean
   /** When the last busy → idle transition happened, used by the thread row
    *  badge for "last action wins" ordering against side-chat unread marks. */
   settledAt: number
@@ -84,10 +98,12 @@ class AgentRunsStore {
         busySince: null,
         parkedAt: null,
         currentTurnUserMessageId: null,
+        lastTurnUserMessageId: null,
         traceOpen: false,
         retryAt: null,
         traceUserOpened: false,
         traceUserFolded: false,
+        traceAutoClosed: false,
         settledAt: 0,
         awaitingDispatchSince: null
       }
@@ -241,10 +257,8 @@ class AgentRunsStore {
     const previousTraceUserOpened = entry.traceUserOpened
     const previousTraceUserFolded = entry.traceUserFolded
     const wasBusy = entry.busy
-    const isNewTurn =
-      busy &&
-      turnUserMessageId !== undefined &&
-      turnUserMessageId !== entry.currentTurnUserMessageId
+    const turnOwner = entry.currentTurnUserMessageId ?? entry.lastTurnUserMessageId
+    const isNewTurn = busy && turnUserMessageId !== undefined && turnUserMessageId !== turnOwner
     // A start time older than the last park is the run that was parked, not the
     // run that just resumed it. Honoring it is what kept a retried turn on the
     // parked attempt's clock, so its trace read minutes of work with no steps.
@@ -268,11 +282,16 @@ class AgentRunsStore {
     if (busy && detail) entry.activityDetail = detail
     if (!busy) entry.activityDetail = null
 
+    if (busy && turnUserMessageId !== undefined) {
+      entry.lastTurnUserMessageId = turnUserMessageId
+    }
+
     if (isNewTurn && turnUserMessageId) {
       entry.currentTurnUserMessageId = turnUserMessageId
       entry.traceOpen = false
       entry.traceUserOpened = false
       entry.traceUserFolded = false
+      entry.traceAutoClosed = false
     }
 
     // Auto-open the trace when a new turn starts; auto-close when it ends
@@ -283,8 +302,8 @@ class AgentRunsStore {
     // folded, which is exactly the state this keeps.
     if (busy && (!wasBusy || isNewTurn)) {
       if (openTrace && !entry.traceUserFolded) entry.traceOpen = true
-    } else if (!busy && !entry.traceUserOpened) {
-      entry.traceOpen = false
+    } else if (!busy) {
+      this.foldSettledTrace(entry)
     }
 
     if (
@@ -300,6 +319,31 @@ class AgentRunsStore {
     ) {
       this.#notify()
     }
+  }
+
+  /**
+   * Fold the trace a settled turn left open.
+   *
+   * Work that finished shows its answer, so the log closes by itself once and
+   * stays closed. That close is the default, never the reader's choice: a trace
+   * the reader opened themselves while the work was still running stays open
+   * when the work ends, because they are in the middle of reading the steps and
+   * a decision of theirs is not the app's to undo. Only the visit's own open is
+   * forgotten when they leave the thread (`resetTraceView`).
+   *
+   * A trace the reader never opened closes once on the first settle.
+   */
+  private foldSettledTrace(entry: AgentRunEntry): void {
+    // The reader asked for this trace. Adding the turn's last work and its
+    // answer must not slam it shut under them.
+    if (entry.traceUserOpened) return
+    if (!entry.traceAutoClosed) {
+      entry.traceOpen = false
+      entry.traceAutoClosed = true
+      entry.traceUserOpened = false
+      return
+    }
+    if (!entry.traceUserOpened) entry.traceOpen = false
   }
 
   /** Mark a non-conversation workflow operation as active without opening the prior turn trace. */
@@ -378,10 +422,17 @@ class AgentRunsStore {
     const entry = this.runs.get(threadKey(projectId, threadId))
     if (!entry) return
     if (entry.busy && entry.live) return
-    if (!entry.traceOpen && !entry.traceUserOpened && !entry.traceUserFolded) return
+    if (
+      !entry.traceOpen &&
+      !entry.traceUserOpened &&
+      !entry.traceUserFolded &&
+      !entry.traceAutoClosed
+    )
+      return
     entry.traceOpen = false
     entry.traceUserOpened = false
     entry.traceUserFolded = false
+    entry.traceAutoClosed = false
     this.#notify()
   }
 
@@ -423,9 +474,12 @@ class AgentRunsStore {
     entry.activityDetail = null
     entry.live = false
     entry.busySince = null
+    if (entry.currentTurnUserMessageId !== null) {
+      entry.lastTurnUserMessageId = entry.currentTurnUserMessageId
+    }
     entry.currentTurnUserMessageId = null
     entry.retryAt = retryAt
-    if (!entry.traceUserOpened) entry.traceOpen = false
+    this.foldSettledTrace(entry)
     if (
       entry.busy !== previousBusy ||
       entry.activity !== previousActivity ||
@@ -461,11 +515,12 @@ class AgentRunsStore {
     entry.activityDetail = null
     entry.live = false
     entry.busySince = null
+    if (entry.currentTurnUserMessageId !== null) {
+      entry.lastTurnUserMessageId = entry.currentTurnUserMessageId
+    }
     entry.currentTurnUserMessageId = null
     entry.retryAt = null
-    if (!entry.traceUserOpened) {
-      entry.traceOpen = false
-    }
+    this.foldSettledTrace(entry)
     if (
       entry.busy !== previousBusy ||
       entry.activity !== previousActivity ||

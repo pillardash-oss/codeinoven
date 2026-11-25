@@ -90,16 +90,23 @@ export interface DisplaySessionRequest {
 /**
  * How big and how active the stage is.
  *
- * Both fields exist to keep an idle panel free: `visible` pauses capture
+ * All three fields exist to keep an idle panel free: `visible` pauses capture
  * without tearing the session down (switching tabs, collapsing the dock, or
  * hiding the window all send false), and `maxDimension` is the size a source that
  * *can* capture small is asked for (the desktop one), quantized by the renderer so
  * a pixel of layout jitter does not ask for a new size every frame. A device is
  * never re-encoded to fit it: its PNG is painted at whatever the browser scales it
  * to.
+ *
+ * `streamMaxDimension` is the same size in layout pixels rather than device pixels,
+ * and it sizes the live video a device encodes. That encoder runs on the device, so
+ * asking it for twice the pixels the panel can show costs frames on a slow emulator
+ * where asking for the layout size looks identical on screen. A still frame keeps
+ * the sharper size, because it costs the device nothing while it sits there.
  */
 export interface DisplayFrameDemand {
   maxDimension: number
+  streamMaxDimension: number
   visible: boolean
 }
 
@@ -139,6 +146,30 @@ export interface DisplayCaptureState {
   input: boolean
   /** Why this target cannot be worked from the panel, when it cannot. */
   inputProblem?: string
+  /**
+   * A sentence about the target's screen right now, while it is true.
+   *
+   * Unlike `detail`, which reports a capture failure, this describes a state of
+   * the device that the mirror cannot show (a lock screen waiting on a PIN) and
+   * that ends on its own. The main process withdraws it the moment the device
+   * stops needing it, so the panel never has to guess when to take it down.
+   */
+  hint?: string
+}
+
+/**
+ * What pressing one of the target's buttons said about its screen.
+ *
+ * A hardware key is a blind press: the panel cannot see the device's state, so a
+ * single toggle that assumes it does the opposite of what was meant. The adapter
+ * reads the state as part of the press and answers here, which is what lets one
+ * button lock a lit device and unlock a dark one.
+ */
+export interface DisplayControlOutcome {
+  /** The device's screen after the press, when the adapter can tell. */
+  screenLocked?: boolean
+  /** True when the device is waiting on a credential the mirror cannot show. */
+  credentialPrompt?: boolean
 }
 
 /**
@@ -251,6 +282,9 @@ export type DisplayControlAction =
 /** What each kind can be asked to do, in the order the rail lists it. */
 export const DISPLAY_CONTROLS_BY_KIND: Record<DisplaySourceKind, readonly DisplayControlAction[]> =
   {
+    // One power key, the way the device itself has one: the adapter reads the
+    // screen's state as part of the press, so a single button locks a lit screen
+    // and unlocks a dark one instead of two buttons that can only be half right.
     android: ['home', 'back', 'recents', 'volume-up', 'volume-down', 'power'],
     // The simulator's own buttons, in the order a hand finds them. `back` is the
     // system edge swipe, `power` the side button (lock and wake), volume is the
@@ -369,9 +403,13 @@ export const invokeDisplayContract = {
   /**
    * Press one of the target's own buttons. Refused for an action the target's
    * kind does not advertise in `DISPLAY_CONTROLS_BY_KIND`, so the UI and the
-   * boundary agree without a second copy of the rule.
+   * boundary agree without a second copy of the rule. The answer says what the
+   * press revealed about the screen, so a blind toggle can label its next press.
    */
-  'display:control': {} as Contract<[sessionId: string, action: DisplayControlAction], void>,
+  'display:control': {} as Contract<
+    [sessionId: string, action: DisplayControlAction],
+    DisplayControlOutcome
+  >,
   /**
    * Work the target's own screen: tap, press, swipe, type.
    *

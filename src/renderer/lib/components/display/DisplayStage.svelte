@@ -5,6 +5,7 @@
   import CioHome from '@pdslng/cio-icon/CioHome.svelte'
   import CioLayers from '@pdslng/cio-icon/CioLayers.svelte'
   import CioLock from '@pdslng/cio-icon/CioLock.svelte'
+  import CioLockOpen from '@pdslng/cio-icon/CioLockOpen.svelte'
   import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import CioMoon from '@pdslng/cio-icon/CioMoon.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
@@ -13,6 +14,7 @@
   import { onMount } from 'svelte'
   import type { DisplayControlAction } from '$shared/ipc/display'
   import { DISPLAY_CONTROLS_BY_KIND } from '$shared/ipc/display'
+  import { ipcErrorMessage } from '$lib/ipc-errors'
   import { displayPanel } from '$lib/stores/display-panel.svelte'
   import CioVolumeDown from '$lib/components/icons/cio/CioVolumeDown.svelte'
   import CioVolumeUp from '$lib/components/icons/cio/CioVolumeUp.svelte'
@@ -57,7 +59,10 @@
     recents: { action: 'recents', label: 'Recent apps', icon: CioLayers },
     'volume-up': { action: 'volume-up', label: 'Volume up', icon: CioVolumeUp },
     'volume-down': { action: 'volume-down', label: 'Volume down', icon: CioVolumeDown },
-    power: { action: 'power', label: 'Power', icon: CioLock },
+    // One key, the way the phone has one: the device says which state its screen
+    // is in after each press, so the same button locks and unlocks rather than two
+    // buttons that can only be half right.
+    power: { action: 'power', label: 'Lock or unlock the device', icon: CioLock },
     appearance: { action: 'appearance', label: 'Switch light and dark', icon: CioMoon }
   }
 
@@ -71,6 +76,14 @@
   let controlling = $state(false)
   /** A sentence shown when the user asks for control this target cannot offer. */
   let notice = $state<string | null>(null)
+  /**
+   * The screen state the last power press reported, for this session only.
+   *
+   * A first press is blind, so the button is generic until one has happened; after
+   * it the rail can offer the action the screen actually calls for. Keyed by the
+   * session because a restart mirrors a device whose state nobody has read yet.
+   */
+  let screenState = $state<{ sessionId: string; locked: boolean } | null>(null)
   /** True while the walkthrough for a missing system grant is on screen. */
   let walkthrough = $state(false)
 
@@ -78,6 +91,15 @@
   const sourceId = $derived(tab.sourceId)
   const session = $derived(displayPanel.sessionFor(tab.id))
   const stream = $derived(session?.stream ?? null)
+  /**
+   * Where touch goes. A stream that is still connecting cannot take it and the one it
+   * replaces is already closed, so until it has a size the target's own injector does.
+   */
+  const inputStream = $derived.by(() => {
+    const incoming = session?.incoming
+    if (incoming) return incoming.width > 0 ? incoming : null
+    return stream?.ended ? null : stream
+  })
   /** The latest polled frame; a live stream paints itself and has none. */
   const polled = $derived(session?.frame ?? null)
   /** The picture's size, from the stream when one is running, else the last frame. */
@@ -89,9 +111,18 @@
   const status = $derived(
     session?.phase === 'failed' || session?.phase === 'retrying' ? session.phase : null
   )
-  const controls = $derived.by((): RailControl[] =>
-    kind ? DISPLAY_CONTROLS_BY_KIND[kind].map((action) => RAIL_CONTROLS[action]) : []
-  )
+  const controls = $derived.by((): RailControl[] => {
+    if (!kind) return []
+    const known = screenState
+    const locked = known && known.sessionId === session?.sessionId ? known.locked : null
+    return DISPLAY_CONTROLS_BY_KIND[kind].map((action) => {
+      const control = RAIL_CONTROLS[action]
+      if (action !== 'power' || locked === null) return control
+      return locked
+        ? { action, label: 'Unlock the device', icon: CioLockOpen }
+        : { action, label: 'Lock the device', icon: CioLock }
+    })
+  })
   /** Whether this kind has anything to touch at all: a screen or a window does not. */
   const touchable = $derived(controls.length > 0)
   const inputReady = $derived(session?.input === true)
@@ -109,12 +140,14 @@
     (gesture) => {
       // The mark on the picture is the receipt for a gesture that landed; one the
       // target refuses is said in the strip, because a tap that vanishes looks
-      // exactly like a tap on a slow device.
+      // exactly like a tap on a slow device. A target that can explain itself does
+      // so in its own hint instead, so this only carries what nothing else says.
+      notice = null
       displayPanel.sendInput(tab.id, gesture).catch((error: unknown) => {
-        notice = error instanceof Error ? error.message : String(error)
+        notice = ipcErrorMessage(error, 'The device did not take that gesture.')
       })
     },
-    () => stream
+    () => inputStream
   )
 
   /**
@@ -142,12 +175,17 @@
   // upscaled into a blur and, if the demand followed the painted size, would stay
   // small forever. Asking for the area's own longest edge means the next frame is
   // already sharp at the size the panel has. The store dedupes, so an unchanged
-  // size costs no IPC.
+  // size costs no IPC. The stream gets the layout size instead: the device encodes
+  // that video, so its pixels are what the frame rate is paid in.
   $effect(() => {
     const area = areaSize
     if (area.width <= 0 || area.height <= 0) return
     const longest = Math.max(area.width - RAIL_WIDTH, area.height)
-    displayPanel.reportStageSize(tab.id, Math.round(longest * (window.devicePixelRatio || 1)))
+    displayPanel.reportStageSize(
+      tab.id,
+      Math.round(longest * (window.devicePixelRatio || 1)),
+      Math.round(longest)
+    )
   })
 
   /**
@@ -189,10 +227,14 @@
    */
   async function pressControl(action: DisplayControlAction): Promise<void> {
     notice = null
+    const target = session?.sessionId
     try {
-      await displayPanel.control(tab.id, action)
+      const outcome = await displayPanel.control(tab.id, action)
+      if (outcome.screenLocked !== undefined && target) {
+        screenState = { sessionId: target, locked: outcome.screenLocked }
+      }
     } catch (error: unknown) {
-      notice = error instanceof Error ? error.message : String(error)
+      notice = ipcErrorMessage(error, 'The device did not take that button.')
     }
   }
 
@@ -234,8 +276,10 @@
     const sessionId = displayPanel.start(tabId, kind, sourceId)
     displayPanel.setVisibleTab(tabId)
     const measure = (): void => {
-      const width = handle.clientWidth
-      const height = handle.clientHeight
+      // The outer box, not the client box: a scrollbar must not read as a resize,
+      // or it rebuilds the stream, which removes the scrollbar, which rebuilds it.
+      const width = handle.offsetWidth
+      const height = handle.offsetHeight
       if (width === areaSize.width && height === areaSize.height) return
       areaSize = { width, height }
     }
@@ -253,18 +297,24 @@
     return () => {
       observer.disconnect()
       touch.dispose()
-      displayPanel.releaseVisibleTab(tabId)
+      // A replacement stage of the same tab has already taken the visible slot.
+      if (displayPanel.sessionFor(tabId)?.sessionId === sessionId) {
+        displayPanel.releaseVisibleTab(tabId)
+      }
       displayPanel.stop(tabId, sessionId)
     }
   })
 </script>
 
 <div class="relative flex h-full min-h-0 bg-app">
-  <div class="relative flex min-w-0 flex-1 overflow-auto" bind:this={area}>
+  <div
+    class="relative flex min-w-0 flex-1 {zoom === 'fit' ? 'overflow-hidden' : 'overflow-auto'}"
+    bind:this={area}
+  >
     {#if frame && box && (stream || url)}
       <button
         type="button"
-        class="relative m-auto block shrink-0 select-none p-0 {controlling
+        class="relative m-auto block shrink-0 touch-none select-none overflow-hidden p-0 {controlling
           ? 'cursor-crosshair'
           : 'cursor-default'}"
         style="width:{box.width}px;height:{box.height}px"
@@ -326,7 +376,7 @@
       </div>
     {/if}
 
-    {#if status || notice}
+    {#if status || notice || session?.hint}
       <div
         class="absolute inset-x-0 bottom-0 flex items-start gap-1.5 bg-surface/95 px-2 py-1"
         role="status"
@@ -338,7 +388,7 @@
               ? `: ${session.detail}`
               : '.'}
           {:else}
-            {notice}
+            {notice ?? session?.hint}
           {/if}
         </p>
       </div>

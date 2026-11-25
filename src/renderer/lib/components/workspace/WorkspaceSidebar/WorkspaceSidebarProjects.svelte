@@ -432,6 +432,7 @@
                       {#each searchResults as result (result.thread.id)}
                         <ThreadSearchResultRow
                           {result}
+                          hideProjectName
                           selected={activeThreadId === result.thread.id}
                           onOpen={onOpenThread}
                         />
@@ -704,6 +705,7 @@
                   {#each searchResults as result (result.thread.id)}
                     <ThreadSearchResultRow
                       {result}
+                      hideProjectName
                       selected={activeThreadId === result.thread.id}
                       onOpen={onOpenThread}
                     />

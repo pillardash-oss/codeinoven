@@ -404,7 +404,7 @@ export function harnessDisplayName(harnessId: string): string {
   if (harnessId === 'claude-code') return 'Claude Code'
   if (harnessId === 'codex') return 'Codex'
   if (harnessId === 'cline') return 'Cline'
-  if (harnessId === 'pi') return 'Pi'
+  if (harnessId === 'pi') return 'CIO Pi'
   if (harnessId === 'antigravity') return 'Antigravity'
   if (harnessId.startsWith('acp-')) return agentDisplayName(harnessId)
   return getAgentIcon(harnessId)?.name ?? harnessId

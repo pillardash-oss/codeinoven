@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { requireString } from '../ipc/handlers/shared'
 import { NotificationInboxStore, familyOf } from './notification-inbox-store'
+import { notificationIdentityVerdict } from './notification-identity'
 import { APP_ID, APP_NAME, APP_SLUG } from '../../lib/brand'
 import { Logger } from '../system/logger'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -55,9 +56,10 @@ const MAX_EPHEMERAL_NOTIFICATIONS = 20
 const BADGE_STATE_PATH = 'state/notification-badge.json'
 const PERMISSION_STATE_PATH = 'state/notification-permission.json'
 /**
- * Cooldown between background permission re-verifications: when the Settings
- * panel is opened while the app thinks notifications are blocked, one silent
- * verification delivery is attempted so the OS can confirm or clear the state.
+ * Cooldown between background permission requests: while the app believes
+ * notifications are still undecided or blocked, a delivery is attempted so the
+ * OS can prompt or confirm the state. Never used for a state already known to
+ * be granted, because that delivery is a visible banner.
  */
 const PERMISSION_VERIFY_DEDUP_MS = 15_000
 /** How long a background verification delivery may take before it is dropped. */
@@ -97,7 +99,14 @@ function compactNotificationId(id: string): string {
 }
 
 function isPermissionRefusal(error: unknown): boolean {
-  return typeof error === 'string' && /not allowed/i.test(error)
+  if (typeof error !== 'string') return false
+  // macOS reports a refused delivery as UNErrorCodeNotificationsNotAllowed. Its
+  // payload is either the localized description ("Notifications are not allowed
+  // for this application") or, depending on Electron's version and the OS
+  // locale, the bare "UNErrorDomain error 1" form. Both are that same refusal:
+  // matching only the English sentence is what let the state stay 'granted'
+  // while every card macOS was asked to draw came back refused.
+  return /not allowed/i.test(error) || /UNErrorDomain error 1\b/i.test(error)
 }
 
 /** One operating-system notification that did not come from a chat thread (a
@@ -154,6 +163,15 @@ export class NotificationService {
    * stay stuck at 'denied' after the user re-enables notifications.
    */
   private macosNotificationPermission: 'granted' | 'denied' | 'prompt' = 'prompt'
+  /**
+   * Set when macOS refused a delivery and this build's code-signing identity
+   * turned out not to be its bundle identifier. That refusal is a packaging
+   * defect, not a setting: nothing the user switches on in System Settings can
+   * make the app present a card, so the panel and the toast must say so instead
+   * of pointing at a toggle that does not exist.
+   */
+  private signingIdentityMismatch = false
+  private signingIdentityMismatchLogged = false
   private permissionVerifyInFlight = false
   private lastPermissionVerifyAt = 0
   /**
@@ -318,7 +336,18 @@ export class NotificationService {
     setCurrentNotificationService(this)
     void this.inboxReady()
     void this.hydrateBadge()
-    void this.hydratePermissionStatus()
+    void this.hydratePermissionStatus().then(() => {
+      // Ask the OS for authorization only while its answer is still unknown or
+      // known to be blocked. A delivery attempt is the only request macOS
+      // offers, and macOS presents every accepted request as a real banner: a
+      // probe we already know will succeed draws a "CodeInOven notifications"
+      // card on every launch for no reason. A stale 'granted' stays honest
+      // anyway, because the first refused real delivery flips the state to
+      // 'denied' and surfaces the block to the user.
+      if (process.platform !== 'darwin') return
+      if (this.macosNotificationPermission === 'granted') return
+      this.requestPermissionDelivery()
+    })
   }
 
   stop(): void {
@@ -353,14 +382,47 @@ export class NotificationService {
    */
   private recordNotificationOutcome(outcome: 'shown' | 'failed', error?: unknown): void {
     if (process.platform !== 'darwin') return
-    const previous = this.macosNotificationPermission
     if (outcome === 'shown') {
+      // A card that reached the screen is proof the identity is fine, whatever a
+      // static probe said earlier.
+      this.signingIdentityMismatch = false
+      if (this.macosNotificationPermission === 'granted') return
       this.macosNotificationPermission = 'granted'
-    } else if (this.macosNotificationPermission !== 'granted' && isPermissionRefusal(error)) {
-      this.macosNotificationPermission = 'denied'
+      this.persistPermissionStatus()
+      this.pushPermissionStatus()
+      return
+    }
+    if (!isPermissionRefusal(error)) return
+    void this.applyDeliveryRefusal()
+  }
+
+  /**
+   * Turn an authoritative refusal into a status the UI can act on.
+   *
+   * The refusal is settled only after this build's notification identity has
+   * been checked, so the first status the panel and the toast see already says
+   * whether the user can fix it (a Settings toggle) or whether the build itself
+   * cannot deliver (an update).
+   */
+  private async applyDeliveryRefusal(): Promise<void> {
+    const previous = this.macosNotificationPermission
+    const hadMismatch = this.signingIdentityMismatch
+    this.macosNotificationPermission = 'denied'
+    const verdict = await notificationIdentityVerdict()
+    this.signingIdentityMismatch = verdict.kind === 'mismatched'
+    if (verdict.kind === 'mismatched' && !this.signingIdentityMismatchLogged) {
+      this.signingIdentityMismatchLogged = true
+      Logger.error(
+        `System notifications cannot be delivered by this build: it is signed as "${verdict.signatureIdentifier}" but its bundle identifier is "${verdict.bundleIdentifier}", and macOS refuses every notification request whose signing identity differs from the requested bundle identifier.`
+      )
     }
     if (this.macosNotificationPermission !== previous) {
       this.persistPermissionStatus()
+    }
+    if (
+      this.macosNotificationPermission !== previous ||
+      this.signingIdentityMismatch !== hadMismatch
+    ) {
       this.pushPermissionStatus()
     }
   }
@@ -404,15 +466,18 @@ export class NotificationService {
   }
 
   /**
-   * Re-verify a previously observed `denied` state against the OS by silently
-   * delivering one verification notification. A successful delivery flips the
-   * state back to `granted` (the user re-enabled notifications in System
-   * Settings); a refusal keeps it `denied`. If the OS actually still has the
-   * permission prompt pending (fresh install), the request re-prompts   which
-   * is exactly what the notification settings panel is for. Deduped so
-   * repeated settings queries only re-check every few seconds.
+   * Ask the OS for notification authorization and read its answer, by
+   * delivering one silent notification.
+   *
+   * Electron exposes no authorization query and no separate request on macOS:
+   * the only thing that makes macOS present its one prompt is a delivery
+   * attempt. So this is both the first-run request (state 'prompt': nothing has
+   * been decided yet, and the user gets the OS prompt at launch) and the
+   * re-verification of an observed `denied` state (a successful delivery means
+   * the user re-enabled notifications in System Settings). Deduped so repeated
+   * calls only ask every few seconds.
    */
-  private verifyPermissionDelivery(): void {
+  private requestPermissionDelivery(): void {
     if (this.permissionVerifyInFlight) return
     const now = Date.now()
     if (now - this.lastPermissionVerifyAt < PERMISSION_VERIFY_DEDUP_MS) return
@@ -466,19 +531,33 @@ export class NotificationService {
     if (process.platform !== 'darwin') {
       return { platform: 'other' }
     }
+    if (this.macosNotificationPermission === 'denied') {
+      return {
+        platform: 'darwin',
+        status: 'denied',
+        reason: this.signingIdentityMismatch ? 'signing-identity-mismatch' : 'macos-denied'
+      }
+    }
     return { platform: 'darwin', status: this.macosNotificationPermission }
   }
 
   /**
    * The permission status used by the Settings panel: returns the current
-   * state and, when it is 'denied', kicks a deduped background verification so
-   * the OS itself confirms or clears the block. The result arrives over the
-   * `notification:permissionStatus` event.
+   * state and, while that state is still unknown or blocked, asks the OS to
+   * confirm it with one delivery so the panel cannot claim notifications work.
+   *
+   * A permission query never probes a state the app already believes is
+   * 'granted': the probe is itself a delivered notification, so macOS draws it
+   * as a banner, and probing on every Settings visit and window focus put a
+   * stray "CodeInOven notifications" card on screen over and over. A stale
+   * 'granted' is still corrected by the refusal path on the next real delivery.
+   * Deduped, and the answer arrives over the `notification:permissionStatus`
+   * event.
    */
   async getVerifiedPermissionStatus(): Promise<SystemNotificationPermissionStatus> {
     const status = this.getPermissionStatus()
-    if (status.platform === 'darwin' && status.status === 'denied') {
-      this.verifyPermissionDelivery()
+    if (status.platform === 'darwin' && status.status !== 'granted') {
+      this.requestPermissionDelivery()
     }
     return status
   }
@@ -792,7 +871,6 @@ export class NotificationService {
     } else {
       void this.inboxReady().then(() => this.inbox.add(entry))
     }
-    const subtitle = payload.source === 'chat' ? 'Chat' : payload.projectName
     // The one focus verdict for this notification, taken once here and carried
     // to the renderer with the card. The renderer must never decide focus for
     // itself: its `document.hasFocus()` is false while an embedded browser view
@@ -820,7 +898,9 @@ export class NotificationService {
     this.showNativeNotification({
       id: payload.id,
       title: payload.title,
-      subtitle,
+      // No OS subtitle. The card's body is the full sentence that already names
+      // the thread and its project, so setting the project name as a third line
+      // repeated it   "milogs Done" / "milogs" / "milogs finished in milogs."
       body: payload.body,
       urgency: payload.kind === 'error' ? 'critical' : 'normal',
       silent: this.appManagesSound(windows),
@@ -840,7 +920,6 @@ export class NotificationService {
   private showNativeNotification(options: {
     id: string
     title: string
-    subtitle?: string
     body: string
     urgency: 'normal' | 'critical'
     silent: boolean
@@ -864,7 +943,6 @@ export class NotificationService {
         // A unique group per notification prevents Notification Center from stacking alerts.
         groupId: APP_ID,
         title: options.title,
-        ...(options.subtitle === undefined ? {} : { subtitle: options.subtitle }),
         body: options.body,
         urgency: options.urgency,
         silent: options.silent
@@ -1023,6 +1101,22 @@ export class NotificationService {
     })
   }
 
+  /**
+   * What to tell the user when macOS refused a delivery.
+   *
+   * A refusal from a build whose signing identity is not its bundle identifier
+   * is not a permission problem at all: there is no System Settings row that
+   * would make it work, so saying "allow notifications" would send the user on
+   * an errand that cannot succeed.
+   */
+  private async describeDeliveryRefusal(): Promise<string> {
+    const verdict = await notificationIdentityVerdict()
+    if (verdict.kind === 'mismatched') {
+      return `This build cannot deliver system notifications: it is signed as "${verdict.signatureIdentifier}" instead of its bundle identifier "${verdict.bundleIdentifier}", so macOS refuses every request. Update ${APP_NAME} to a build with the corrected packaging.`
+    }
+    return 'macOS blocked the test notification.'
+  }
+
   async sendTestNotification(): Promise<SystemNotificationTestResult> {
     // The test exercises the OS card path, so it always uses the full-volume
     // off-app alert regardless of which window is focused.
@@ -1056,8 +1150,7 @@ export class NotificationService {
       const timeout = setTimeout(() => {
         finish({
           status: 'failed',
-          message:
-            'macOS did not confirm delivery. Notifications are likely blocked   allow them in System Settings > Notifications (unsigned builds also require app signing).'
+          message: 'macOS did not confirm the test notification.'
         })
       }, 8_000)
 
@@ -1071,11 +1164,7 @@ export class NotificationService {
       notification.once('failed', (_event, error) => {
         this.recordNotificationOutcome('failed', error)
         Logger.error('System notification test failed:', error)
-        finish({
-          status: 'failed',
-          message:
-            'macOS rejected the notification. Allow notifications in System Settings > Notifications.'
-        })
+        void this.describeDeliveryRefusal().then((message) => finish({ status: 'failed', message }))
       })
 
       this.retainNotification('system-test', notification)
@@ -1169,6 +1258,11 @@ export class NotificationService {
         : errorHeadline.length > 240
           ? `${errorHeadline.slice(0, 240).trimEnd()}…`
           : errorHeadline
+    // A thread is usually named after its own project, and naming it again in
+    // the sentence ("milogs finished in milogs.") reads as a mistake. Only a
+    // thread title that adds something is said; otherwise the project alone is.
+    const threadTitle = thread.title.trim()
+    const threadSubject = threadTitle && threadTitle !== projectName ? threadTitle : ''
     // An assistant run names its own thread: naming the hidden assistant space as
     // the project it "finished in" would read as a project thread, and the title
     // is already the assistant or task name, so the body carries the thread the
@@ -1176,20 +1270,28 @@ export class NotificationService {
     const body =
       kind === 'completed'
         ? isAssistant
-          ? thread.title.trim()
-          : `${thread.title} finished in ${projectName}.`
+          ? threadTitle
+          : threadSubject
+            ? `${threadSubject} finished in ${projectName}.`
+            : `Finished in ${projectName}.`
         : kind === 'attention'
           ? isAssistant
-            ? `${thread.title} is waiting for your input.`
-            : `${thread.title} is waiting for your input in ${projectName}.`
+            ? `${threadTitle} is waiting for your input.`
+            : threadSubject
+              ? `${threadSubject} is waiting for your input in ${projectName}.`
+              : `Waiting for your input in ${projectName}.`
           : kind === 'spec'
             ? isAssistant
-              ? `${thread.title} has a reviewable engineering artifact ready.`
-              : `${thread.title} has a reviewable engineering artifact ready in ${projectName}.`
+              ? `${threadTitle} has a reviewable engineering artifact ready.`
+              : threadSubject
+                ? `${threadSubject} has a reviewable engineering artifact ready in ${projectName}.`
+                : `A reviewable engineering artifact is ready in ${projectName}.`
             : (errorBody ??
               (isAssistant
-                ? `${assistantName || thread.title} stopped with an error.`
-                : `${thread.title} stopped with an error in ${projectName}.`))
+                ? `${assistantName || threadTitle} stopped with an error.`
+                : threadSubject
+                  ? `${threadSubject} stopped with an error in ${projectName}.`
+                  : `Stopped with an error in ${projectName}.`))
 
     return {
       id: `${APP_SLUG}-${thread.projectId}-${thread.id}-${thread.status}-${thread.updatedAt}`,

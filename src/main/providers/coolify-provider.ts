@@ -12,7 +12,7 @@ import type {
   DeploymentProviderContext
 } from './deployment-provider.interface'
 import { COOLIFY_BASE_URL_ENV, resolveCoolifyBaseUrl } from './base-url'
-import { capDeploymentLogPayload, MAX_DEPLOYMENT_LOG_CHARACTERS } from './deployment-log-cap'
+import { readDeploymentLogPage } from './deployment-log-pages'
 
 /** Human-readable platform name surfaced by the Cloud Deployments panel. */
 export const COOLIFY_DISPLAY_NAME = 'Coolify'
@@ -22,9 +22,6 @@ export const COOLIFY_API_PREFIX = '/api/v1'
 
 /** Network timeout so a slow instance never hangs the UI. */
 const COOLIFY_FETCH_TIMEOUT_MS = 15_000
-
-/** Cap on the raw deployment/runtime log text streamed into the app (roughly 200 KB). */
-const MAX_CONTAINER_LOG_BYTES = MAX_DEPLOYMENT_LOG_CHARACTERS
 
 /** Runtime log lines requested when no deployment log is available. */
 const DEFAULT_LOG_LINES = 200
@@ -124,13 +121,19 @@ export class CoolifyProvider implements DeploymentProvider {
       ...withSources,
       status: latest.status,
       ...(latest.updatedAt !== undefined ? { updatedAt: latest.updatedAt } : {}),
-      ...(latest.log !== undefined ? { log: latest.log } : {})
+      // A status snapshot travels on every poll, so it carries the newest page of
+      // the deployment log, never the whole thing: the log view pages the full
+      // payload itself through `getLogPage`.
+      ...(latest.log !== undefined ? { log: readDeploymentLogPage(latest.log).log } : {})
     }
   }
 
   /**
-   * Capped raw log text for a deployment, or the latest deployment when no id
-   * is given, or one container's runtime output when `serviceName` is set.
+   * Raw log text for a deployment, or the latest deployment when no id is
+   * given, or one container's runtime output when `serviceName` is set.
+   *
+   * Deliberately uncapped: the full payload is what the log view pages through,
+   * and discarding the head of a failed build's log is how its cause gets lost.
    */
   async getLogs(containerId: string, deploymentId?: string, serviceName?: string): Promise<string> {
     // A named compose service is a runtime read: the deployment record holds the
@@ -164,7 +167,7 @@ export class CoolifyProvider implements DeploymentProvider {
     )
     const record = this.asRecord(response)
     const logs = typeof record['logs'] === 'string' ? record['logs'] : ''
-    return this.capLog(logs)
+    return logs
   }
 
   /**
@@ -205,7 +208,7 @@ export class CoolifyProvider implements DeploymentProvider {
   }
 
   /**
-   * Capped log of one deployment read on its own, or null when this Coolify
+   * Full log of one deployment read on its own, or null when this Coolify
    * version does not serve that route (older builds 404/405 it) so the caller
    * can fall back to the per-application deployment list.
    */
@@ -224,7 +227,7 @@ export class CoolifyProvider implements DeploymentProvider {
     if (response === null) return null
     const record = this.asRecord(response)
     const logs = typeof record['logs'] === 'string' ? record['logs'] : ''
-    return logs ? this.capLog(logs) : null
+    return logs === '' ? null : logs
   }
 
   /**
@@ -248,9 +251,9 @@ export class CoolifyProvider implements DeploymentProvider {
   /**
    * Fetch deployment records for an application, newest first, or [] when absent.
    *
-   * `logSelection` decides which records carry their (capped) log, because a
-   * history of ten deployments would otherwise pull ten logs over IPC for the
-   * one the detail view actually opens.
+   * `logSelection` decides which records carry their log, because a history of
+   * ten deployments would otherwise pull ten full logs into main for the one the
+   * detail view actually opens.
    */
   private async fetchDeployments(
     containerId: string,
@@ -422,7 +425,7 @@ export class CoolifyProvider implements DeploymentProvider {
       status: mapDeploymentStatus(rawStatus)
     }
     const log = includeLog && typeof record['logs'] === 'string' ? record['logs'] : undefined
-    if (log) deployment.log = this.capLog(log)
+    if (log) deployment.log = log
     const updatedAt = this.parseEpochMs(this.readString(record, 'updated_at'))
     if (updatedAt !== undefined) deployment.updatedAt = updatedAt
     const commit = this.readString(record, 'commit')
@@ -507,15 +510,6 @@ export class CoolifyProvider implements DeploymentProvider {
     if (!value) return undefined
     const parsed = Date.parse(value)
     return Number.isFinite(parsed) ? parsed : undefined
-  }
-
-  /**
-   * Trim an oversized log while keeping a payload the renderer can still read.
-   * Structured (JSON array) logs keep their newest entries; plain text keeps
-   * its leading characters.
-   */
-  private capLog(log: string): string {
-    return capDeploymentLogPayload(log, MAX_CONTAINER_LOG_BYTES)
   }
 }
 

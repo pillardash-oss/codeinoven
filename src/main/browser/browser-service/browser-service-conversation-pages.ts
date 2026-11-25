@@ -24,6 +24,7 @@ export interface ConversationPagesHost {
   readonly agentPageTargets: BrowserService['agentPageTargets']
   readonly agentTabClaimOwners: BrowserService['agentTabClaimOwners']
   readonly agentTabIds: BrowserService['agentTabIds']
+  readonly agentTabLastUsed: BrowserService['agentTabLastUsed']
   readonly agentUserPageTabIds: BrowserService['agentUserPageTabIds']
   readonly assistantPageTabIds: BrowserService['assistantPageTabIds']
   readonly ensureTab: BrowserService['ensureTab']
@@ -209,15 +210,27 @@ export class BrowserServiceConversationPages {
    * reports. The owner ledger says which conversation that was, because a project's
    * threads share one strip and the tab's own thread is only the one that opened it.
    * A closed tab drops out because its entry is gone.
+   *
+   * Each claim carries when the agent last used the tab, which is the agent half of
+   * the strip's own idle clock: a page an agent is mid-flow on must not be put to
+   * sleep behind its next step.
    */
   agentTabClaims(): BrowserAgentTabClaim[] {
     const claims: BrowserAgentTabClaim[] = []
+    const claimFor = (tabId: string, projectId: string, threadId: string): void => {
+      claims.push({
+        tabId,
+        projectId,
+        threadId,
+        lastUsedAt: this.host.agentTabLastUsed.get(tabId) ?? 0
+      })
+    }
     for (const [tabId, owner] of this.host.agentTabClaimOwners) {
       if (!this.host.tabs.has(tabId)) {
         this.host.agentTabClaimOwners.delete(tabId)
         continue
       }
-      claims.push({ tabId, projectId: owner.projectId, threadId: owner.threadId })
+      claimFor(tabId, owner.projectId, owner.threadId)
     }
     const claimed = new Set(claims.map((claim) => claim.tabId))
     for (const tabId of [
@@ -231,7 +244,7 @@ export class BrowserServiceConversationPages {
       const tab = this.host.tabs.get(tabId)
       if (!tab) continue
       claimed.add(tabId)
-      claims.push({ tabId, projectId: tab.projectId, threadId: tab.threadId })
+      claimFor(tabId, tab.projectId, tab.threadId)
     }
     return claims
   }

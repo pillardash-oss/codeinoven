@@ -6,7 +6,9 @@ import { UtilityOrchestrationServiceExecutors } from './utility-orchestration-se
 import { UtilityOrchestrationServiceToolCatalog } from './utility-orchestration-service-tool-catalog'
 import { UtilityOrchestrationServiceTurnRuntime } from './utility-orchestration-service-turn-runtime'
 import { UtilityOrchestrationServiceDiagnostics } from './utility-orchestration-service-diagnostics'
+import { UtilityOrchestrationServiceProcesses } from './utility-orchestration-service-processes'
 import { UtilityOrchestrationServiceMcpLifecycle } from './utility-orchestration-service-mcp-lifecycle'
+import { UtilityOrchestrationServiceOvenUtilities } from './utility-orchestration-service-oven-utilities'
 
 /** The concern units a UtilityOrchestrationService delegates to, built once in its constructor. */
 export function buildUtilityOrchestrationServiceUnits(engine: UtilityOrchestrationService) {
@@ -18,7 +20,9 @@ export function buildUtilityOrchestrationServiceUnits(engine: UtilityOrchestrati
     'tool-catalog': new UtilityOrchestrationServiceToolCatalog(engine),
     'turn-runtime': new UtilityOrchestrationServiceTurnRuntime(engine),
     diagnostics: new UtilityOrchestrationServiceDiagnostics(engine),
-    'mcp-lifecycle': new UtilityOrchestrationServiceMcpLifecycle(engine)
+    processes: new UtilityOrchestrationServiceProcesses(engine),
+    'mcp-lifecycle': new UtilityOrchestrationServiceMcpLifecycle(engine),
+    'oven-utilities': new UtilityOrchestrationServiceOvenUtilities(engine)
   } as const
 }
 

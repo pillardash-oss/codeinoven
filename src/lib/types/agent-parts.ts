@@ -128,11 +128,46 @@ export interface TaskManagerService {
 export interface TaskManagerSnapshot {
   processes: TaskManagerProcess[]
   services: TaskManagerService[]
+  /**
+   * One row per live renderer surface (a window, a browser tab, a webview, an
+   * extension's offscreen document). `app.getAppMetrics()` alone reports one
+   * row per process, so a renderer at 90% CPU cannot be attributed to anything
+   * a user recognises; joining each WebContents to its OS process is what names
+   * the surface that is hot.
+   */
+  surfaces: TaskManagerSurface[]
   power: {
     source: 'ac' | 'battery'
     thermalState: 'unknown' | 'nominal' | 'fair' | 'serious' | 'critical'
   }
   sampledAt: number
+}
+
+/**
+ * The surface a renderer process draws: `window` is the app window itself,
+ * `tab` an embedded browser view, `webview` an in-page guest, `offscreen` an
+ * extension document with nothing on screen, and `other` anything Electron
+ * types that the task manager does not name.
+ */
+export type TaskManagerSurfaceKind = 'window' | 'tab' | 'offscreen' | 'webview' | 'other'
+
+/**
+ * One live renderer surface with the CPU and memory its OS process uses.
+ *
+ * The pid is the renderer's own OS process, the same pid `app.getAppMetrics()`
+ * reports, so a row here can be matched against the process list above it.
+ */
+export interface TaskManagerSurface {
+  pid: number
+  kind: TaskManagerSurfaceKind
+  /** Display label: the page title, or the sanitized URL when it has none. */
+  title: string
+  /** Origin and path only, with no query or hash, so no token ever reaches the UI. */
+  url: string
+  /** `null` when the OS reported no CPU sample for this process. */
+  cpuPercent: number | null
+  /** `null` when the OS reported no memory sample for this process. */
+  memoryBytes: number | null
 }
 
 /** Provider-neutral lifecycle state for one delegated child-agent task. */
@@ -162,6 +197,24 @@ export interface AgentSubagentActivity {
   error?: string
   /** Project-relative paths the sub-agent's file tools edited or wrote. */
   files?: string[]
+  /**
+   * File the worker's session is persisted in, when the harness names one.
+   *
+   * It is the only handle a nested worker can be continued from: the session
+   * file holds the transcript a harness re-opens, so another app instance that
+   * cannot speak this process's protocol can resume the worker from it instead
+   * of losing the work.
+   */
+  sessionFile?: string
+  /**
+   * Worker id the primary agent addresses this worker by in its own tool calls
+   * (`cio-subagent-N`).
+   *
+   * It is not the tool call id: a worker that is resumed on another instance
+   * has to keep this id, or every `cio_agent_status` and `cio_agent_output` the
+   * primary agent already made would name a worker that no longer exists.
+   */
+  agentId?: string
   time?: { start: number; end?: number }
   /**
    * True when the delegated worker is a pawn agent: an independent thread the

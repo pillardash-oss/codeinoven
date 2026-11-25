@@ -1,3 +1,4 @@
+import { HarnessIdleLedger } from './chat-engine-harness-idle'
 import { createWorkQueue } from '../../../lib/bounded-work'
 import type { HistoryHandoffSummary } from './chat-engine-message-text'
 import type { CapacityContinueState } from './chat-engine-capacity-continue'
@@ -13,6 +14,7 @@ import { AssignmentEngine } from '../../../lib/engines/assignment-engine'
 import { PrdEngine } from '../../../lib/engines/prd-engine'
 import { EngineeringLifecycleEngine } from '../../../lib/engines/engineering-lifecycle-engine'
 import { OvenChat } from '../../ovens/oven-chat'
+import type { OvenUtilityRelays } from '../../ovens/oven-utility-relay'
 import { MemoryService } from '../memory-service'
 import { PromptAssembler } from '../prompt-assembler'
 import type { AcpAgent } from '../../../lib/acp'
@@ -52,7 +54,8 @@ import type {
   Thread,
   ThreadTransferResult,
   ThinkingLevel,
-  AssistantAgents
+  AssistantAgents,
+  AgentModelSelection
 } from '../../../lib/types'
 import { OpenUsageClient } from '../../usage/openusage-client'
 import { CustomProviderUsageClient } from '../../providers/custom-provider-usage-client'
@@ -90,6 +93,14 @@ export class ChatEngineState {
   constructor(private readonly host: ChatEngine) {}
 
   ovenChat!: OvenChat
+
+  /**
+   * The relays that carry an Oven turn's app-bound gateway calls back here.
+   *
+   * One relay per live Oven turn, owned here so app quit can retire them all:
+   * a relay left behind keeps the host holding a dead turn's capability.
+   */
+  ovenUtilityRelays: OvenUtilityRelays | null = null
 
   readonly catalogProbeQueue = createWorkQueue(2)
 
@@ -155,6 +166,16 @@ export class ChatEngineState {
   pendingToolCreations = new Map<string, string[]>()
 
   pendingImageDescriptorDecisions = new Map<string, PendingImageDescriptorDecision>()
+
+  /**
+   * The vision model the user last chose on a vision card, keyed by
+   * `<projectId>:<threadId>`. The answer is recorded here the moment it is
+   * given, so the next descriptor request in this conversation and any card
+   * still in flight use the model the user actually picked instead of falling
+   * back to the default while the thread settings write catches up (or after it
+   * is replaced by an older copy of the thread's settings).
+   */
+  imageDescriptorSelections = new Map<string, AgentModelSelection>()
 
   /**
    * The disposable vision sessions the image descriptor is running right now,
@@ -304,6 +325,13 @@ export class ChatEngineState {
   >()
 
   activeIndependentAuditorEnsures = new Map<string, Promise<Thread>>()
+
+  /**
+   * Independent audit runs the user stopped, keyed by coordinator thread, with
+   * the time the stop was requested. The run consumes its own request; the
+   * timestamp keeps an old request from cancelling the next audit.
+   */
+  stoppedIndependentAuditRuns = new Map<string, number>()
 
   /** Assignment audits explicitly cancelled by Stop; late provider output must be ignored. */
   stoppedAssignmentAuditRuns = new Set<string>()
@@ -622,6 +650,18 @@ export class ChatEngineState {
   /** Coalesces live-activity repairs of a task's persisted working status. */
   workingStatusReconciliations = new Map<string, Promise<void>>()
 
+  /**
+   * When each session's working-status reconciliation last started.
+   *
+   * `markSessionWorking` runs on every streamed delta, and each reconciliation
+   * costs two reads through the single-flight DB worker every UI read also
+   * queues on, so this stamp is the interval gate that keeps one live turn from
+   * spending the worker's whole capacity (see
+   * `reconcileWorkingThreadStatus`). Entries are dropped when the session is
+   * retired.
+   */
+  workingStatusReconciledAt = new Map<string, number>()
+
   readonly agentProcesses = new AgentProcessService()
 
   generatedArtifactService!: GeneratedArtifactService
@@ -664,29 +704,18 @@ export class ChatEngineState {
   sessionWatchdogs = new Map<string, ReturnType<typeof setTimeout>>()
 
   /**
-   * Tracks since-when each project has been fully idle, so the idle reaper can
-   * release its harness resources (pooled servers, in-memory session caches)
-   * after the grace period to free memory and any agent-spawned processes.
-   * The harness sessions themselves persist on disk and rehydrate when the
-   * project is next used.
+   * Which harness still holds resources for which project, and how long each has
+   * been quiet.
+   *
+   * The idle reaper releases a harness's runtime for a project (a pooled server,
+   * a resident app-server, an in-memory session cache) after the grace period,
+   * to free memory and any agent-spawned processes. The clock is per harness
+   * because residency is: a thread of one harness working in a folder must not
+   * keep another harness's runtime alive for hours after its own last turn. The
+   * harness sessions themselves persist on disk and rehydrate when the harness is
+   * next used.
    */
-  projectIdleSince = new Map<string, number>()
-
-  /**
-   * Project paths touched by harness operations that may allocate resources
-   * before a session exists. Read-only probes (for example the battery usage
-   * refresh) must remain visible to the idle reaper even when the user never
-   * sends a message and therefore never registers a session.
-   */
-  projectResourcePaths = new Map<string, Set<string>>()
-
-  /**
-   * Projects whose harness resources have already been released. They are not
-   * released again until the project becomes active (a prompt, an event, or a
-   * session re-registration)   otherwise the reaper would re-release every
-   * grace period forever.
-   */
-  releasedProjects = new Set<string>()
+  harnessIdle = new HarnessIdleLedger()
 
   /**
    * Harnesses whose resident transports must be restarted as soon as no thread

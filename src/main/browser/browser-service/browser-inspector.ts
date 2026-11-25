@@ -22,6 +22,13 @@
  * script cannot read the app's stylesheet, and a hardcoded light box on a dark
  * application is exactly the bug that push exists to prevent.
  *
+ * The overlay is a manual popover rather than a plain fixed div, because a
+ * drawer or a modal on the inspected page is a `<dialog>` opened with
+ * `showModal()` and lives in the document's top layer, which paints above every
+ * z-index a page content element can carry. Sharing that layer is the only way
+ * the box and the pins describe the surface the reader actually opened, and
+ * `syncTopLayer()` keeps the overlay last in it.
+ *
  * The channel is the same one the capture observer uses, and for the same
  * reason: the embedded browser deliberately gives remote content no preload
  * script (`docs/EMBEDDED_BROWSER_ARCHITECTURE.md`), so `executeJavaScript` in
@@ -168,7 +175,18 @@ export function inspectorInstallScript(key: string): string {
 
     const host = document.createElement('div');
     host.setAttribute('data-cio-inspector', '');
-    host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483646';
+    // A drawer, a sheet or a modal is a <dialog> shown with showModal(), and
+    // every one of those lives in the document's top layer: that layer paints
+    // above all page content no matter what z-index it carries, so the overlay
+    // ends up behind exactly the surface the reader wants to comment on. The
+    // overlay is therefore a manual popover, which puts it in the top layer too,
+    // and syncTopLayer() keeps it last in that stack (see there).
+    const topLayer = typeof host.showPopover === 'function' && typeof host.hidePopover === 'function';
+    if (topLayer) host.setAttribute('popover', 'manual');
+    // The popover defaults (auto margins, a border, a background, a scroll box)
+    // are cancelled here: this element is a transparent sheet of overlay, and on
+    // an engine without the popover API the same line is what it always was.
+    host.style.cssText = 'position:fixed;inset:0;margin:0;padding:0;border:0;background:none;overflow:visible;pointer-events:none;z-index:2147483646';
     const root = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = CSS;
@@ -177,6 +195,12 @@ export function inspectorInstallScript(key: string): string {
     layer.className = 'cio-layer';
     root.appendChild(layer);
     document.documentElement.appendChild(host);
+    if (topLayer) {
+      // Anything the page had in the top layer before this install is already
+      // below this overlay, because that stack is ordered by when a surface was
+      // shown, so a sheet that was already open needs no re-raise.
+      try { host.showPopover(); } catch (error) {}
+    }
 
     // The overlay cannot carry the pointer cursor itself: it is one layer with
     // pointer-events off, so a cursor set on it never applies to what is under
@@ -208,8 +232,16 @@ export function inspectorInstallScript(key: string): string {
       waiters: [],
       queued: [],
       scanTimer: 0,
+      /** How long until the next re-place. Grows while nothing moves. */
+      scanBeatMs: 400,
+      /** The re-place signature of the previous tick, so a still page can rest. */
+      lastLayoutSignature: '',
       hoverFrame: 0,
-      listeners: false
+      listeners: false,
+      /** Whether this engine put the overlay in the top layer at all. */
+      topLayer: topLayer,
+      /** Set when the page's top layer moved, so the next draw re-raises. */
+      topLayerDirty: false
     };
 
     // Lucide's message-circle icon, the same one the app's own annotation
@@ -669,7 +701,16 @@ export function inspectorInstallScript(key: string): string {
       );
     }
 
+    /**
+     * Re-place every marker, and report where they landed.
+     *
+     * The signature is what lets a still page cost almost nothing: when two
+     * consecutive ticks place everything at the same coordinates, nothing on the
+     * page is moving and the next tick can wait. Any scroll, resize, frame load
+     * or marker change puts the beat straight back to the fast one.
+     */
     function layout() {
+      const placed = [];
       for (const marker of state.markers.values()) {
         const element = resolveElement(marker);
         const active = state.activeId === marker.id;
@@ -686,6 +727,7 @@ export function inspectorInstallScript(key: string): string {
         const shown = onScreen(rect);
         place(rect, marker.box);
         marker.box.style.display = shown ? 'block' : 'none';
+        placed.push(marker.id + ':' + Math.round(rect.x) + ',' + Math.round(rect.y) + ',' + Math.round(rect.width) + ',' + Math.round(rect.height) + ',' + (shown ? 1 : 0));
         // A pin belongs to the part of the page its element is in: it is drawn
         // at the element and hidden once that part is off screen, rather than
         // being clamped to the viewport edge for something the reader cannot
@@ -710,6 +752,7 @@ export function inspectorInstallScript(key: string): string {
           marker.pin.style.display = 'none';
         }
       }
+      return placed.join('|');
     }
 
     /**
@@ -768,9 +811,60 @@ export function inspectorInstallScript(key: string): string {
       if (state.hoverFrame) return;
       state.hoverFrame = requestAnimationFrame(() => {
         state.hoverFrame = 0;
+        syncTopLayer();
         syncCursor();
         layout();
       });
+    }
+
+    /**
+     * Put the overlay back in front of the page's own top layer.
+     *
+     * The top layer is a stack ordered by when each surface was shown, so a
+     * drawer the reader opens after this overlay was installed is drawn after it
+     * and covers it, even though no z-index on the page outranks the overlay.
+     * Hiding and showing this popover again moves it to the end of that stack,
+     * which is what makes the box and the pins describe the drawer instead of
+     * hiding behind it. Both calls happen in one task, so nothing paints in
+     * between and nothing flickers.
+     *
+     * It runs on the draw path only, and only when the page's top layer actually
+     * moved, because hiding and showing on every frame of a still page would be
+     * work for nothing.
+     */
+    function syncTopLayer() {
+      if (!state.topLayer || !state.topLayerDirty) return;
+      state.topLayerDirty = false;
+      try { host.hidePopover(); } catch (error) {}
+      try { host.showPopover(); } catch (error) {}
+    }
+
+    /**
+     * A surface entered or left the page's top layer.
+     *
+     * A dialog reports itself as a toggle event when showModal() or close() runs,
+     * a popover reports itself the same way when it is shown or hidden (including
+     * a declarative popovertarget button, which never calls into page script), and
+     * a fullscreen element goes to the top layer too. One capture listener for
+     * those is the whole of the watch: it fires when a surface actually moves and
+     * costs nothing for the rest of the page's DOM work, which is why the overlay
+     * does not observe the tree it was injected into.
+     *
+     * The overlay's own raise reports itself as a toggle on the host and is
+     * ignored here, or raising would schedule the next raise forever.
+     */
+    function onToggle(event) {
+      if (event.target === host) return;
+      state.topLayerDirty = true;
+      // One frame later, so the surface is definitely in the stack before the
+      // overlay asks to be drawn after it. Nothing here is immediate: a raise in
+      // the same task as the event would race the surface being shown.
+      scheduleHoverFrame();
+    }
+
+    function onFullscreenChange() {
+      state.topLayerDirty = true;
+      scheduleHoverFrame();
     }
 
     function onPointerMove(event) {
@@ -986,6 +1080,7 @@ export function inspectorInstallScript(key: string): string {
      * was first read.
      */
     function onFrameLoad() {
+      wakeScan();
       installFrames();
       scheduleHoverFrame();
     }
@@ -1002,6 +1097,8 @@ export function inspectorInstallScript(key: string): string {
       document.addEventListener('cio:canvas-view', scheduleHoverFrame);
       addEventListener('scroll', onViewportChange, true);
       addEventListener('resize', onViewportChange);
+      document.addEventListener('toggle', onToggle, true);
+      document.addEventListener('fullscreenchange', onFullscreenChange, true);
       state.listeners = true;
       installFrames();
     }
@@ -1015,10 +1112,13 @@ export function inspectorInstallScript(key: string): string {
       document.removeEventListener('cio:canvas-view', scheduleHoverFrame);
       removeEventListener('scroll', onViewportChange, true);
       removeEventListener('resize', onViewportChange);
+      document.removeEventListener('toggle', onToggle, true);
+      document.removeEventListener('fullscreenchange', onFullscreenChange, true);
       state.listeners = false;
     }
 
     function onViewportChange() {
+      wakeScan();
       layout();
     }
 
@@ -1035,21 +1135,51 @@ export function inspectorInstallScript(key: string): string {
       else removeListener();
     }
 
+    /**
+     * Keep the pins on their elements without polling for a page that is still.
+     *
+     * A comment left on a page keeps its pin, and the pin has to follow the
+     * element it belongs to — so this used to run a fixed 400 ms beat for as long
+     * as a single pin existed, whether or not anything on the page had moved. Each
+     * beat reads the geometry of every pinned element inside the mirrored page and
+     * rewrites the overlay, which is work the page's own renderer pays for while
+     * the user is doing something else entirely.
+     *
+     * So the beat now follows the page: fast while the inspector is armed, fast
+     * again the moment anything moves, and backing off to a slow beat while
+     * successive ticks place every pin at exactly the same coordinates.
+     */
     function startScan() {
       if (state.scanTimer) return;
-      state.scanTimer = setInterval(() => {
+      const tick = () => {
+        state.scanTimer = 0;
         if (!state.armed && state.markers.size === 0) {
-          clearInterval(state.scanTimer);
-          state.scanTimer = 0;
           syncListeners();
           return;
         }
         // A frame that appeared since the last tick is pickable on this one, and
         // the canvas settling moves every framed element, so the re-place runs on
         // the same beat.
+        syncTopLayer();
         installFrames();
-        layout();
-      }, 400);
+        const signature = layout();
+        const still = signature === state.lastLayoutSignature;
+        state.lastLayoutSignature = signature;
+        if (state.armed || !still) state.scanBeatMs = 400;
+        else state.scanBeatMs = Math.min(state.scanBeatMs * 2, 2_000);
+        state.scanTimer = setTimeout(tick, state.scanBeatMs);
+      };
+      state.scanTimer = setTimeout(tick, 400);
+    }
+
+    /**
+     * Something that can move a pin has happened: scroll, resize, a frame load, a
+     * marker added or removed. The next tick must be the fast one, because the
+     * signature is about to stop matching.
+     */
+    function wakeScan() {
+      state.lastLayoutSignature = '';
+      state.scanBeatMs = 400;
     }
 
     function renderPin(marker) {
@@ -1221,6 +1351,8 @@ export function inspectorInstallScript(key: string): string {
         }
       }
       state.activeId = marker.id;
+      state.topLayerDirty = true;
+      syncTopLayer();
       layout();
       // A focus is a request to put one element's comment in front of the reader,
       // so it reports the same event a pin click does: the app opens the bubble
@@ -1232,6 +1364,11 @@ export function inspectorInstallScript(key: string): string {
     function apply(command) {
       if (!command || typeof command !== 'object') return false;
       if (command.type === 'arm') {
+        // A drawer opened while this overlay was idle sits above it, because the
+        // watch that would have re-raised it was off: arming asks for a fresh
+        // place in the top layer first, so the very first box is drawn on top.
+        state.topLayerDirty = true;
+        syncTopLayer();
         if (!state.armed) {
           state.armed = true;
           state.hovered = null;
@@ -1274,6 +1411,11 @@ export function inspectorInstallScript(key: string): string {
           if (!keep.has(id)) removeMarker(id);
         }
         if (state.activeId && !keep.has(state.activeId)) state.activeId = null;
+        // Pins are drawn now, so they belong above whatever the page has in its
+        // top layer at this moment rather than behind a drawer that opened while
+        // this overlay was idle.
+        state.topLayerDirty = true;
+        syncTopLayer();
         layout();
         if (state.markers.size > 0) startScan();
         syncListeners();

@@ -16,8 +16,10 @@ import type {
   AgentMessage,
   AgentQuestionResolution,
   AgentSecretDraft,
-  PendingAgentQuestionRequest
+  PendingAgentQuestionRequest,
+  Thread
 } from '../../../lib/types'
+import type { HandedOffQuestion } from '../thread-transfer-service/thread-transfer-attention'
 import type { PendingQuestionInfo } from './chat-engine-types'
 import { QUESTION_ANSWER_MESSAGE_PREFIX } from './chat-engine-message-text'
 import { DEFAULT_QUESTION_TIMEOUT_MS } from './chat-engine-constants'
@@ -87,6 +89,19 @@ export class ChatEngineQuestionsAsk {
         async () => {
           pending.settleUtilitySuggestion?.(resolution)
         }
+      )
+      return
+    }
+    // A card that arrived with a cross-instance transfer has no live dialog to
+    // answer, and no driver holding it: the move stopped the turn that asked. The
+    // answer continues the persisted session instead, exactly like a question
+    // whose provider process exited while its card was open.
+    if (pending.transferred) {
+      await this.persistQuestionAnswer(pending, safeAnswers)
+      await this.host.units['questions'].resumeAfterInactiveQuestion(
+        pending,
+        'answered',
+        safeAnswers
       )
       return
     }
@@ -280,6 +295,13 @@ export class ChatEngineQuestionsAsk {
           pending.settleUtilitySuggestion?.({ decision: 'declined' })
         }
       )
+      return
+    }
+    // A transferred card's dismissal has nothing to reject: the dialog it would
+    // have cancelled belonged to the departing instance. The decision resumes the
+    // persisted session so the agent continues without the answer it asked for.
+    if (pending.transferred) {
+      await this.host.units['questions'].resumeAfterInactiveQuestion(pending, 'dismissed')
       return
     }
     const driver = this.host.units['turns-dispatch'].driverForRuntime(
@@ -699,6 +721,84 @@ export class ChatEngineQuestionsAsk {
     // dispatched is settled in the conversation that started it, and this is the
     // one moment the engine knows the request is waiting.
     this.host.notifyDelegatedQuestion(pending)
+  }
+
+  /**
+   * Put the question cards a release handed over back in front of this instance.
+   *
+   * A transfer stops the turn that asked its question, so the adopting instance
+   * holds no dialog to reply into and cannot simply continue the session: that
+   * resume would spend the turn working past a decision the user still owes.
+   * Registering the card here is what makes the attention survive the move. The
+   * answer then arrives as the continuation turn through
+   * `resumeAfterInactiveQuestion`.
+   *
+   * Returns whether a card is now waiting, which is what tells the caller to hold
+   * the automatic resume.
+   */
+  async adoptTransferredQuestions(
+    thread: Thread,
+    handed: readonly HandedOffQuestion[] | undefined,
+    note?: string
+  ): Promise<boolean> {
+    if (!thread.sessionId || !thread.settings) return false
+    const cards = (handed ?? []).filter(
+      (card) =>
+        card.request.projectId === thread.projectId &&
+        card.request.threadId === thread.id &&
+        card.request.sessionId === thread.sessionId
+    )
+    if (cards.length === 0) return false
+    const driverId =
+      thread.sessionHarnessId ??
+      this.host.sessionRegistry.get(thread.sessionId)?.driverId ??
+      thread.settings.harnessId ??
+      DEFAULT_HARNESS
+    const { projectPath } = await this.host.resolve(
+      thread.projectId,
+      driverId,
+      thread.id,
+      thread.sessionAccountId
+    )
+    const timeoutMs = await this.host.units['questions'].pendingQuestionTimeoutMs()
+    for (const card of cards) {
+      const pending = this.host.registerPendingQuestion(
+        driverId,
+        thread.projectId,
+        thread.id,
+        projectPath,
+        card.request,
+        timeoutMs
+      )
+      pending.transferred = true
+      if (note) pending.transferNote = note
+      pending.timeoutMs = timeoutMs
+      // The card keeps the progress it had when it left: the entry the user was
+      // on, what they had already answered, and the window they still had. A card
+      // whose window closed during the move gets a full one back, because a
+      // transfer must never consume the user's chance to answer.
+      pending.request.createdAt = card.request.createdAt
+      pending.request.activeQuestionIndex = card.request.activeQuestionIndex
+      pending.request.answers = card.request.answers.map((answer) => [...answer])
+      pending.request.interactedQuestionIndexes = [...card.request.interactedQuestionIndexes]
+      const remainingMs = (card.request.expiresAt ?? 0) - Date.now()
+      pending.request.expiresAt = remainingMs > 0 ? card.request.expiresAt : Date.now() + timeoutMs
+      this.host.units['questions'].schedulePendingQuestion(pending)
+      this.host.broadcast({
+        type: 'question.asked',
+        sessionId: thread.sessionId,
+        requestId: pending.request.requestId,
+        questions: pending.request.questions,
+        ...(card.request.tool ? { tool: card.request.tool } : {})
+      })
+      this.host.notifyDelegatedQuestion(pending)
+    }
+    // The row is what every rail, tray count and notification reads, so the
+    // thread reports the attention it is really waiting on.
+    await this.host.threadManager.setStatus(thread.projectId, thread.id, 'awaiting_approval', {
+      read: false
+    })
+    return true
   }
 
   /**

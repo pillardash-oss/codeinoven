@@ -43,6 +43,14 @@ export function focusVisibleComposer(): boolean {
   return false
 }
 
+/** The composer of the current thread among several: a rendered one first, then
+ *  document order, for the same reason focus uses it. */
+export function compareComposerPriority(a: HTMLElement, b: HTMLElement): number {
+  const rendered = Number(isRendered(b)) - Number(isRendered(a))
+  if (rendered !== 0 || a === b) return rendered
+  return isBefore(a, b) ? -1 : 1
+}
+
 /** Whether `element` precedes `other` in document order. */
 function isBefore(element: HTMLElement, other: HTMLElement): boolean {
   return (element.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0

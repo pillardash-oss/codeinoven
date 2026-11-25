@@ -287,7 +287,19 @@ function resolveCheckpointOwners(
     // this turn's work: its card belongs at the end of the run it owns, not
     // above the prompt that interrupted the accounting. That is exactly the
     // shape where the finished turn drew no card at all.
-    if (transcriptFinished && lastOwnedEnd >= turnEnd && closesTurn[lastOwnedEnd]) {
+    //
+    // It may only adopt an answer that closed before the turn settled. A run
+    // still working has no finished checkpoint of its own in this list yet (the
+    // list is read when a turn settles, so the in-flight row is absent), which
+    // makes its live assistants look exactly like a continuation. Adopting them
+    // put the previous turn's files under a trace that had produced nothing, and
+    // moved that card down with every streamed segment.
+    const continuedAnswer = lastOwnedEnd >= turnEnd ? messages[lastOwnedEnd] : undefined
+    const closedBeforeSettlement =
+      continuedAnswer?.completedAt !== undefined &&
+      checkpoint.completedAt !== undefined &&
+      continuedAnswer.completedAt <= checkpoint.completedAt
+    if (transcriptFinished && closedBeforeSettlement && closesTurn[lastOwnedEnd]) {
       cardIndex = lastOwnedEnd
     }
     if (cardIndex >= 0 && closesTurn[cardIndex]) card[cardIndex] = true
@@ -621,6 +633,31 @@ export function turnStartIndexForEnd(
     return index + 1
   }
   return endMsgIndex
+}
+
+/**
+ * Creation time of the newest prompt that opened a turn, or null when the
+ * transcript holds no prompt that did.
+ *
+ * Every user-role row that rides mid-turn rather than opening one is skipped:
+ * activity notices (compaction, sub-agent envelopes, the app's own continuation
+ * prompts), the app's record of an answered question, and a steer the harness
+ * has not taken yet. That is the same boundary the main process folds its turn
+ * stream by, so a live trace measured from this instant agrees with the turn it
+ * sits under. Counting an answered question as a prompt is what restarted a
+ * live trace's clock minutes into a turn that had been running since its prompt.
+ */
+export function newestTurnPromptCreatedAt(
+  messages: readonly AgentMessage[],
+  isTransparent: TurnTransparency = persistedTurnTransparency
+): number | null {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (!message || message.role !== 'user') continue
+    if (isTransparent(message)) continue
+    return message.createdAt || null
+  }
+  return null
 }
 
 /**

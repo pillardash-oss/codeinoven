@@ -61,6 +61,8 @@ import { Logger } from './logger'
  * from the same directory and pid, so they always agree.
  */
 const MAX_SOCKET_PATH_BYTES = 100
+/** Bases a too-long endpoint may move to, tried after the OS temp root. */
+const ENDPOINT_FALLBACK_ROOTS = ['/tmp']
 /** Bytes one link may buffer before a frame is dropped instead of written. */
 const MAX_BUFFERED_BYTES = 2 * 1024 * 1024
 /** Longest frame this bus will assemble from one peer, so a bad peer cannot grow it. */
@@ -77,6 +79,18 @@ const REDIAL_BASE_DELAY_MS = 250
  * one slow start, with no later signal to try again.
  */
 const REDIAL_MAX_DELAY_MS = 5_000
+/**
+ * How often the publish path may re-probe the live instance set while no link
+ * is open and the last probe found nobody.
+ *
+ * A token stream publishes many frames a second, and before this gate every one
+ * of them re-read the registry directory synchronously on the main thread just
+ * to learn, thousands of times over, that no sibling exists. The membership push
+ * is the primary discovery signal and arrives immediately; this paced probe is
+ * only the backstop for a membership notification that never arrived, so two
+ * seconds costs nothing a user can feel.
+ */
+const RECONCILE_PROBE_GATE_MS = 2_000
 
 /**
  * The agent events a sibling window is allowed to render.
@@ -165,20 +179,41 @@ function shortHash(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 12)
 }
 
+/** Whether an endpoint path fits the platform's socket address limit. */
+function fitsSocketPath(endpoint: string): boolean {
+  return Buffer.byteLength(endpoint) <= MAX_SOCKET_PATH_BYTES
+}
+
 /**
  * The endpoint one process listens on and its peers dial.
  *
  * Deterministic from the pair (directory, pid), which is why no discovery channel
  * is needed: the instance registry already tells every process which pids are
  * alive, and this turns one of them into an address.
+ *
+ * `tempRoot` is a parameter because the fallback cannot assume the OS temp root
+ * is short: a harness or a desktop session may point TMPDIR at a deep per-run
+ * directory, and joining a hashed name onto it then overflows `sun_path` again,
+ * which leaves both windows listening nowhere and permanently unlinked.
  */
-export function instanceBusEndpoint(directory: string, pid: number): string {
+export function instanceBusEndpoint(
+  directory: string,
+  pid: number,
+  tempRoot: string = tmpdir()
+): string {
   if (process.platform === 'win32') {
     return `\\\\.\\pipe\\cio-instance-bus-${shortHash(directory)}-${pid}`
   }
   const endpoint = join(directory, `${pid}.sock`)
-  if (Buffer.byteLength(endpoint) <= MAX_SOCKET_PATH_BYTES) return endpoint
-  return join(tmpdir(), `cio-instance-bus-${shortHash(directory)}-${pid}.sock`)
+  if (fitsSocketPath(endpoint)) return endpoint
+  const name = `cio-instance-bus-${shortHash(directory)}-${pid}.sock`
+  // `/tmp` is the one short base every supported platform is guaranteed to have,
+  // so it is the last resort rather than a hope that TMPDIR happens to be short.
+  for (const root of [tempRoot, ...ENDPOINT_FALLBACK_ROOTS]) {
+    const candidate = join(root, name)
+    if (fitsSocketPath(candidate)) return candidate
+  }
+  return join(tempRoot, name)
 }
 
 export class InstanceEventBus {
@@ -202,6 +237,10 @@ export class InstanceEventBus {
   private redialTimer: ReturnType<typeof setTimeout> | null = null
   /** When the armed redial fires, so an earlier one can replace a later one. */
   private redialAt = 0
+  /** When the publish path last probed the live instance set, gated by {@link RECONCILE_PROBE_GATE_MS}. */
+  private lastReconcileAttemptAt = 0
+  /** Whether the last reconciliation saw a sibling, so dial pacing owns recovery. */
+  private lastReconcileFoundPeer = false
   private readonly redialBaseDelayMs: number
   private readonly redialMaxDelayMs: number
   /** Frames this process has published, so a frame cannot be applied twice. */
@@ -233,7 +272,14 @@ export class InstanceEventBus {
   start(): void {
     if (this.started) return
     this.started = true
-    this.stopMembership = this.subscribeToMembership(() => this.reconcilePeers())
+    this.stopMembership = this.subscribeToMembership(() => {
+      // Membership is the authoritative signal that a sibling appeared or left,
+      // so it reconciles at once and clears the publish path's probe gate: a
+      // genuinely new sibling is discovered immediately, never a gate late.
+      this.lastReconcileAttemptAt = 0
+      this.lastReconcileFoundPeer = false
+      this.reconcilePeers()
+    })
     this.reconcilePeers()
   }
 
@@ -249,6 +295,8 @@ export class InstanceEventBus {
       this.redialTimer = null
     }
     this.redialAt = 0
+    this.lastReconcileAttemptAt = 0
+    this.lastReconcileFoundPeer = false
     for (const pid of [...this.peers.keys()]) this.forgetPeer(pid)
     this.dropLinks()
     this.dialing.clear()
@@ -344,9 +392,17 @@ export class InstanceEventBus {
    */
   private publishFrame(body: InstanceBusFrameBody): void {
     if (this.links.size === 0) {
-      // A peer can appear after this process settled in: the membership push
-      // reconciles, and the dial is paced, so this cannot become a dial storm on
-      // a per-token path.
+      // A peer can appear after this process settled in, but a token stream
+      // publishes many frames a second, so this path must never turn every frame
+      // into a filesystem probe. The membership push reconciles immediately when
+      // a sibling registers; the paced probe below is only the backstop for a
+      // membership signal that never arrived, and while the last reconciliation
+      // did find a sibling the dial pacing and redial timer own recovery, so
+      // publishing stands down entirely.
+      if (this.lastReconcileFoundPeer) return
+      const now = Date.now()
+      if (now - this.lastReconcileAttemptAt < RECONCILE_PROBE_GATE_MS) return
+      this.lastReconcileAttemptAt = now
       this.reconcilePeers()
       if (this.links.size === 0) return
     }
@@ -371,6 +427,9 @@ export class InstanceEventBus {
     const live = this.liveInstancePids()
     if (live === null) return
     const peers = live.filter((pid) => pid !== this.localPid)
+    // What the last reconciliation saw, for the publish path's gate above: while
+    // a sibling is registered, dial pacing and the redial timer own recovery.
+    this.lastReconcileFoundPeer = peers.length > 0
     if (peers.length === 0) {
       // Nobody to exchange frames with: drop the server and every socket so a
       // lone instance carries no listener and no open connection.
@@ -560,6 +619,11 @@ export class InstanceEventBus {
     socket.unref()
     socket.setNoDelay(true)
     this.links.add(socket)
+    // A link attaching proves a sibling exists, so the publish path's probe gate
+    // starts over: once this link is gone, the next frame may probe for whoever
+    // is left without waiting out a gate stamped before the link existed.
+    this.lastReconcileAttemptAt = 0
+    this.lastReconcileFoundPeer = false
     socket.on('close', () => {
       this.links.delete(socket)
       // Nothing left to receive from, so what this process remembers of the

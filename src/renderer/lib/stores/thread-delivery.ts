@@ -7,11 +7,15 @@
  * while the agent was busy) and armed voice dictation (a transcript that must
  * be sent even though its thread is not on screen). Both must agree on the
  * thread's settings, on whether its agent is genuinely idle, and on how a
- * message is actually dispatched, so those live here once.
+ * message is actually dispatched, so those live here once. Every other headless
+ * surface   the agent assist, Don's dictation panel, the design coordinator
+ * buttons   goes through the same two functions and inherits the same device
+ * gate.
  */
 import { invoke } from '$lib/ipc.svelte'
 import { messageId as createMessageId } from '$shared/id'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+import { queuedResourceWait, readThreadHold } from '$lib/stores/queued-resource-wait.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { CHAT_DEFAULT_SETTINGS, DEFAULT_SETTINGS } from '$lib/stores/thread-settings.svelte'
 import {
@@ -106,13 +110,25 @@ export async function threadHasPendingGate(projectId: string, threadId: string):
  * the thread has a session, then hand the text to the store's optimistic send
  * path. The chat engine steers a live turn on its own, so a dispatch that
  * lands mid-turn behaves as a steer instead of colliding with the driver.
- * Resolves with the id of the user message it appended.
+ *
+ * Resolves with the id of the user message it appended, or `null` when the
+ * device was short and the message was parked in the thread's queue instead.
+ * Every caller already treats a parked message as delivered, because the queue
+ * is durable and the dispatcher delivers it once the machine has room again.
  */
 export async function sendThreadMessageHeadless(
   projectId: string,
   threadId: string,
   message: HeadlessThreadMessage
-): Promise<string> {
+): Promise<string | null> {
+  // The device is the one gate every headless surface shares: dictation, the
+  // agent assist, Don's panel and the design coordinator all reach a thread
+  // without a composer, so none of them may start a turn a short machine
+  // cannot afford.
+  if (await holdForDevice(projectId, threadId)) {
+    queueThreadMessage(projectId, threadId, message)
+    return null
+  }
   const settings = message.settings ?? (await resolveThreadDeliverySettings(projectId, threadId))
   const sessionId = await invoke('agent:ensureSession', projectId, threadId, settings.harnessId)
   if (sessionId) threadMessages.setSessionId(projectId, threadId, sessionId)
@@ -158,7 +174,8 @@ export function queueThreadMessage(
 
 /**
  * Deliver a message to a thread that may have no mounted view: send it now when
- * its agent is idle, and park it behind the running turn when it is not.
+ * its agent is idle and the device has room, and park it behind the running turn
+ * (or the busy machine) when either is not ready.
  *
  * This is what a button outside the conversation asks for. A request the app
  * synthesizes on the user's behalf (the coordinator's design actions are the
@@ -172,11 +189,42 @@ export async function sendOrQueueThreadMessage(
   message: HeadlessThreadMessage
 ): Promise<'sent' | 'queued'> {
   if (await threadAgentIsIdle(projectId, threadId)) {
-    await sendThreadMessageHeadless(projectId, threadId, message)
-    return 'sent'
+    const messageId = await sendThreadMessageHeadless(projectId, threadId, message)
+    return messageId === null ? 'queued' : 'sent'
   }
   queueThreadMessage(projectId, threadId, message)
+  // The turn is not the only reason this waits: a short machine is recorded too,
+  // so the queue card says why the message has not started.
+  await holdForDevice(projectId, threadId)
   return 'queued'
+}
+
+/**
+ * Whether the device holds new work, parking the message here when it does.
+ *
+ * `false` also clears a stale hold, so a message that only ever waited while the
+ * machine was short does not keep a retry armed after the reading clears.
+ */
+async function holdForDevice(projectId: string, threadId: string): Promise<boolean> {
+  const answer = await readThreadHold(projectId, threadId)
+  if (answer === null || answer.wait === null) {
+    queuedResourceWait.clear(projectId, threadId)
+    return false
+  }
+  queuedResourceWait.hold(projectId, threadId, answer.wait, answer.target, resumeQueuedDelivery)
+  return true
+}
+
+/**
+ * Wake the background dispatcher once the machine has room again.
+ *
+ * The import is dynamic on purpose: the dispatcher itself depends on this module
+ * for its delivery helpers, and a static import would close that cycle.
+ */
+function resumeQueuedDelivery(): void {
+  void import('$lib/stores/queued-message-dispatcher').then(({ queuedMessageDispatcher }) =>
+    queuedMessageDispatcher.sweepNow()
+  )
 }
 
 /** Whether a thread has reached a terminal state, for start-after scheduling. */

@@ -8,6 +8,7 @@ import type {
   ThreadSettings
 } from '../../lib/types'
 import { fastSelectionModelId, resolveFastModelId } from '../../lib/fast-inference'
+import { isUnrestrictedLevel } from '../../lib/permission-level'
 import type { StorageEngine } from '../storage/storage-engine'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { CLAUDE_CREDENTIAL_LOCK_NAME, CrossProcessMutex } from '../system/cross-process-mutex'
@@ -67,7 +68,12 @@ import {
   discoverClaudeModels,
   fallbackClaudeModel
 } from './claude-code/claude-models'
-import { CLAUDE_USAGE_TIMEOUT_MS, rateLimitWindows } from './claude-code/claude-usage'
+import {
+  CLAUDE_CONTEXT_GRACE_MS,
+  CLAUDE_USAGE_REQUEST,
+  CLAUDE_USAGE_TIMEOUT_MS,
+  rateLimitWindows
+} from './claude-code/claude-usage'
 import type { ClaudeAccountUsage } from './claude-code/claude-usage'
 import { claudeStreamInput } from './claude-code/claude-attachments'
 import { latestAssistant } from './claude-code/claude-parts'
@@ -643,7 +649,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     else if (options.readOnly) args.push('--tools', 'Read,Glob,Grep,WebFetch,WebSearch')
     if (options.structuredOutput)
       args.push('--json-schema', JSON.stringify(options.structuredOutput.schema))
-    if (options.settings.permissionLevel === 'full_access')
+    if (isUnrestrictedLevel(options.settings.permissionLevel))
       args.push('--permission-mode', 'bypassPermissions')
     else args.push('--permission-mode', 'manual')
     const env = await this.customProviderEnv(options.settings.providerId)
@@ -966,10 +972,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       rateLimitsResponded: false,
       contextPayload: null,
       contextResponded: false,
-      timer: setTimeout(
-        () => this.finishActiveUsageProbe(sessionId, null),
-        CLAUDE_USAGE_TIMEOUT_MS
-      ),
+      timer: setTimeout(() => this.finishActiveUsageProbe(sessionId), CLAUDE_USAGE_TIMEOUT_MS),
       promise,
       resolve: resolveProbe
     }
@@ -980,7 +983,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
         `${JSON.stringify({
           type: 'control_request',
           request_id: usageRequestId,
-          request: { subtype: 'get_usage' }
+          request: CLAUDE_USAGE_REQUEST
         })}\n`
       )
       this.writeActiveInput(
@@ -992,17 +995,22 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
         })}\n`
       )
     } catch {
-      this.finishActiveUsageProbe(sessionId, null)
+      this.finishActiveUsageProbe(sessionId)
     }
     return promise
   }
 
-  private finishActiveUsageProbe(sessionId: string, value: Record<string, unknown> | null): void {
+  /** Settle with whatever answered, so a missing context reading never discards quota. */
+  private finishActiveUsageProbe(sessionId: string): void {
     const probe = this.activeUsageProbes.get(sessionId)
     if (!probe) return
     this.activeUsageProbes.delete(sessionId)
     clearTimeout(probe.timer)
-    probe.resolve(value)
+    probe.resolve(
+      probe.rateLimitsResponded
+        ? { rateLimits: probe.rateLimitsPayload, context: probe.contextPayload }
+        : null
+    )
   }
 
   private captureActiveUsageResponse(
@@ -1026,16 +1034,15 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       return
     }
 
-    if (probe.rateLimitsResponded && probe.rateLimitsPayload === null) {
-      this.finishActiveUsageProbe(sessionId, {
-        rateLimits: null,
-        context: probe.contextPayload
-      })
-    } else if (probe.rateLimitsResponded && probe.contextResponded) {
-      this.finishActiveUsageProbe(sessionId, {
-        rateLimits: probe.rateLimitsPayload,
-        context: probe.contextPayload
-      })
+    if (!probe.rateLimitsResponded) return
+    if (probe.rateLimitsPayload === null || probe.contextResponded) {
+      this.finishActiveUsageProbe(sessionId)
+    } else {
+      clearTimeout(probe.timer)
+      probe.timer = setTimeout(
+        () => this.finishActiveUsageProbe(sessionId),
+        CLAUDE_CONTEXT_GRACE_MS
+      )
     }
   }
 
@@ -1055,7 +1062,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     if (!telemetry) return null
     const usage = record(telemetry['rateLimits'])
     const context = record(telemetry['context'])
-    const rateLimits = usage ? rateLimitWindows(usage['rate_limits']) : []
+    const rateLimits = usage ? rateLimitWindows(usage['rate_limits'], 'percent') : []
     const describesConversation = conversation !== null && context !== null
     if (rateLimits.length === 0 && !describesConversation) return null
     const contextWindow = describesConversation
@@ -1073,7 +1080,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
 
   /**
    * Fetch the account's current plan rate-limit windows and live context-window
-   * usage on demand via the `get_usage` + `get_context_usage` control requests.
+   * usage on demand via control requests (context only from the thread's own session).
    * These run WITHOUT a model turn (`total_api_duration_ms` stays 0), so the
    * battery can show live quota and the context percent for old threads whose
    * turns predate capture. Returns null when the session has no plan limits
@@ -1098,9 +1105,9 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
         ? conversationSessionId
         : undefined
     if (owningSessionId) {
-      return this.mapAccountUsage(await this.readUsageFromActiveSession(owningSessionId), {
-        sessionId: owningSessionId
-      })
+      const live = await this.readUsageFromActiveSession(owningSessionId)
+      if (live) return this.mapAccountUsage(live, { sessionId: owningSessionId })
+      // No answer means the turn's process is exiting or stuck: ask a fresh one.
     }
     try {
       const prepared = await prepareHarnessInvocation(
@@ -1137,41 +1144,17 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
               if (!child.killed) child.kill()
               resolve(value)
             }
-            let rateLimitsPayload: Record<string, unknown> | null = null
-            let rateLimitsResponded = false
-            let contextPayload: Record<string, unknown> | null = null
-            let contextResponded = false
-            const attemptFinish = (): void => {
-              if (settled) return
-              // If the session has no plan rate limits, stop waiting for context and
-              // report nothing. Otherwise wait for both responses so quota and
-              // context are reported together; the timeout covers a missing response.
-              if (rateLimitsResponded && rateLimitsPayload === null) {
-                finish({ rateLimits: null, context: contextPayload })
-                return
-              }
-              if (rateLimitsResponded && contextResponded) {
-                finish({ rateLimits: rateLimitsPayload, context: contextPayload })
-              }
-            }
             const consume = (line: string): void => {
               if (!line.trim()) return
               const payload = record(JSON.parse(line) as unknown)
               if (!payload) return
               if (payload['type'] !== 'control_response') return
               const response = record(payload['response'])
+              if (string(response?.['request_id']) !== 'usage') return
               const inner = record(response?.['response'])
-              const requestId = string(response?.['request_id'])
-              if (requestId === 'usage') {
-                rateLimitsResponded = true
-                const rateLimits = record(inner?.['rate_limits'])
-                rateLimitsPayload =
-                  inner?.['rate_limits_available'] === true && rateLimits ? inner : null
-              } else if (requestId === 'context') {
-                contextResponded = true
-                contextPayload = inner
-              }
-              attemptFinish()
+              const available =
+                inner?.['rate_limits_available'] === true && record(inner['rate_limits'])
+              finish({ rateLimits: available ? inner : null })
             }
             child.stdout?.on('data', (chunk: Buffer) => {
               buffer += chunk.toString()
@@ -1189,25 +1172,18 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
             child.on('exit', () => {
               if (!settled) finish(null)
             })
-            // Send both control requests immediately; `--print` waits on stdin.
+            // `--print` waits on stdin. Context is deliberately not requested: it
+            // would describe this empty process, and it can take over 12 seconds.
             child.stdin?.write(
               `${JSON.stringify({
                 type: 'control_request',
                 request_id: 'usage',
-                request: { subtype: 'get_usage' }
-              })}\n`
-            )
-            child.stdin?.write(
-              `${JSON.stringify({
-                type: 'control_request',
-                request_id: 'context',
-                request: { subtype: 'get_context_usage' }
+                request: CLAUDE_USAGE_REQUEST
               })}\n`
             )
           })
       )
-      // The probe below is a brand-new process with no conversation behind it,
-      // so its context answer describes an empty window, never this thread's.
+      // The probe is a brand-new process with no conversation behind it.
       // The quota it reports is account-wide and therefore always valid.
       return this.mapAccountUsage(telemetry, null)
     } catch (error) {
@@ -1228,7 +1204,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     this.asyncAgentCloseTimers.clear()
     this.asyncAgentHoldDeadlines.clear()
     for (const sessionId of this.activeUsageProbes.keys()) {
-      this.finishActiveUsageProbe(sessionId, null)
+      this.finishActiveUsageProbe(sessionId)
     }
     for (const [sessionId, readiness] of this.authenticationReadiness) {
       if (!readiness.settled) readiness.resolve(false)
@@ -1320,7 +1296,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       }
     }
     if (type === 'result') {
-      this.finishActiveUsageProbe(context.sessionId, null)
+      this.finishActiveUsageProbe(context.sessionId)
       // Only agents this process launched still count. Parts carried over from
       // an earlier process are stale   their notification can never arrive, so
       // waiting for them held every later turn open until the stdin-close cap.

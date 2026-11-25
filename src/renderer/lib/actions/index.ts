@@ -5,8 +5,10 @@ export {
   permissionLevelActionId,
   permissionLevelActions,
   permissionLevelForAction,
-  permissionLevelLabel
+  permissionLevelLabel,
+  permissionLevelsFor
 } from './permission-actions'
+export type { PermissionLevelDescriptor, PermissionLevelOfferOptions } from './permission-actions'
 export type {
   ActionCategory,
   ActionDefinition,

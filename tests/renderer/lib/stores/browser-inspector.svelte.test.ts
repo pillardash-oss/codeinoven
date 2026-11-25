@@ -13,7 +13,7 @@ const subscribe = vi.hoisted(() => (name: string, callback: (...args: unknown[])
 vi.mock('$lib/ipc.svelte', () => ({ invoke, subscribe }))
 vi.mock('$lib/system/renderer-logger', () => ({ logRendererError: vi.fn() }))
 vi.mock('$lib/stores/renderer-recovery.svelte', () => ({
-  rendererRecovery: { setPromptReferences: vi.fn() }
+  rendererRecovery: { setPromptReferences: vi.fn(), commitDraftNow: vi.fn() }
 }))
 
 const PROJECT = 'project-one'
@@ -25,7 +25,9 @@ const tab = {
   kind: 'browser' as const,
   projectId: PROJECT,
   threadId: THREAD,
-  url: 'http://127.0.0.1:52035/index.html'
+  url: 'http://127.0.0.1:52035/index.html',
+  lastUsedAt: Date.now(),
+  hibernated: false
 }
 
 /** The sidebar a session reads, written through the way the app writes it. */
@@ -61,7 +63,11 @@ async function mockSidebar(): Promise<void> {
           else activeTabId.set('active', value)
         },
         browserTabs: [],
-        focus: vi.fn()
+        focus: vi.fn(),
+        // A session writes a fresh pick into the thread docked on the tab's
+        // project. Nothing is docked in these cases, so the tab's own owner is
+        // the conversation the pick lands in.
+        threadIdForProject: vi.fn(() => null)
       }
     }
   })

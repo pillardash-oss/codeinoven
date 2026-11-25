@@ -832,6 +832,17 @@ class ContextSidebarState {
     return this.browser.loadingFor(tabId)
   }
 
+  /**
+   * Put one sidebar browser tab's page to sleep, keeping its row.
+   *
+   * Returns whether the page was released: the tab menu offers this and the idle
+   * clock runs it on its own, and both refuse the same tabs (one already asleep, a
+   * blank tab, or the page a surface is showing).
+   */
+  hibernateBrowserTab(tabId: string): boolean {
+    return this.browser.hibernate(tabId)
+  }
+
   /** Mute or unmute one browser tab's audio output. */
   toggleBrowserTabMute(tabId: string): void {
     this.browser.toggleMute(tabId)
@@ -1164,17 +1175,30 @@ class ContextSidebarState {
   }
 
   /**
-   * Close every browser tab a conversation owns, in main and in the strip.
+   * Close every browser tab the active conversation shows, in main and in the
+   * strip.
    *
-   * The rail menu's "close all tabs" uses this. Both halves run together on
-   * purpose: `browser:destroyThread` destroys the `WebContentsView` behind each
-   * tab (which is what releases its renderer process), and `removeForThread`
-   * drops the matching rows so the strip cannot show a page that no longer
-   * exists.
+   * A project's threads share one browser tab list, and a conversation container
+   * such as an assistant shares one across its threads, so the tabs the rail
+   * shows are not always the ones the thread on screen opened. Closing by the
+   * thread on screen left every tab opened by a sibling thread behind, which is
+   * what made the rail's "close all tabs" look like it did nothing. The scope
+   * pairs below are taken from the tabs actually shown, so the destroy and the
+   * row removal cover exactly that list.
    */
-  async closeBrowserTabsForThread(projectId: string, threadId: string): Promise<void> {
-    await invoke('browser:destroyThread', projectId, threadId)
-    this.browser.removeForThread(projectId, threadId)
+  async closeActiveBrowserTabs(): Promise<void> {
+    const scopes: { projectId: string; threadId: string }[] = []
+    for (const tab of this.browser.activeTabs) {
+      if (
+        scopes.some((scope) => scope.projectId === tab.projectId && scope.threadId === tab.threadId)
+      )
+        continue
+      scopes.push({ projectId: tab.projectId, threadId: tab.threadId })
+    }
+    for (const { projectId, threadId } of scopes) {
+      await invoke('browser:destroyThread', projectId, threadId)
+      this.browser.removeForThread(projectId, threadId)
+    }
   }
 
   close(id: string): void {

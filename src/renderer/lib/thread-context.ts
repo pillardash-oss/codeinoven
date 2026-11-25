@@ -1,5 +1,5 @@
 /**
- * A conversation attached to a composer as context rather than as text.
+ * Conversations attached to a composer as context rather than as text.
  *
  * The user never has to copy a thread's content to ask about it: the composer
  * carries the thread's identity, the badge names it, and the agent is told which
@@ -7,6 +7,9 @@
  * the id, because the agent already reads threads by id (the app's diagnostics
  * tool looks one up), so nothing else has to travel with it.
  */
+import type { PromptReference } from '$shared/types'
+
+/** One conversation riding a prompt as context. */
 export interface ThreadContextReference {
   /** Project the thread lives in, which is what the badge's icon names. */
   projectId: string
@@ -47,4 +50,24 @@ export function uniqueThreadContextReferences(
     kept.push(reference)
   }
   return kept
+}
+
+/**
+ * An attached conversation as the chip its message keeps.
+ *
+ * The turn already carries the lookup sentence, so this travels for the reader:
+ * after the send the composer has handed the attachment away, and the message is
+ * the only place left that says which conversation the turn was given. It is the
+ * same chip a selection becomes, so one row of the transcript shows every
+ * attachment a prompt had, and clicking it opens the thread itself.
+ */
+export function threadReferenceAttachment(reference: ThreadContextReference): PromptReference {
+  return {
+    id: reference.threadId,
+    label: reference.title,
+    text: reference.threadId,
+    kind: 'thread',
+    threadId: reference.threadId,
+    projectId: reference.projectId
+  }
 }

@@ -70,6 +70,36 @@ describe('groupTraceIntoChains', () => {
     expect(chains).toHaveLength(2)
     expect(chains[1]?.steps).toHaveLength(1)
   })
+
+  it('keeps a chain identity when its output arrives, so the live chain is not remounted', () => {
+    // Regression: a chain was keyed by the text that closed it, so it was
+    // destroyed and re-created the moment the agent spoke. Everything the
+    // reader had opened inside it   a reasoning block, a tool card, the chain
+    // itself   was thrown away while the work they were reading kept arriving.
+    const before = groupTraceIntoChains([
+      toolPart('claude-tool-first', 'running'),
+      toolPart('claude-tool-second', 'running')
+    ])
+    const after = groupTraceIntoChains([
+      toolPart('claude-tool-first', 'completed'),
+      toolPart('claude-tool-second', 'completed'),
+      textPart('claude-text-1', 'Here is what I found.')
+    ])
+
+    expect(before).toHaveLength(1)
+    expect(after).toHaveLength(1)
+    expect(after[0]?.output).not.toBeNull()
+    expect(after[0]?.id).toBe(before[0]?.id)
+  })
+
+  it('keys a chain with no steps by its own text', () => {
+    const chains = groupTraceIntoChains([
+      textPart('claude-text-0', 'First paragraph.'),
+      textPart('claude-text-1', 'Second paragraph.')
+    ])
+
+    expect(chains.map((chain) => chain.id)).toEqual(['claude-text-0', 'claude-text-1'])
+  })
 })
 
 describe('shouldMountWorkingTrace', () => {

@@ -9,9 +9,18 @@
   interface Props {
     pager: PreviewPagerStateData
     class?: string
+    /** What the pager steps between, singular, for the controls' accessible
+     *  names: a lightbox walks attachments, the passage reader walks the
+     *  excerpts one message carries. */
+    noun?: string
   }
 
-  let { pager, class: className }: Props = $props()
+  let { pager, class: className, noun = 'attachment' }: Props = $props()
+
+  /** The group name reads as a title, the button names as an action: both keep
+   *  the noun the caller chose, so the same pager never calls a passage an
+   *  attachment. */
+  const groupLabel = $derived(`${noun.charAt(0).toUpperCase()}${noun.slice(1)} navigation`)
 
   const atStart = $derived(pager.index <= 0)
   const atEnd = $derived(pager.index >= pager.count - 1)
@@ -27,7 +36,7 @@
 
 <div
   role="group"
-  aria-label="Attachment navigation"
+  aria-label={groupLabel}
   class={[
     'titlebar-no-drag flex items-center gap-0.5 border bg-elevated/95 p-1 shadow-lg backdrop-blur-sm',
     className
@@ -36,8 +45,8 @@
   <button
     type="button"
     class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-    aria-label="Previous attachment"
-    title="Previous attachment"
+    aria-label={`Previous ${noun}`}
+    title={`Previous ${noun}`}
     disabled={atStart}
     onclick={(event) => step(event, pager.onPrevious)}
   >
@@ -47,8 +56,8 @@
   <button
     type="button"
     class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-    aria-label="Next attachment"
-    title="Next attachment"
+    aria-label={`Next ${noun}`}
+    title={`Next ${noun}`}
     disabled={atEnd}
     onclick={(event) => step(event, pager.onNext)}
   >

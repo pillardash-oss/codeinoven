@@ -1,11 +1,12 @@
 import { EventEmitter } from 'events'
-import { mkdtemp, rm, writeFile } from 'fs/promises'
+import { mkdtemp, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcess } from 'child_process'
 import type { AgentEvent } from '../../../src/lib/types'
 import { StorageEngine } from '../../../src/main/storage/storage-engine'
+import { removeTempRoots } from '../../helpers/temp-root'
 import { ClaudeCodeDriver, mapClaudeCodeRecord } from '../../../src/main/drivers/claude-code-driver'
 import type {
   CliLineParseContext,
@@ -63,12 +64,9 @@ afterEach(async () => {
   // exit handler drains the process before writing `drivers/<id>/sessions`), so a
   // test that ends right after emitting an exit can still be writing while the
   // temp root goes away. `rm` recreates nothing but its recursive walk does race
-  // that write's temp file, which is how it fails with ENOTEMPTY; retry it.
-  await Promise.all(
-    roots
-      .splice(0)
-      .map((root) => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }))
-  )
+  // that write's temp file, which is how it fails with ENOTEMPTY; the shared
+  // helper retries it.
+  await removeTempRoots(roots.splice(0))
 })
 
 async function storage(): Promise<StorageEngine> {

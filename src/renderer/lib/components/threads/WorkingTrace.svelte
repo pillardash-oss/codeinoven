@@ -5,8 +5,9 @@
   import { foldSlide } from '$lib/components/shared/card-motion'
   import ActionSheet from '../ui/ActionSheet.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
-  import type { AgentPart, ThinkingLevel } from '$shared/types'
+  import type { AgentPart, OvenPrepareStep, ThinkingLevel } from '$shared/types'
   import type { TraceSpan } from '$shared/working-trace-span'
+  import { traceEndInstant } from '$shared/working-trace-span'
   import type { OvenAppearance } from '$shared/ovens'
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
@@ -29,6 +30,7 @@
   import WorkingTraceSummary from './WorkingTraceSummary.svelte'
   import { subagentBadgeLabel, subagentBadgeTitle } from './working-trace-subagents'
   import { workingTraceStartTime } from './working-trace-start'
+  import { traceStepExpansion, traceStepScope } from '$lib/stores/trace-step-expansion.svelte'
 
   interface Props {
     parts: AgentPart[]
@@ -47,6 +49,9 @@
     /** What the app is doing before the harness streams, e.g. preparing a remote
      *  checkout or cloning a repository. */
     note?: string | null
+    /** The parallel preparation steps behind that note: install the harness,
+     *  install git, clone the checkout. Each reports its own state. */
+    steps?: OvenPrepareStep[] | null
     /** What this trace is, in the header. Defaults to "Working Trace". A trace
      *  that belongs to another session   an Assignment draft offshoot bubbled
      *  up into its coordinator thread   names itself here, so it never reads as
@@ -72,21 +77,33 @@
     /** When the agent started working on this trace; used to show a live duration. */
     startTime?: number
     /**
-     * When this trace's turn closed, when the caller knows it.
+     * The instant this turn's last message closed, once the turn has really
+     * closed (see `traceEndInstant`).
      *
-     * A folded trace mounts no entries, so it has no span of its own to measure:
-     * a settled turn reports its duration from its own close instead of from
-     * whatever window happens to be on screen.
+     * A turn outlives its last step: the harness writes its answer afterwards,
+     * and it can sit quiet for a long time before it does. The header states the
+     * duration of the turn, so the close ends it, and the mounted span — the
+     * extent of the rows underneath — only stands in when no close was reported.
+     */
+    closedAt?: number
+    /**
+     * The app's own end of this turn, for a trace that mounts no entries to
+     * measure.
+     *
+     * A folded trace mounts none, so a settled turn reports its duration from
+     * this boundary instead of from whatever window happens to be on screen.
+     * A reported `closedAt` outranks it.
      */
     endTime?: number
     /** Attribution for the model currently working on this trace. */
     modelLabel?: string | null
     /**
-     * True inside a group conversation. The trace belongs to the speaker named
-     * above its bubble, so its header drops the model, harness and account chips
-     * and keeps only the work and the fold control.
+     * True where the header must carry no attribution at all, only the work and
+     * the fold control: inside a group conversation the trace belongs to the
+     * speaker named above its bubble, and in a temporary chat the message footer
+     * already names the model that answered.
      */
-    compact?: boolean
+    hideAttribution?: boolean
     /**
      * True inside a group reply, where the trace is a section of the bubble rather
      * than a band of its own. Its rows then take the bubble's own surface instead
@@ -169,12 +186,14 @@
     rehydrated = false,
     foreignRun = false,
     note = null,
+    steps = null,
     headerLabel = 'Working Trace',
     initialOpen = false,
     folded,
     initialUserOpened = false,
     initiallyFolded = false,
     startTime,
+    closedAt,
     endTime,
     active = true,
     totalSteps = 0,
@@ -184,7 +203,7 @@
     turnSpan = null,
     onLoadOlderParts,
     modelLabel = null,
-    compact = false,
+    hideAttribution = false,
     flat = false,
     bodyMaxHeightRem,
     thinkingLevel = null,
@@ -230,6 +249,11 @@
    *  not any more has settled, whether or not the turn reported its completion.
    *  Plain, not reactive: only the run-state effect below reads it. */
   let sawLiveWork = false
+  /** True once this mount has folded itself for a settled run. The close
+   *  happens once, so a trace the reader opens after it stays open for as long
+   *  as the visit lasts. Plain, not reactive: only the run-state effect writes
+   *  and reads it. */
+  let autoClosedOnSettle = false
   /** Newest activity this trace was already showing (or had already folded) the
    *  last time it decided whether to open.
    *
@@ -258,6 +282,15 @@
   let foldRequest: { open: boolean; activity: number } | null = null
   let imageUrls = new FileBlobUrlManager()
   const visibleParts = $derived(latestWorkingTraceParts(parts))
+  /** The conversation this trace belongs to: the key its steps' expansion state
+   *  is remembered against, for as long as the reader stays in the thread. */
+  const stepScope = $derived(traceStepScope(projectId, threadId))
+  /** Whether the reader has a step open inside this trace. */
+  const holdsExpandedStep = $derived(
+    visibleParts.some(
+      (part) => part.type !== 'text' && traceStepExpansion.isOpen(stepScope, part.id)
+    )
+  )
   /** The trace's root. It exists only to find the transcript scroller the trace
    *  lives in, because the trace no longer owns a scroller of its own. */
   let traceRootEl = $state<HTMLDivElement>()
@@ -278,6 +311,19 @@
   let traceHeaderHeight = $state(0)
   /** How far below the scroller's top the oldest mounted work counts as the top. */
   const pagingTopInset = $derived(bodyMaxHeightRem === undefined ? traceHeaderHeight : 0)
+  /**
+   * Whether the height-bounded body is following the live tail.
+   *
+   * A group reply's trace is a small scroller of its own, and a run appends a
+   * row at a time to it. Without this the newest step always landed below the
+   * fold, so the work could not be watched as it arrived and every attempt to
+   * follow it meant chasing the scrollbar. Latched from the reader's own
+   * position: at the bottom of the box it keeps the newest entry in view, and
+   * the moment they scroll up it stops and leaves them where they are.
+   */
+  let followingTail = true
+  /** How close to the bottom still counts as following. */
+  const TRACE_TAIL_REACH = 24
   /** The turn's trace as chains of thought, grouped from the mounted steps.
    *  A chain that produced an output is keyed by that output, which is the
    *  boundary that defines it, so paging older steps in above never remounts a
@@ -392,6 +438,38 @@
     return () => root.removeEventListener('scroll', onScroll)
   })
 
+  // Watch the bounded body's own scroll position, so following the tail is the
+  // reader's choice and not a guess: at the bottom it follows, and one scroll up
+  // hands the position back to them.
+  $effect(() => {
+    const body = traceBodyEl
+    if (!body || bodyMaxHeightRem === undefined) return
+    const nearBottom = (): boolean =>
+      body.scrollHeight - body.scrollTop - body.clientHeight <= TRACE_TAIL_REACH
+    followingTail = nearBottom()
+    const onScroll = (): void => {
+      followingTail = nearBottom()
+    }
+    body.addEventListener('scroll', onScroll, { passive: true })
+    return () => body.removeEventListener('scroll', onScroll)
+  })
+
+  // A new step while the reader is at the bottom of the box: keep the newest
+  // entry in view instead of appending it below the fold. The scroll waits a
+  // frame, after the new row has been laid out.
+  $effect(() => {
+    void visibleParts.length
+    void chains.length
+    const body = traceBodyEl
+    if (!body || bodyMaxHeightRem === undefined || !followingTail) return
+    const frame = requestAnimationFrame(() => {
+      if (!followingTail) return
+      const el = traceBodyEl
+      if (el) el.scrollTop = el.scrollHeight
+    })
+    return () => cancelAnimationFrame(frame)
+  })
+
   // A trace whose work fits the transcript leaves older steps behind no scroll
   // at all, so fill the visible height one page at a time until the transcript
   // scrolls or the turn's older entries run out. Bounded by the viewport, never
@@ -445,15 +523,13 @@
 
   const elapsed = $derived(busy && effectiveStartTime ? agentClock.seconds(effectiveStartTime) : 0)
   /** The trace's total duration in seconds: the live clock while it works, the
-   *  frozen span once it settles. Null when no entry reported a timestamp. */
+   *  turn's own end once it settles. Null when nothing reported a timestamp. */
   const totalDurationSeconds = $derived.by((): number | null => {
     if (busy && effectiveStartTime) return elapsed
-    const spanEnd = traceSpan?.end ?? endTime
-    if (spanEnd !== undefined && effectiveStartTime) {
-      return Math.max(0, (spanEnd - effectiveStartTime) / 1000)
-    }
-    if (spanEnd !== undefined && traceSpan) return (spanEnd - traceSpan.start) / 1000
-    return null
+    const end = traceEndInstant({ span: traceSpan, closedAt, endTime })
+    const origin = effectiveStartTime ?? traceSpan?.start
+    if (end === undefined || origin === undefined) return null
+    return Math.max(0, (end - origin) / 1000)
   })
   // Convert file:// image URLs to blob: Object URLs so attached images render
   // reliably in the Electron renderer.
@@ -503,6 +579,21 @@
     setFold(open)
   }
 
+  /**
+   * The reader worked inside this trace   they opened a tool call, a reasoning
+   * block, a chain. From that moment the trace is theirs: the idle blip a
+   * harness reports between steps, and the settle at the end of the turn, must
+   * not fold away what they are reading.
+   *
+   * This is what a live turn did to them before: a step finishing was reported
+   * as the run going idle, the trace closed itself, and the card they had just
+   * expanded went with it   again on the next step.
+   */
+  function markReaderInteraction(): void {
+    if (isOpen && userOpened) return
+    setFold(true, true, false)
+  }
+
   $effect(() => {
     // The newest activity mounted right now. A retry keeps the old parts, so
     // this value stands still until the attempt really produces work.
@@ -527,11 +618,25 @@
     // Settled is decided by the run stopping, not only by the turn reporting its
     // completion: an interrupted turn, and a run the app quit in the middle of,
     // leave `done` false for work that has stopped, and that is exactly the
-    // expanded trace a settled thread must not keep showing. A trace the user
-    // opened is left exactly as they left it.
-    if ((done || sawLiveWork) && isOpen && !userOpened) {
-      foldToHeader()
-      requestFold(false, activity)
+    // expanded trace a settled thread must not keep showing.
+    //
+    // The close happens once, for the first settle this mount sees, and it is
+    // the app's default rather than the reader's decision: a trace they opened
+    // themselves stays open when the work ends, because they are reading it.
+    // Only leaving the thread forgets it (the view remounts folded).
+    //
+    // A controlled trace leaves this to its owner, which holds the same rule
+    // across remounts; deciding here as well would also close a trace the
+    // reader had already reopened after the owner's close.
+    if (controlled) return
+    if (localUserOpened) return
+    // A trace holding a step the reader opened is theirs, exactly like one they
+    // opened themselves: closing it would take that step off the screen.
+    if (holdsExpandedStep) return
+    if ((done || sawLiveWork) && !autoClosedOnSettle) {
+      autoClosedOnSettle = true
+      if (isOpen) foldToHeader()
+      setFold(false, false, localUserFolded)
       openedAtActivity = activity
     }
   })
@@ -633,7 +738,7 @@
       label={subagentBadgeLabelText}
       elapsedFor={subagentElapsed}
       {modelLabel}
-      {compact}
+      {hideAttribution}
       {isFast}
       {thinkingLevel}
       {providerName}
@@ -663,6 +768,8 @@
           {flat}
           ownScroll={bodyMaxHeightRem !== undefined}
           {formatOutput}
+          scope={stepScope}
+          onReaderInteraction={markReaderInteraction}
           active={liveActivity && index === chains.length - 1}
           showHeader={chains.length > 1 || chain.output !== null}
           {busy}
@@ -677,8 +784,8 @@
           {onOpenSubagent}
         />
       {/each}
-      {#if busy && (foreignRun || rehydrated || note)}
-        <WorkingTraceStatus {rehydrated} {foreignRun} {note} />
+      {#if busy && (foreignRun || rehydrated || note || (steps?.length ?? 0) > 0)}
+        <WorkingTraceStatus {rehydrated} {foreignRun} {note} {steps} />
       {/if}
     </div>
   {/if}

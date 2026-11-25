@@ -173,6 +173,29 @@ const mustHave = (label: string, condition: boolean): void => {
   }
 }
 
+const mustNotHave = (label: string, condition: boolean): void => {
+  if (condition) {
+    Logger.error(`[verify-packaged-app] artifact that must not ship is present: ${label}`)
+    process.exit(1)
+  }
+}
+
+/**
+ * MLX, Core ML, and the native capture worker are macOS (Apple silicon) only.
+ * The packaging config scopes them to `mac.extraResources`, and this makes a
+ * regression loud instead of silently shipping mac binaries in a Windows or
+ * Linux installer.
+ */
+function verifyNoMacSpeechRuntime(): void {
+  const macOnly = ['mlx-worker', 'coreml-worker', 'speech-capture-worker', 'mlx.metallib']
+  for (const fileName of macOnly) {
+    mustNotHave(
+      `${fileName} outside a macOS package`,
+      Boolean(findFileUnder(absArtifactDir, (entry) => entry === fileName))
+    )
+  }
+}
+
 mustHave('at least one file', files.length > 0)
 
 const speechCatalog = findFileUnder(absArtifactDir, (entry) => entry === 'model-catalog.json')
@@ -195,21 +218,36 @@ if (target === 'mac') {
   // Native speech workers are mandatory: a packaged mac build without them
   // silently hides the mic and speaker buttons and flags installed models as
   // downloadable (the capabilities probe fails and marks artifacts
-  // unavailable). Never ship one.
+  // unavailable). Never ship one. Apple silicon is the only architecture this
+  // app targets, so these are the only speech binaries that exist.
   const speechWorkers: Array<[string, string]> = [
     ['MLX speech worker', 'mlx-worker'],
-    ['MLX Metal library', 'mlx.metallib'],
     ['Core ML speech worker', 'coreml-worker'],
     ['native speech capture worker', 'speech-capture-worker']
   ]
   for (const [label, fileName] of speechWorkers) {
     mustHave(label, Boolean(findFileUnder(absArtifactDir, (entry) => entry === fileName)))
   }
+  // The MLX Metal kernel library is ~102 MB of engine data. It is provisioned at
+  // runtime (reused from an MLX install already on the machine, else downloaded
+  // on first MLX model download), so shipping it again would put back the exact
+  // bytes this app stopped bundling.
+  mustNotHave(
+    'the MLX Metal library (provisioned at runtime)',
+    Boolean(findFileUnder(absArtifactDir, (entry) => entry === 'mlx.metallib'))
+  )
   mustHave('mac disk image', hasExtension('.dmg'))
   mustHave('mac zip artifact', hasExtension('.zip'))
 } else if (target === 'win') {
+  // MLX and Core ML are macOS engines: their workers, and the Metal library, must
+  // never appear in a Windows package.
+  verifyNoMacSpeechRuntime()
   mustHave('windows installer', hasExtension('.exe'))
 } else if (target === 'linux') {
+  // Same rule on Linux: the speech folder is mac-only, so a Linux package that
+  // carries these binaries carries dead weight that also implies the wrong
+  // platform wiring.
+  verifyNoMacSpeechRuntime()
   mustHave('linux AppImage', hasExtension('.AppImage'))
   mustHave('linux deb', hasExtension('.deb'))
   // Only a Linux packaging host can inspect its own ELF modules.

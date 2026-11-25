@@ -2,9 +2,11 @@
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioCable from '@pdslng/cio-icon/CioCable.svelte'
   import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
   import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import { toast } from 'svelte-sonner'
   import Modal from '../ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -23,6 +25,24 @@
 
   /** The one command that prepares a machine; the pasted code carries the rest. */
   const START_COMMAND = 'npx @pdslng/cio-oven start'
+
+  /**
+   * npx is not a package to install: it ships with Node.js. A machine without
+   * Node gets nvm first, then the latest Node, which brings npx with it per user.
+   */
+  const UNIX_NODE_INSTALL = [
+    'curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.41.0/install.sh | bash',
+    'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"',
+    'nvm install node && nvm alias default node'
+  ].join('\n')
+
+  /** The same install on Windows, where nvm is a winget package and no shell sourcing is needed. */
+  const WINDOWS_NODE_INSTALL = [
+    'winget install CoreyButler.NVMforWindows',
+    '# reopen the terminal so nvm is on PATH, then',
+    'nvm install latest',
+    'nvm use latest'
+  ].join('\n')
 
   let code = $state('')
   let preview = $state<OvenAgentPreview | null>(null)
@@ -47,6 +67,33 @@
   let testResult = $state<OvenConnectionStatus | null>(null)
   let error = $state('')
 
+  /**
+   * Addresses a machine reports are its own view of itself. Behind NAT — an Azure,
+   * AWS or GCP VM, a container, a port forward — that view only ever contains the
+   * private side, which nothing outside can dial.
+   */
+  const PRIVATE_ADDRESS = /^(?:10\.|127\.|192\.168\.|169\.254\.|172\.(?:1[6-9]|2\d|3[01])\.)/u
+
+  /** Whether an address the machine offered is something this computer could dial. */
+  function isReachableFromElsewhere(address: string): boolean {
+    const value = address.trim()
+    if (!value) return false
+    // A bare label is the machine's own host name; it rarely resolves anywhere else.
+    if (!value.includes('.') && !value.includes(':')) return false
+    // IPv6 carries a ':'; private IPv4 is what needs catching.
+    return value.includes(':') || !PRIVATE_ADDRESS.test(value)
+  }
+
+  /**
+   * True when the machine reported only addresses it can see from inside, which is
+   * the setup where a hands-off registration would otherwise just time out.
+   */
+  const onlyLocalAddresses = $derived.by(() => {
+    const value = preview
+    if (!value || value.addresses.length === 0) return false
+    return !value.addresses.some(isReachableFromElsewhere)
+  })
+
   function message(value: unknown): string {
     return value instanceof Error ? value.message : 'The Oven agent operation failed.'
   }
@@ -60,6 +107,15 @@
       error = message(cause)
     } finally {
       copying = false
+    }
+  }
+
+  /** Copy one of the Node install snippets, keeping its own label in the toast. */
+  async function copySnippet(value: string, label: string): Promise<void> {
+    try {
+      await copyText(value, label)
+    } catch (cause) {
+      error = message(cause)
     }
   }
 
@@ -176,7 +232,7 @@
 
 <Modal
   {open}
-  title="Add a machine with the Oven agent"
+  title="Add a machine with the Oven service"
   description="Run one command on a machine, then register the code it prints."
   size="lg"
   onClose={close}
@@ -192,11 +248,6 @@
     <section class="space-y-3">
       <header class="space-y-0.5">
         <h3 class="text-sm font-medium">1. Prepare the machine</h3>
-        <p class="text-xs text-muted">
-          Run this command on the machine that will become an Oven. It installs the durable service,
-          starts it in the background, and prints the code you register below. The app never needs
-          SSH access to install it.
-        </p>
       </header>
 
       <div class="flex items-center gap-2">
@@ -231,19 +282,70 @@
         />
       </label>
 
-      <p class="text-xs text-muted">
-        Name the port here to put it in the command. Leave it empty and the command uses the
-        machine's own sshd port. The machine needs Node.js 22 or later already installed.
-      </p>
+      <details class="group border bg-elevated/40">
+        <summary
+          class="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 hover:bg-overlay"
+        >
+          <span class="flex min-w-0 items-center gap-2">
+            <CioTerminal size={14} class="shrink-0 text-muted" />
+            <span class="text-xs font-medium">Install npx</span>
+            <span class="truncate text-xs font-normal text-muted">Ships with Node.js</span>
+          </span>
+          <CioChevronDown
+            size={14}
+            class="shrink-0 text-muted transition-transform group-open:rotate-180"
+          />
+        </summary>
+
+        <div class="space-y-3 border-t px-3 py-3">
+          <p class="text-xs text-muted">
+            A machine without Node.js has no npx. Install nvm, then the latest Node, which brings
+            npx with it. The service needs Node.js 22 or later, so the current release is a safe
+            pick.
+          </p>
+
+          <div class="space-y-1.5">
+            <div class="flex items-center justify-between gap-2">
+              <p class="text-xs font-medium">Linux and macOS</p>
+              <button
+                type="button"
+                class="flex h-7 items-center gap-1 border bg-elevated px-2 text-xs text-foreground hover:bg-overlay"
+                onclick={() =>
+                  void copySnippet(UNIX_NODE_INSTALL, 'Linux and macOS install command copied')}
+              >
+                <CioCopy size={12} /> Copy
+              </button>
+            </div>
+            <pre
+              class="overflow-x-auto border bg-elevated px-3 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground"><code
+                >{UNIX_NODE_INSTALL}</code
+              ></pre>
+          </div>
+
+          <div class="space-y-1.5">
+            <div class="flex items-center justify-between gap-2">
+              <p class="text-xs font-medium">Windows (PowerShell)</p>
+              <button
+                type="button"
+                class="flex h-7 items-center gap-1 border bg-elevated px-2 text-xs text-foreground hover:bg-overlay"
+                onclick={() =>
+                  void copySnippet(WINDOWS_NODE_INSTALL, 'Windows install command copied')}
+              >
+                <CioCopy size={12} /> Copy
+              </button>
+            </div>
+            <pre
+              class="overflow-x-auto border bg-elevated px-3 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground"><code
+                >{WINDOWS_NODE_INSTALL}</code
+              ></pre>
+          </div>
+        </div>
+      </details>
     </section>
 
     <section class="space-y-3 border-t pt-5">
       <header class="space-y-0.5">
         <h3 class="text-sm font-medium">2. Register the machine</h3>
-        <p class="text-xs text-muted">
-          Paste the registration code the command printed. Checking it first shows exactly what will
-          be saved.
-        </p>
       </header>
 
       <textarea
@@ -338,6 +440,21 @@
           {:else if testResult}
             <p class="px-2 py-1 bg-danger/10 text-danger" role="alert">
               {testResult.error ?? 'The connection failed.'}
+            </p>
+          {/if}
+
+          {#if onlyLocalAddresses}
+            <p
+              class={'px-2 py-1 ' +
+                (testResult
+                  ? 'bg-warning/10 text-warning'
+                  : 'border-l-2 border-warning pl-2 text-muted')}
+              role="status"
+            >
+              <span class="font-medium">This machine only knows local addresses.</span>
+              Behind NAT — a cloud VM, a container, a port forward — it cannot see the address you reach
+              it on. Type that address above, and this is the only field you have to fill in; everything
+              else stays hands-off.
             </p>
           {/if}
 

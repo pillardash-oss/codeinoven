@@ -3,6 +3,8 @@ import { toPosixPath } from '../../../lib/paths'
 import type { HarnessCapabilities } from '../../drivers/driver.interface'
 import { APP_NAME } from '../../../lib/brand'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../../lib/agent-behavior'
+import { APP_CITE_UTILITY_ID } from '../../../lib/utility-ids'
+import { CITE_ENTRY_LIMIT } from '../../../lib/cited-work'
 import {
   registerCioPromptDefault,
   DIAGRAM_OUTPUT_RULE,
@@ -153,6 +155,14 @@ export const INDEPENDENT_AUDIT_SYSTEM_PROMPT = [
  * editable Agent behavior prompt can neither drop it nor shorten it, and the
  * user can always ask for more.
  *
+ * The default is two short paragraphs of plain sentences, because the answer is
+ * read, not audited: the app already shows what a turn changed in its own card
+ * and turns a cited path into a link, so the reply never has to prove its work
+ * by inventorying files. Work the user should see is cited with the app's
+ * citation capability, which draws a card per entry, instead of being recited.
+ * Anything longer is a cost the user pays on every turn, so expansion is allowed
+ * only when their own words ask for it.
+ *
  * Two modes are deliberately excluded because they own their own output shape:
  *
  * - The engineering lifecycle (specification, PRD and Assignment planning turns)
@@ -166,12 +176,13 @@ export const INDEPENDENT_AUDIT_SYSTEM_PROMPT = [
  *   each other, so the executable contract wins.
  */
 export const RESPONSE_STYLE_INSTRUCTION = [
-  'Write to the user the way a senior engineer briefs an executive: the outcome first, then only what the user has to know, decide, or do.',
-  'Keep the whole reply to at most two short paragraphs and fit every concept into them. Prefer plain sentences; when a few short bullets are clearer than prose, use bullets instead of longer paragraphs.',
-  'No preamble, no restating the request, no filler, no hedging, no closing summary, and no narration of your process or your tool calls. Reporting a problem means exactly three things: what happened, what actually caused it, and what you changed to fix it.',
-  'Keep the detail out of the reply. Put long-form and technical breakdowns into the artifacts the task requires, or into a document in the scratch path you are allowed to write to, and point the user at that path so they can read more.',
-  'This budget governs the reply you write for the user, never the content the work itself requires: specifications, documents, reports, structured output, and evidence keep their full required detail.',
-  'Exceed it only when the user explicitly asks for the full explanation, a walkthrough, or the underlying reasoning.'
+  'Answer the way you would explain it to one person sitting across the table: plainly, in your own words, in the simplest words that carry the meaning, and with no jargon, no headings and no label lines.',
+  'Two short paragraphs is the whole reply, and most answers need one. Lead with the outcome, then say only what the user has to know, decide or do, and stop there.',
+  'No preamble, no restating the request, no filler, no hedging, no closing summary, no restatement of what you just said, and no narration of your process or your tool calls.',
+  `Never list the files you changed or paste paths to prove the work. The app already shows what a turn changed in its own card, and the commit message carries the detail; when the reply has to put the work in front of the user, cite it with the app instead of writing it out: activate ${APP_CITE_UTILITY_ID} and call cite_report once, with every path in the same paths array (up to ${CITE_ENTRY_LIMIT}), before the final message, and the app draws one card per entry. One call per report is the same burst this prompt forbids everywhere else. Name a path in prose only when the answer is about what that file contains.`,
+  'When the answer is a problem, say what happened, what actually caused it and what you changed to fix it, in that order, in one paragraph.',
+  'Be terse by default. Expand only when the user explicitly asks for the full explanation, a walkthrough or the reasoning; otherwise drop every sentence the outcome and the next action survive without.',
+  'This budget governs the reply, never the work the user asked for: a specification, document, report or structured output they requested keeps its full detail in that artifact, not in the reply that points to it.'
 ].join(' ')
 
 /** Diagram discipline plus the two rules the renderer and validator add on top of

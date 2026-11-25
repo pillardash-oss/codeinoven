@@ -40,15 +40,21 @@ export interface AppControlExecutor {
  * the user chose. The settings page writes it through the same
  * `config:update` channel, so the field is only removed here, at the
  * agent-facing door.
+ *
+ * `keybindings` is the user's keyboard, and a shortcut an agent could remap is
+ * a shortcut that stopped doing what the person at the keyboard expects. The
+ * Keymap settings page saves it through this same channel, so it is removed at
+ * the agent-facing door as well.
  */
 function withoutUserOwnedConfig(patch: unknown): unknown {
   if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) return patch
-  const candidate = patch as Record<string, unknown>
+  const candidate = { ...(patch as Record<string, unknown>) }
+  delete candidate['keybindings']
   const agentDefaults = candidate['agentDefaults']
   if (typeof agentDefaults !== 'object' || agentDefaults === null || Array.isArray(agentDefaults))
-    return patch
+    return candidate
   const defaults = { ...(agentDefaults as Record<string, unknown>) }
-  if (!('pawn' in defaults)) return patch
+  if (!('pawn' in defaults)) return candidate
   delete defaults['pawn']
   return { ...candidate, agentDefaults: defaults }
 }
@@ -138,8 +144,13 @@ const CHANNEL_ARG_HINTS: Readonly<Record<string, string>> = {
   'cloudDeploy:containerStatus': 'projectId, providerKind, containerId, accountId?',
   'cloudDeploy:deployments': 'projectId, providerKind, containerId, accountId?',
   'cloudDeploy:containerLog':
-    'projectId, providerKind, containerId, deploymentId?, accountId?, serviceName? (a logSources id, for one compose container)',
+    'projectId, providerKind, containerId, deploymentId?, accountId?, serviceName? (a logSources id, for one compose container), before? (cursor from the previous page), refresh? (boolean). Returns one page of the log: log, hasMore, cursor. The newest page comes first; pass cursor back as before to read the page above it until hasMore is false.',
   'browser:loadTabs': 'no arguments',
+  'taskManager:list':
+    'no arguments. Returns the processes CodeInOven started, with pid, command, cwd, project, thread and listening ports.',
+  'taskManager:killProcess':
+    'pid (number), force (boolean). Only a process the app owns can be stopped; main refuses any other pid. This is destructive, so ask the user before setting destructiveConfirmed.',
+  'taskManager:stopService': 'id (string, from taskManager:list)',
   'providers:getStatus': 'no arguments',
   'project:list': 'no arguments',
   'thread:listRecentPerProject': 'no arguments',

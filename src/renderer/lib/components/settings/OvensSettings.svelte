@@ -22,6 +22,7 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
+  import { ipcErrorMessage } from '$lib/ipc-errors'
   import { pickCustomIconImage, type OptimizedCustomIcon } from '$lib/custom-icon-pipeline'
   import { randomOvenAppearance } from '$lib/oven-appearance'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
@@ -32,6 +33,7 @@
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { formatDateTime } from '$shared/date-time-format'
   import { ovenSetupActionLabel } from '$shared/oven-setup-policy'
+  import type { OvenUtilitySecretBackend, OvenUtilitySecretVault } from '$shared/oven-utility-host'
   import {
     LOCAL_OVEN_ID,
     OVEN_HARNESS_COMMANDS,
@@ -114,6 +116,18 @@
   )
   let harnessBusy = $state('')
   let timezoneBusy = $state('')
+  /** What each shown remote Oven can keep at rest, keyed by oven id. */
+  let secretVaults = $state<Record<string, OvenUtilitySecretVault | undefined>>({})
+  /** Whether each shown remote Oven may keep credentials, keyed by oven id. */
+  let secretEnabled = $state<Record<string, boolean>>({})
+  /** Why a shown remote Oven could not answer about its vault, keyed by oven id. */
+  let secretErrors = $state<Record<string, string>>({})
+  /** The Oven whose credential store is being read or changed. */
+  let secretBusy = $state('')
+  /** The Oven whose credential store is about to be switched off. */
+  let pendingSecretDisable = $state<Oven | null>(null)
+  /** The Oven whose stored credentials are about to be forgotten. */
+  let pendingSecretForget = $state<Oven | null>(null)
   const hasAppearance = $derived(
     Boolean(
       color !== baselineColor ||
@@ -123,9 +137,13 @@
       clearImage
     )
   )
+  /** How many credentials the Oven the user is about to forget holds. */
+  const pendingSecretCount = $derived(
+    pendingSecretForget ? (secretVaults[pendingSecretForget.id]?.stored.length ?? 0) : 0
+  )
 
   function message(value: unknown): string {
-    return value instanceof Error ? value.message : 'The Oven operation failed.'
+    return ipcErrorMessage(value, 'The Oven operation failed.')
   }
 
   /** The live probe the unified check read for one remote Oven. */
@@ -926,6 +944,117 @@
       harnessBusy = ''
     }
   }
+
+  /** The vault backend an Oven reports, in the words its own user knows it by. */
+  function secretBackendName(backend: OvenUtilitySecretBackend): string {
+    if (backend === 'macos-keychain') return 'the login keychain'
+    if (backend === 'windows-dpapi') return 'Windows DPAPI'
+    if (backend === 'linux-secret-service') return 'the secret service'
+    return 'no vault'
+  }
+
+  /**
+   * What an Oven's answer about its vault means for the switch beside it.
+   *
+   * A machine without a vault is not broken: it runs on the per-turn push, and
+   * saying so is more use than hiding the row that asks.
+   */
+  function utilityVaultNote(vault: OvenUtilitySecretVault): string {
+    if (!vault.available) {
+      const fallback =
+        vault.backend === 'unavailable'
+          ? 'This machine has no credential vault to keep one in, so credentials stay per turn.'
+          : 'This machine cannot reach its credential vault right now, so credentials stay per turn.'
+      return vault.reason ? `${fallback} ${vault.reason}` : fallback
+    }
+    return `Kept in ${secretBackendName(vault.backend)} on this machine.`
+  }
+
+  /** One Oven's display name, for a message raised after its own row changed. */
+  function ovenName(ovenId: string): string {
+    return ovenState?.ovens.find((oven) => oven.id === ovenId)?.name ?? 'This Oven'
+  }
+
+  /**
+   * Read one Oven's vault status.
+   *
+   * The vault reports both halves of the answer: whether the machine can keep a
+   * credential at all, and whether the user turned that keeping on. An answer a
+   * change just gave still wins, because it is fresher than the read.
+   */
+  async function refreshUtilitySecrets(ovenId: string, enabled?: boolean): Promise<void> {
+    try {
+      const vault = await invoke('oven:utilitySecrets', ovenId)
+      secretVaults = { ...secretVaults, [ovenId]: vault }
+      secretEnabled = { ...secretEnabled, [ovenId]: enabled ?? vault.enabled }
+      if (secretErrors[ovenId]) secretErrors = { ...secretErrors, [ovenId]: '' }
+    } catch (failure) {
+      const detail = message(failure)
+      secretErrors = { ...secretErrors, [ovenId]: detail }
+      toast.error(`${ovenName(ovenId)} could not report its credential vault`, {
+        description: detail
+      })
+    }
+  }
+
+  /** Read the vault once, when the row is shown, rather than on every render. */
+  function readUtilitySecrets(ovenId: string): Attachment {
+    return () => {
+      void refreshUtilitySecrets(ovenId)
+    }
+  }
+
+  /**
+   * Turn an Oven's credential store on or off.
+   *
+   * The switch follows the Oven's answer rather than the click, and the status is
+   * read again because turning it off forgets everything that machine held.
+   */
+  async function setUtilitySecretStore(oven: Oven, enabled: boolean): Promise<void> {
+    if (secretBusy) return
+    secretBusy = oven.id
+    try {
+      const answer = await invoke('oven:utilitySecretStore', oven.id, enabled)
+      if (enabled && !answer.enabled) toast.error(`${oven.name} cannot keep credentials right now`)
+      else
+        toast.success(
+          enabled
+            ? `${oven.name} now keeps utility credentials at rest`
+            : `${oven.name} forgot its stored utility credentials`
+        )
+      await refreshUtilitySecrets(oven.id, answer.enabled)
+    } catch (failure) {
+      const detail = message(failure)
+      toast.error(`${oven.name} could not change its credential store`, { description: detail })
+      // The store may be off with its deletion unfinished, so show what is true now.
+      await refreshUtilitySecrets(oven.id)
+    } finally {
+      secretBusy = ''
+      pendingSecretDisable = null
+    }
+  }
+
+  /** Forget everything an Oven keeps at rest, once the user confirms it. */
+  async function forgetUtilitySecrets(): Promise<void> {
+    const oven = pendingSecretForget
+    if (!oven || secretBusy) return
+    secretBusy = oven.id
+    try {
+      const result = await invoke('oven:forgetUtilitySecrets', oven.id)
+      pendingSecretForget = null
+      toast.success(
+        result.forgotten === 1
+          ? `1 stored credential forgotten on ${oven.name}`
+          : `${result.forgotten} stored credentials forgotten on ${oven.name}`
+      )
+      await refreshUtilitySecrets(oven.id, secretEnabled[oven.id])
+    } catch (failure) {
+      const detail = message(failure)
+      toast.error(`${oven.name} could not forget its stored credentials`, { description: detail })
+    } finally {
+      secretBusy = ''
+    }
+  }
 </script>
 
 <div class="p-6 pb-24" {@attach consumeNewOvenRequest(settingsUiState.newOvenRequest)}>
@@ -940,14 +1069,14 @@
         class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
         onclick={() => (agentOpen = true)}
       >
-        <CioTerminal size={14} /> Add via agent
+        <CioTerminal size={14} /> Add via oven service
       </button>
       <button
         type="button"
         class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
         onclick={() => openEditor()}
       >
-        <CioPlus size={14} /> New Oven
+        <CioPlus size={14} /> Add manually
       </button>
     </div>
   </div>
@@ -1296,16 +1425,74 @@
                     </div>
                   </div>
                 </dl>
+                {#if oven.kind !== 'local'}
+                  {@const vault = secretVaults[oven.id]}
+                  {@const secretFailure = secretErrors[oven.id]}
+                  <div
+                    class="space-y-2 border border-border p-3"
+                    {@attach readUtilitySecrets(oven.id)}
+                  >
+                    <div class="flex items-start justify-between gap-3">
+                      <div class="min-w-0 space-y-1">
+                        <p class="text-xs font-medium text-foreground">
+                          Keep utility credentials on this Oven
+                        </p>
+                        <p class="text-xs text-muted">
+                          A terminal or agent on this machine can then start its MCP servers without
+                          this app connected.
+                        </p>
+                        {#if vault && vault.stored.length > 0}
+                          <p class="text-xs text-muted">
+                            {vault.stored.length === 1
+                              ? '1 credential stored on this machine.'
+                              : `${vault.stored.length} credentials stored on this machine.`}
+                          </p>
+                        {/if}
+                        {#if vault}
+                          <p class="text-xs" class:text-danger={!vault.available} role="status">
+                            {utilityVaultNote(vault)}
+                          </p>
+                        {:else if secretFailure}
+                          <p class="text-xs text-danger" role="status">{secretFailure}</p>
+                        {:else}
+                          <p class="flex items-center gap-1.5 text-xs text-muted">
+                            <CioSpinner size={11} class="animate-spin" />Reading this machine's
+                            vault
+                          </p>
+                        {/if}
+                      </div>
+                      {#if vault}
+                        <Switch
+                          checked={secretEnabled[oven.id] ?? false}
+                          disabled={(!vault.available && !secretEnabled[oven.id]) ||
+                            secretBusy === oven.id}
+                          title="Keep utility credentials on this Oven"
+                          aria-label="Keep utility credentials on this Oven"
+                          onchange={(next) => {
+                            if (next) void setUtilitySecretStore(oven, true)
+                            else pendingSecretDisable = oven
+                          }}
+                        />
+                      {/if}
+                    </div>
+                    {#if vault && vault.stored.length > 0}
+                      <button
+                        type="button"
+                        class="border border-border px-2 py-1 text-xs text-danger hover:bg-danger/10 disabled:opacity-40"
+                        disabled={secretBusy === oven.id}
+                        onclick={() => (pendingSecretForget = oven)}
+                      >
+                        Forget stored credentials
+                      </button>
+                    {/if}
+                  </div>
+                {/if}
               </div>
             {/if}
           </SettingsEntry>
         </div>
       {/each}
     </div>
-    <p class="mt-4 text-xs text-dimmed">
-      Service setup uses your SSH account and requires Node.js 22 or later on the Oven. Trust the
-      host in OpenSSH before connecting.
-    </p>
   {/if}
 </div>
 
@@ -1599,6 +1786,39 @@
   <p>
     The harness may remove its own configuration or credentials. CodeInOven checks that it is not
     running before uninstalling it.
+  </p>
+</ConfirmDialog>
+
+<ConfirmDialog
+  open={Boolean(pendingSecretForget)}
+  title="Forget stored credentials?"
+  confirmLabel="Forget credentials"
+  busy={secretBusy === pendingSecretForget?.id}
+  onCancel={() => (pendingSecretForget = null)}
+  onConfirm={forgetUtilitySecrets}
+>
+  <p>
+    Forget {pendingSecretCount === 1 ? '1 credential' : `${pendingSecretCount} credentials`} kept on
+    {pendingSecretForget?.name}?
+  </p>
+  <p>
+    Its terminals and agents will then get utility credentials only from this app, turn by turn.
+  </p>
+</ConfirmDialog>
+
+<ConfirmDialog
+  open={Boolean(pendingSecretDisable)}
+  title="Stop keeping credentials?"
+  confirmLabel="Stop and forget"
+  busy={Boolean(pendingSecretDisable) && secretBusy === pendingSecretDisable?.id}
+  onCancel={() => (pendingSecretDisable = null)}
+  onConfirm={() => {
+    if (pendingSecretDisable) void setUtilitySecretStore(pendingSecretDisable, false)
+  }}
+>
+  <p>Every utility credential kept on {pendingSecretDisable?.name} will be deleted.</p>
+  <p>
+    Its terminals and agents will then get utility credentials only from this app, turn by turn.
   </p>
 </ConfirmDialog>
 

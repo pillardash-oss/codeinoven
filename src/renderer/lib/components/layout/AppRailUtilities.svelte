@@ -114,7 +114,9 @@
       case 'error':
         return {
           icon: CioAlertCircle,
-          label: `Update error: ${status.errorMessage}`,
+          label: status.installRetryable
+            ? `Update install failed. Click to retry from the cached update: ${status.errorMessage}`
+            : `Update error: ${status.errorMessage}`,
           tone: 'danger',
           disabled: false,
           spin: false
@@ -147,7 +149,25 @@
       void openBlockersModal()
       return
     }
+    if (status.canAutoUpdate && status.state === 'error' && status.installRetryable) {
+      void retryCachedInstall()
+      return
+    }
     navigate('settings-about')
+  }
+
+  /**
+   * Retry an install that failed while its verified payload stayed cached.
+   *
+   * The retry starts the install gate exactly as a `downloaded` update does, so
+   * active work still holds it back. The blockers are read right after, and the
+   * modal opens only when there is something to show: that is the same review
+   * the waiting clock offers, and its force action works because the gate now
+   * holds the pending install this retry queued.
+   */
+  async function retryCachedInstall(): Promise<void> {
+    void updaterState.installUpdate()
+    if (await updateBlockers.prepare()) blockersModalOpen = true
   }
 
   /**
@@ -159,7 +179,10 @@
    * right chunk even when the gate opens while the mouse is already on it.
    */
   function onUpdateHover(): void {
-    if (updaterState.status.canAutoUpdate && updaterState.status.state === 'waiting') {
+    const status = updaterState.status
+    const opensBlockers =
+      status.state === 'waiting' || (status.state === 'error' && status.installRetryable)
+    if (status.canAutoUpdate && opensBlockers) {
       preloadUpdateBlockersChunk()
       return
     }

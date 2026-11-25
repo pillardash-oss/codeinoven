@@ -1,4 +1,10 @@
-import { DEFAULT_SCOPE_BUCKET_ID, isManagedScopeRoot, type ScopeBucket, type Thread } from './types'
+import {
+  DEFAULT_SCOPE_BUCKET_ID,
+  isManagedScopeRoot,
+  scopeRootIdentity,
+  type ScopeBucket,
+  type Thread
+} from './types'
 import { isThreadBusyStatus } from './thread-status-policy'
 
 /**
@@ -24,18 +30,6 @@ export interface ScopeSwapRuleInput {
   targetBucketId: string
   /** The project's scope board buckets, or an empty list while it is unknown. */
   buckets: readonly ScopeBucket[]
-}
-
-/**
- * The filesystem root a scope resolves to, as an identity the rule can compare.
- *
- * Every project-rooted scope resolves to the same registered project directory,
- * so they share one key and a move between them changes no path. A managed
- * worktree is a checkout of its own with a directory of its own, so its directory
- * name is its identity.
- */
-function scopeRootKey(bucket: ScopeBucket): string {
-  return isManagedScopeRoot(bucket.root) ? `worktree:${bucket.root.directoryName}` : 'project'
 }
 
 /**
@@ -67,7 +61,7 @@ export function scopeSwapRefusal(input: ScopeSwapRuleInput): string | null {
   const current = input.buckets.find((bucket) => bucket.id === currentBucketId)
   const target = input.buckets.find((bucket) => bucket.id === input.targetBucketId)
   if (!current || !target) return null
-  if (scopeRootKey(current) === scopeRootKey(target)) return null
+  if (scopeRootIdentity(current.root) === scopeRootIdentity(target.root)) return null
 
   if (isManagedScopeRoot(current.root)) {
     return `Stop this thread before moving it out of "${current.name}": that scope's worktree is the project root this run is using.`

@@ -374,12 +374,19 @@ export class ChatEngineUtilitiesTools {
    * the thread as that stage from its next turn on. An idle lifecycle is started
    * immediately; a thread already running a stage or waiting on a decision gate
    * is left exactly as it is.
+   *
+   * The durable `engineering` marker is written first, and always: the row's
+   * Engineering mark and the conversation's Engineering hydration both read it,
+   * and only the lifecycle switch used to write it. A stage an agent turned on
+   * through its own tool therefore left the thread looking like an ordinary
+   * conversation, with no mark on the row and no coordinator docked.
    */
-  private enableEngineeringStage(
+  private async enableEngineeringStage(
     projectId: string,
     threadId: string,
     stage: 'brainstorm' | 'prd' | 'spec' | 'assignment' | 'achievement'
-  ): void {
+  ): Promise<void> {
+    await this.host.threadManager.updateThread(projectId, threadId, { engineering: true })
     const engine = this.host.state.engineeringLifecycleEngine
     const current = engine.get(projectId, threadId)
     if (current?.activeStage || current?.humanGate) return
@@ -425,7 +432,7 @@ export class ChatEngineUtilitiesTools {
             threadId,
             instructions
           )
-          this.enableEngineeringStage(projectId, threadId, 'brainstorm')
+          await this.enableEngineeringStage(projectId, threadId, 'brainstorm')
           return {
             artifact: 'brainstorm',
             id: document.id,
@@ -475,7 +482,7 @@ export class ChatEngineUtilitiesTools {
           [],
           createMessageId()
         )
-        this.enableEngineeringStage(projectId, threadId, 'prd')
+        await this.enableEngineeringStage(projectId, threadId, 'prd')
         this.host.broadcast({
           type: 'prd.ready',
           sessionId: context.sessionId,
@@ -501,7 +508,7 @@ export class ChatEngineUtilitiesTools {
             message: `The active specification v${active.version} already exists.`
           }
         }
-        this.enableEngineeringStage(projectId, threadId, 'spec')
+        await this.enableEngineeringStage(projectId, threadId, 'spec')
         const spec = await this.host.ensureInitialSpec(projectId, threadId)
         return {
           artifact: 'spec',
@@ -513,7 +520,7 @@ export class ChatEngineUtilitiesTools {
       case 'assignment': {
         const active = this.host.state.assignmentEngine.getActive(projectId, threadId)
         const rawPlan = input['plan']
-        this.enableEngineeringStage(projectId, threadId, 'assignment')
+        await this.enableEngineeringStage(projectId, threadId, 'assignment')
         // The agent authored the graph itself, so the app never generates one. A
         // progressive call adds by id to the unsigned draft, which is how a task
         // graph can be written in parts while the user watches it grow.
@@ -598,7 +605,7 @@ export class ChatEngineUtilitiesTools {
         const goal = approvedSpec
           ? undefined
           : await this.resolveAchievementGoal(projectId, threadId, thread.title, instructions)
-        this.enableEngineeringStage(projectId, threadId, 'achievement')
+        await this.enableEngineeringStage(projectId, threadId, 'achievement')
         // Achievement owns the audit/rework loop, so the thread keeps running in
         // loop mode until the goal is verified.
         await this.host.threadManager.updateSettings(projectId, threadId, {
@@ -820,8 +827,14 @@ export class ChatEngineUtilitiesTools {
       // snapshot catches tools that finish while the previous scan is pending.
       if ((session.pendingWindowScans?.size ?? 0) > 0) return
       if (openTools.size === 0) {
+        // A window-open snapshot may reuse a walk that just completed: a stale
+        // opening bound only over-includes paths, and the close below always
+        // takes a fresh scan. Sessions that share a working tree (a scope's
+        // worktree, the project checkout) no longer each pay the four git
+        // spawns and the tree walk for windows that overlap in time; sessions
+        // in different worktrees resolve to different paths and never share.
         session.unboundedWindowStart = this.host.checkpointManager
-          .fingerprint(session.projectId, session.projectPath)
+          .fingerprint(session.projectId, session.projectPath, { reuseRecent: true })
           .catch((error) => {
             Logger.error('turn change window scan failed:', error)
             return null

@@ -2,6 +2,11 @@ import { wireChatEngine } from './chat-engine/chat-engine-wiring'
 import type { DonRuntime } from './chat-engine-don'
 import { ChatEngineState } from './chat-engine/chat-engine-state'
 import type { ThreadTransferRelease } from './thread-transfer-service/thread-transfer-workers'
+import { deviceHoldForNewTurn } from '../system/device-hold'
+import { Logger } from '../system/logger'
+import type { OvenChat } from '../ovens/oven-chat'
+import type { OvenHoldError } from '../ovens/oven-resource-gate'
+
 import type { HandoffReleaseDetails } from '../system/instance-handoff-bus'
 import { ThreadCreationCoordinator } from './thread-creation-coordinator'
 import { ThreadManager } from '../../lib/engines/thread-manager'
@@ -9,6 +14,7 @@ import { CheckpointManager } from '../storage/checkpoint-manager'
 import type { SearchSummaryRequest } from '../search/thread-search-summary'
 import type { ProjectFingerprint } from '../git/change-tracking-service'
 import type { HarnessDriver } from '../drivers/driver.interface'
+import type { HarnessSessionMoveResult } from '../../lib/types'
 import type { Database } from '../database/database'
 import type { TypesafeDecisionService } from '../typesafe/typesafe-decision-service'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -126,6 +132,24 @@ import type {
 } from './chat-engine/chat-engine-types'
 import { buildChatEngineUnits } from './chat-engine/chat-engine-units'
 import type { DirectReplyInput } from './chat-engine/chat-engine-direct-reply'
+
+/**
+ * The Oven gate that mirrors the device gate: a turn aimed at an Oven waits on
+ * that Oven's own memory reading, and the refusal keeps the message the same
+ * way {@link deviceHoldForNewTurn} keeps one for this machine.
+ */
+async function ovenHoldForNewTurn(
+  ovenChat: OvenChat,
+  ovenId: string | undefined
+): Promise<OvenHoldError | null> {
+  if (!ovenId || ovenId === 'local') return null
+  try {
+    return await ovenChat.resourceGate.holdFor(ovenId)
+  } catch (error) {
+    Logger.dev('Oven gate: reading failed, failing open', error)
+    return null
+  }
+}
 
 export {
   CITATION_SYSTEM_INSTRUCTION,
@@ -717,6 +741,14 @@ export class ChatEngine {
   killProcess(projectId: string, threadId: string, pid: number): Promise<void> {
     return this.units['processes'].killProcess(projectId, threadId, pid)
   }
+  /** Answer one app-owned process tool call: list, start or stop for a thread. */
+  runAgentProcessTool(
+    action: 'list' | 'start' | 'stop',
+    input: Record<string, unknown>,
+    context: SecretRequestContext
+  ): Promise<unknown> {
+    return this.units['processes'].runAgentProcessTool(action, input, context)
+  }
   killThreadProcesses(projectId: string, threadId: string): Promise<void> {
     return this.units['processes'].killThreadProcesses(projectId, threadId)
   }
@@ -905,6 +937,10 @@ export class ChatEngine {
    * conversation the user typed them in, so a group chat reads as one inbox.
    */
   async sendDirectReply(input: DirectReplyInput): Promise<AgentMessage> {
+    // A reply in a group chat starts a turn in the thread that spoke, so it is
+    // user work and answers to the same device gate as a composer send.
+    const held = await deviceHoldForNewTurn()
+    if (held !== null) throw held
     return this.units['direct-reply'].send(input)
   }
   async sendPrompt(
@@ -926,6 +962,15 @@ export class ChatEngine {
      *  the first user prompt in its conversation. */
     visiblePrompt = false
   ): Promise<AgentMessage> {
+    // A user turn may not start on a machine that has no room for it. The window
+    // parks the message before it gets here, so this is the guard for every other
+    // caller that reaches a thread without a composer.
+    if (origin === 'user') {
+      const held = await deviceHoldForNewTurn()
+      if (held !== null) throw held
+      const ovenHeld = await ovenHoldForNewTurn(this.state.ovenChat, settings.ovenId)
+      if (ovenHeld !== null) throw ovenHeld
+    }
     return this.units['turns-send-prompt'].sendPrompt(
       projectId,
       threadId,
@@ -955,6 +1000,11 @@ export class ChatEngine {
     userMessageId?: string,
     displayText?: string
   ): Promise<AgentMessage | undefined> {
+    // A temporary chat is still a turn the user asked for, on the same device.
+    const held = await deviceHoldForNewTurn()
+    if (held !== null) throw held
+    const ovenHeld = await ovenHoldForNewTurn(this.state.ovenChat, settings.ovenId)
+    if (ovenHeld !== null) throw ovenHeld
     return this.units['temporary-chats'].sendTemporaryPrompt(
       projectId,
       threadId,
@@ -1026,6 +1076,21 @@ export class ChatEngine {
     title?: string
   ): Promise<Thread> {
     return this.units['temporary-chats'].convertTemporaryChatToThread(
+      projectId,
+      threadId,
+      temporaryChatId,
+      settings,
+      title
+    )
+  }
+  async attachTemporaryChatToThread(
+    projectId: string,
+    threadId: string,
+    temporaryChatId: string,
+    settings: ThreadSettings,
+    title?: string
+  ): Promise<Thread> {
+    return this.units['temporary-chats'].attachTemporaryChatToThread(
       projectId,
       threadId,
       temporaryChatId,
@@ -1336,6 +1401,9 @@ export class ChatEngine {
   ): Promise<{ report: AuditReport; auditorThread: Thread }> {
     return this.units['audit'].generateIndependentAudit(projectId, threadId, request)
   }
+  async stopIndependentAudit(projectId: string, coordinatorThreadId: string): Promise<void> {
+    return this.units['audit'].stopIndependentAudit(projectId, coordinatorThreadId)
+  }
   async deleteIndependentAuditorThread(
     projectId: string,
     coordinatorThreadId: string
@@ -1452,6 +1520,17 @@ export class ChatEngine {
   ): Promise<void> {
     return this.units['runtime-agents'].runCommand(projectId, threadId, commandId, args)
   }
+  /**
+   * Move this thread's session to a host of its own, through the harness that
+   * runs it. A harness that runs one process per session reports that it cannot.
+   */
+  async moveSessionToNewHost(
+    projectId: string,
+    threadId: string
+  ): Promise<HarnessSessionMoveResult> {
+    return this.units['turns-sessions'].moveSessionToNewHost(projectId, threadId)
+  }
+
   async compactSession(projectId: string, threadId: string): Promise<void> {
     return this.units['turns-sessions'].compactSession(projectId, threadId)
   }

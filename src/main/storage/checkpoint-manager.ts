@@ -12,6 +12,7 @@ import type {
   TurnCheckpointSummary
 } from '../../lib/types'
 import type { Database } from '../database/database'
+import type { WorkerLane } from '../database/database-worker'
 import { CrossProcessMutex } from '../system/cross-process-mutex'
 import { Logger } from '../system/logger'
 import {
@@ -20,6 +21,7 @@ import {
   isExcludedRelativePath,
   type CheckpointChange,
   type CheckpointFile,
+  type FingerprintOptions,
   type ProjectCheckpoint,
   type ProjectFingerprint
 } from '../git/change-tracking-service'
@@ -38,6 +40,7 @@ import {
   MAX_CHECKPOINT_FAILURE_LENGTH
 } from './checkpoint/checkpoint-errors'
 import {
+  backfillChangeProvenance,
   dropExcludedPathChanges,
   dropUnprovenOverlappingChanges,
   pruneUnusedBlobs,
@@ -50,6 +53,7 @@ import {
 import { repairCheckpointChanges, toTurnCheckpointSummary } from './checkpoint/checkpoint-summary'
 import {
   TRANSCRIPT_EVIDENCE_MESSAGE_LIMIT,
+  alignEvidencePaths,
   transcriptWriteEvidence,
   type TranscriptEvidenceRow
 } from './checkpoint/checkpoint-transcript-evidence'
@@ -65,8 +69,20 @@ const APP_CLOSED_TURN_MESSAGE = `${APP_NAME} closed before this turn finished.`
 /** Wording for a turn the user deliberately stopped from the Stop control. */
 const USER_STOPPED_TURN_MESSAGE = `${APP_NAME} stopped this turn at your request.`
 
-/** Row bound for one thread's checkpoint list (the read used to cap at 10 000). */
-const CHECKPOINT_LIST_MAX_ROWS = 10_000
+/**
+ * Newest checkpoints one thread list reads when the caller names no window.
+ *
+ * A turn card is drawn only for a checkpoint anchored to a message the
+ * transcript holds, so a reader can only ever use the newest window: the list
+ * is not a browsable archive. Reading the whole set parsed and diffed every
+ * checkpoint the thread had ever written (one live thread held 427 of them and
+ * 5 MB of snapshot JSON) on every open, on the single database worker every
+ * interactive read queues behind.
+ */
+const CHECKPOINT_LIST_DEFAULT_ROWS = 200
+
+/** Ceiling on a caller-named window, so no caller can turn the list into a whole-thread decode. */
+const CHECKPOINT_LIST_MAX_ROWS = 2_000
 
 /** Bound on the paths one completion re-reads to keep its own writes on the card. */
 const MAX_EVIDENCE_RESCUES = 100
@@ -98,6 +114,8 @@ export interface TurnCheckpoint {
   >
   /** Whether completion deliberately restricted the snapshot diff to reported tool paths. */
   changeFilterApplied?: boolean
+  /** When a maintenance pass last read this card's transcript for provenance. */
+  provenanceCheckedAt?: number
   lineStats?: Record<string, CheckpointLineStats>
   createdAt: number
   completedAt?: number
@@ -206,9 +224,21 @@ export const LATE_CLAIM_REOPEN_WINDOW_MS = 15 * 60_000
  * Persists pre/post-turn checkpoints and exposes selective, snapshot-backed rollback.
  * It never uses git reset or rewrites paths that are absent from the recorded diff.
  */
+/**
+ * How long one project's blob prune is trusted.
+ *
+ * The scan behind it reads every checkpoint of the project, and thread cleanup
+ * arrives in bursts, so without this the same full scan was requested again for
+ * every thread trimmed out of the same project.
+ */
+const BLOB_PRUNE_COALESCE_MS = 60_000
+
 export class CheckpointManager {
   private readonly trackers = new Map<string, ChangeTrackingService>()
   private readonly blobLocks = new Map<string, CrossProcessMutex>()
+  /** Blob prunes in flight, and when each project last finished one. */
+  private readonly blobPruneRuns = new Map<string, Promise<number>>()
+  private readonly blobPrunedAt = new Map<string, number>()
 
   constructor(private readonly db: Database) {}
 
@@ -373,10 +403,18 @@ export class CheckpointManager {
     return transcriptWriteEvidence(projectPath, rows)
   }
 
-  /** Stat-only project scan used to attribute shell-command mutations to their run window. */
-  fingerprint(projectId: string, projectPath: string): Promise<ProjectFingerprint> {
+  /**
+   * Stat-only project scan used to attribute shell-command mutations to their run window.
+   * A window-open caller passes `reuseRecent` so several threads opening windows
+   * around the same moment share one walk; a window-close caller never does.
+   */
+  fingerprint(
+    projectId: string,
+    projectPath: string,
+    options: FingerprintOptions = {}
+  ): Promise<ProjectFingerprint> {
     assertId(projectId)
-    return this.tracker(projectId).fingerprint(projectPath)
+    return this.tracker(projectId).fingerprint(projectPath, options)
   }
 
   /** Project-relative paths that changed between two fingerprints. */
@@ -410,6 +448,29 @@ export class CheckpointManager {
         includeGitMetadata: checkpoint.before.git !== undefined
       })
       const allChanges = tracker.calculateChanges(checkpoint.before, after)
+      // Write evidence is parsed from a command that starts at the project root,
+      // while a long-lived harness shell sits wherever its last `cd` left it. A
+      // target that is not a change path is therefore mapped onto the single
+      // change path it ends, which is what keeps a contested diff from dropping
+      // the very files the turn wrote.
+      const alignedEvidence = alignEvidencePaths(
+        [
+          ...(options.changeSources?.keys() ?? []),
+          ...(options.evidencedPaths ?? []),
+          ...(options.precisePaths ?? [])
+        ],
+        new Set(allChanges.map((change) => change.path))
+      )
+      const remappedEvidencePaths = (paths: ReadonlySet<string> | undefined): Set<string> =>
+        new Set([...(paths ?? [])].flatMap((path) => alignedEvidence.get(path) ?? []))
+      const changeSources = options.changeSources
+        ? new Map(
+            [...options.changeSources].flatMap(([path, sources]) => {
+              const target = alignedEvidence.get(path)
+              return target ? [[target, sources] as const] : []
+            })
+          )
+        : undefined
       const foreign =
         allChanges.length > 0 ? await this.foreignClaimedPaths(checkpoint, options) : undefined
       // A turn another thread had in flight during this window makes the diff
@@ -429,12 +490,13 @@ export class CheckpointManager {
               options.ownThreadIds
             )
       const contestedDiff = options.contestedDiff === true || (overlapping?.length ?? 0) > 0
-      const precisePaths = options.precisePaths ?? new Set<string>()
+      const precisePaths = remappedEvidencePaths(options.precisePaths)
+      const alignedEvidencedPaths = remappedEvidencePaths(options.evidencedPaths)
       const excludedPaths = options.excludedPaths
       // A path this turn recorded write evidence for. Window evidence counts: a
       // shell command that measured the file changing is this turn's own work.
       const claimedByThisTurn = (path: string): boolean =>
-        (options.changeSources?.get(path)?.length ?? 0) > 0
+        (changeSources?.get(path)?.length ?? 0) > 0
       // Strongest first: another turn's file tool beats everything but this
       // turn's own precise claim. Then a foreign shell window, which only ever
       // proves the file moved while that command ran: it never outranks this
@@ -484,9 +546,8 @@ export class CheckpointManager {
       // while the command ran, which is exactly what another turn writing here
       // looks like. Counting the bare key as proof let a contested diff rescue a
       // room full of another thread's files back onto a read-only turn's card.
-      const evidencedPaths = new Set<string>(options.evidencedPaths ?? [])
-      for (const [path, sources] of options.changeSources ??
-        new Map<string, FileChangeSource[]>()) {
+      const evidencedPaths = alignedEvidencedPaths
+      for (const [path, sources] of changeSources ?? new Map<string, FileChangeSource[]>()) {
         if (sources.length > 0) evidencedPaths.add(path)
       }
       if (Object.keys(checkpoint.before.files).length > 0) {
@@ -575,12 +636,12 @@ export class CheckpointManager {
         status,
         after,
         changes,
-        ...(options.changeSources
+        ...(changeSources
           ? {
               // Store each command once, even when it changed thousands of files.
               toolSources: Object.fromEntries(
                 changes.flatMap((change) =>
-                  (options.changeSources?.get(change.path) ?? []).map((source) => [
+                  (changeSources.get(change.path) ?? []).map((source) => [
                     source.toolPartId,
                     source
                   ])
@@ -589,7 +650,7 @@ export class CheckpointManager {
               changeSourceRefs: Object.fromEntries(
                 changes.map((change) => [
                   change.path,
-                  (options.changeSources?.get(change.path) ?? []).map((source) => ({
+                  (changeSources.get(change.path) ?? []).map((source) => ({
                     toolPartId: source.toolPartId,
                     verification: source.verification,
                     window: source.window
@@ -1177,10 +1238,14 @@ export class CheckpointManager {
       save: (checkpoint) => this.save(checkpoint),
       saveTrimmed: (checkpoint) => this.writeCheckpoint(checkpoint),
       tracker: (projectId) => this.tracker(projectId),
-      queryRows: (sql, params, maxRows) => this.queryRows(sql, params, maxRows),
+      queryRows: (sql, params, maxRows) =>
+        this.queryRows(sql, params, maxRows, { lane: 'background' }),
       queryRowsStrict: async (sql, params, maxRows) => {
         const result = await this.db.queryViaWorker(sql, params, maxRows, {
-          allowPrimaryFallback: false
+          allowPrimaryFallback: false,
+          // A maintenance pass scans the whole project and nobody is waiting on
+          // it, so it must never sit in the queue ahead of a click's read.
+          lane: 'background'
         })
         if (!result.ok) throw new Error(result.error ?? 'checkpoint read failed')
         return (result.rows ?? []) as Record<string, unknown>[]
@@ -1219,6 +1284,11 @@ export class CheckpointManager {
    *  while their write evidence was mis-parsed, so an empty card becomes true. */
   async repairEvidenceDroppedCheckpoints(): Promise<number> {
     return repairEvidenceDroppedCheckpoints(this.maintenanceHost())
+  }
+
+  /** Fill in the tool sources of cards whose transcript landed after the turn. */
+  async backfillChangeProvenance(): Promise<number> {
+    return backfillChangeProvenance(this.maintenanceHost())
   }
 
   /** Re-open a recently completed checkpoint so late tool claims   edits that
@@ -1260,24 +1330,64 @@ export class CheckpointManager {
     })
   }
 
-  /** Remove project checkpoint blobs that no remaining thread references. */
+  /**
+   * Remove project checkpoint blobs that no remaining thread references.
+   *
+   * Coalesced, because the scan behind it reads every checkpoint of the project
+   * (measuring 3-4.5 s on a busy project) and it is triggered by thread cleanup,
+   * which arrives in bursts: nine working threads settling and being trimmed
+   * asked for the same full scan again and again, and every click's own read
+   * queued behind it on the single database worker. A prune already running is
+   * joined, and a project pruned within the last minute is left alone — a blob
+   * that no thread references stays unreferenced for the next sweep, so nothing
+   * is lost by waiting.
+   */
   async pruneUnusedBlobs(projectId: string): Promise<number> {
-    return pruneUnusedBlobs(this.maintenanceHost(), projectId)
+    const running = this.blobPruneRuns.get(projectId)
+    if (running) return running
+    const lastRun = this.blobPrunedAt.get(projectId)
+    if (lastRun !== undefined && Date.now() - lastRun < BLOB_PRUNE_COALESCE_MS) return 0
+    const run = pruneUnusedBlobs(this.maintenanceHost(), projectId)
+      .then((deleted) => {
+        this.blobPrunedAt.set(projectId, Date.now())
+        return deleted
+      })
+      .finally(() => {
+        this.blobPruneRuns.delete(projectId)
+      })
+    this.blobPruneRuns.set(projectId, run)
+    return run
   }
 
-  async listSummaries(projectId: string, threadId: string): Promise<TurnCheckpointSummary[]> {
+  /**
+   * Summaries of a thread's newest turn checkpoints, newest first.
+   *
+   * `limit` is the newest window to decode, not a page: the rows embed two
+   * whole-project snapshots each, so decoding them and recomputing the diff of a
+   * turn that stored none is the expensive half of this read. The caller names
+   * the window it can actually use (the transcript holds N messages, so at most
+   * N turns are on screen); the worker decodes exactly that many and hands back
+   * only the summaries. The default is wide enough that a caller which does not
+   * know still gets every checkpoint its transcript can show.
+   */
+  async listSummaries(
+    projectId: string,
+    threadId: string,
+    limit?: number
+  ): Promise<TurnCheckpointSummary[]> {
     assertId(projectId)
     assertId(threadId)
-    // The rows embed two whole-project snapshots each, so decoding them and
-    // recomputing the diff of a turn that stored none is the expensive half of
-    // this read. The maintenance worker does that and hands back only the
-    // summaries; the local path below is for a database without a worker
-    // (in-memory tests) or one that just failed.
+    const requested =
+      typeof limit === 'number' && Number.isFinite(limit) ? limit : CHECKPOINT_LIST_DEFAULT_ROWS
+    const rows = Math.min(CHECKPOINT_LIST_MAX_ROWS, Math.max(1, Math.floor(requested)))
+    // The maintenance worker does the decode and the diff; the local path below
+    // is for a database without a worker (in-memory tests) or one that just
+    // failed.
     const viaWorker = await this.db
       .queryCheckpointSummariesViaWorker(
         'SELECT data FROM turn_checkpoints WHERE project_id = ? AND thread_id = ? ORDER BY created_at DESC',
         [projectId, threadId],
-        CHECKPOINT_LIST_MAX_ROWS
+        rows
       )
       .catch(() => null)
     if (viaWorker?.ok) {
@@ -1290,9 +1400,9 @@ export class CheckpointManager {
       }
       return viaWorker.summaries
     }
-    return (await this.list(projectId, threadId)).map((checkpoint) =>
-      toTurnCheckpointSummary(checkpoint)
-    )
+    return (await this.list(projectId, threadId))
+      .slice(0, rows)
+      .map((checkpoint) => toTurnCheckpointSummary(checkpoint))
   }
 
   /**
@@ -1736,13 +1846,15 @@ export class CheckpointManager {
   private async queryRows<Row = Record<string, unknown>>(
     sql: string,
     params: unknown[],
-    maxRows: number
+    maxRows: number,
+    options: { lane?: WorkerLane } = {}
   ): Promise<Row[]> {
     // `allowPrimaryFallback: false` because `queryViaWorker` otherwise answers a
     // failed worker read from the primary connection itself, and the retry below
     // would then run the identical statement on the main thread a second time.
     const result = await this.db.queryViaWorker(sql, params, maxRows, {
-      allowPrimaryFallback: false
+      allowPrimaryFallback: false,
+      ...(options.lane ? { lane: options.lane } : {})
     })
     if (!result.ok) {
       return this.db.all<Row>(sql, ...params)

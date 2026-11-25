@@ -1,4 +1,5 @@
 import type { ChildProcess } from 'node:child_process'
+import { attachmentScratchDirectory } from './attachment-data-url'
 import type {
   AgentEvent,
   AgentMessage,
@@ -385,7 +386,8 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
       await this.applyTurnSettings(handle, projectPath, opts)
       const payload = await buildOpenCodeV2PromptPayload(
         prependHistoryRecap(opts.text, opts.historyRecap),
-        opts.attachments
+        opts.attachments,
+        attachmentScratchDirectory(projectPath)
       )
       // V2's prompt body has no `system` field. A synthetic inbox item parked
       // ahead of the prompt is the only channel for context the user did not
@@ -490,7 +492,11 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
     if (this.unavailableProcesses.has(handle.process)) {
       throw new SteerDeliveryFailedError('OpenCode stopped. Retry the turn to reconnect.')
     }
-    const payload = await buildOpenCodeV2PromptPayload(opts.text, opts.attachments)
+    const payload = await buildOpenCodeV2PromptPayload(
+      opts.text,
+      opts.attachments,
+      attachmentScratchDirectory(projectPath)
+    )
     try {
       await handle.client.json(`/api/session/${encodeURIComponent(opts.sessionId)}/prompt`, {
         method: 'POST',

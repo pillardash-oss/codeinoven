@@ -79,6 +79,8 @@ export interface IndependentAuditCoordinatorPanelProps {
   favoriteModels?: string[]
   recentModels?: string[]
   onOpenAudit?: () => void
+  /** Stop the independent audit that is running; no report is saved. */
+  onStopAudit?: () => void | Promise<void>
   onViewReport?: () => void
   /** Delete the current auditor thread and start a fresh audit session. */
   onNewAudit?: () => void | Promise<void>

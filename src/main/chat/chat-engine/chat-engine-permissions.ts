@@ -1,8 +1,14 @@
-import { resolve } from 'path'
+import { join, posix, resolve } from 'path'
 import { existsSync } from 'fs'
+import { ChatEngine } from '../chat-engine'
 import { Logger } from '../../system/logger'
 import { PERMISSION_EVENTS_LOG_FILE, dailyLogRelativePath } from '../../system/log-paths'
-import { PermissionPolicy } from '../../permissions/permission-policy'
+import { PermissionPolicy, normalizePermissionName } from '../../permissions/permission-policy'
+import {
+  tempWorkspaceReferences,
+  tempWorkspaceRefusal,
+  type TempWorkspaceReference
+} from '../../../lib/temp-workspace'
 import { validateBoundedString, validateEntityId } from '../../ipc/ipc-validation'
 import { PermissionRequestGoneError } from '../../drivers/driver.interface'
 import type { HarnessDriver } from '../../drivers/driver.interface'
@@ -15,6 +21,10 @@ import {
   chatThreadWorkspaceDirectory
 } from '../../../lib/project-artifacts'
 import { messageId as createMessageId } from '../../../lib/id'
+import {
+  unmanagedBrowserShellReason,
+  unmanagedProcessKillReason
+} from '../../../lib/agent-control-policy'
 import type { PendingPermissionInfo, SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
 import { permissionCommands } from './chat-engine-generated-artifacts'
@@ -22,13 +32,13 @@ import { chatSkillPaths } from './chat-engine-pure'
 import { agentCreationTargets } from '../../permissions/agent-created-files'
 import { posixDirname } from '../../../lib/paths'
 import type { AgentPart } from '../../../lib/types'
-import type { ChatEngine } from '../chat-engine'
+import { isOvenMode, isUnrestrictedLevel } from '../../../lib/permission-level'
+import { isRemoteOvenId } from '../../../lib/ovens'
 
 /**
  * The permission kinds that mean "an operation on a file". Every other kind is
  * the chat's own work: its web access and the tools it was given.
- */
-const FILE_SYSTEM_PERMISSIONS = new Set([
+ */ const FILE_SYSTEM_PERMISSIONS = new Set([
   'read',
   'write',
   'edit',
@@ -41,6 +51,12 @@ const FILE_SYSTEM_PERMISSIONS = new Set([
   'bundled-pi-sensitive-files'
 ])
 
+/** Permission names that only read: a read is not agent work in the temp
+ *  directory, so an attached file that lives there still opens. */
+const TEMP_READ_TERMS = new Set(['read', 'grep', 'glob', 'find', 'list', 'ls', 'search', 'view'])
+
+/** Permission names that change something, whatever else they also say. */
+const TEMP_WRITE_TERMS = new Set(['write', 'edit', 'delete', 'move', 'create', 'exec', 'execute'])
 /**
  * The app-owned gateway tool a request would run, if that is what it is.
  *
@@ -60,6 +76,41 @@ function appGatewayToolCall(metadata: Record<string, unknown>): string | undefin
   // which no user MCP server shares.
   if (provider !== undefined && provider !== 'utilities') return undefined
   return tool
+}
+
+/**
+ * The OS temp references a request would work in, if any.
+ *
+ * The app's own gateway tools are exempt: their routes carry their own checks,
+ * and the app itself may legitimately open a temp file. Reads are exempt too, so
+ * an attached file that lives in temp still opens; everything else that names a
+ * temp path is refused before any policy runs.
+ */
+export function tempWorkspaceRequestReferences(
+  request: PermissionRequest,
+  commands: readonly string[]
+): TempWorkspaceReference[] {
+  if (appGatewayToolCall(request.metadata) !== undefined) return []
+  if (commands.length > 0) return tempWorkspaceReferences(commands)
+  if (isTempReadPermission(request.permission)) return []
+  return tempWorkspaceReferences(request.patterns)
+}
+
+function isTempReadPermission(permission: string): boolean {
+  const terms = normalizePermissionName(permission)
+    .split(/[^a-z]+/u)
+    .filter(Boolean)
+  if (terms.some((term) => TEMP_WRITE_TERMS.has(term))) return false
+  return terms.some((term) => TEMP_READ_TERMS.has(term))
+}
+
+/** The scratch folder an agent stages disposable work in, spelled the way the
+ *  session's own machine spells it: an Oven is POSIX even from a Windows
+ *  desktop, and its own paths must never be re-serialized by this host. */
+function scratchFolderHint(projectPath: string): string {
+  return projectPath.startsWith('/')
+    ? posix.join(projectPath, PROJECT_DATA_DIRECTORY, 'tmp')
+    : join(projectPath, PROJECT_DATA_DIRECTORY, 'tmp')
 }
 
 /** ChatEngine permissions: one concern, moved verbatim from the composition root. */
@@ -95,12 +146,30 @@ export class ChatEnginePermissions {
       Logger.dev(`Ignoring reply for resolved permission request: ${requestId}`)
       return
     }
+    await this.settlePermissionReply(pending, reply, 'user', alternativeInstruction)
+  }
+
+  /**
+   * The one path from a decided permission card to the harness.
+   *
+   * A user's answer and the card's own deadline both settle here, because both
+   * are the same decision: what changes is who made it (`decidedBy`) and whether
+   * a corrective instruction rides along with the rejection.
+   */
+  private async settlePermissionReply(
+    pending: PendingPermissionInfo,
+    reply: PermissionReply,
+    decidedBy: string,
+    alternativeInstruction?: string
+  ): Promise<void> {
+    if (this.host.state.pendingPermissions.get(pending.request.id) !== pending) return
+    this.clearPermissionTimer(pending)
 
     if (pending.settleBrowserAction) {
       if (reply === 'always' && pending.policy.risk === 'critical') {
         throw new Error('Critical permissions cannot be approved permanently')
       }
-      await this.replyPermissionRaw(pending, reply, 'user', alternativeInstruction)
+      await this.replyPermissionRaw(pending, reply, decidedBy, alternativeInstruction)
       return
     }
 
@@ -117,14 +186,14 @@ export class ChatEnginePermissions {
     ) {
       await driver.replyPermission(
         pending.session.projectPath,
-        requestId,
+        pending.request.id,
         'reject',
         undefined,
         pending.request.sessionId
       )
       await this.recordPermissionDecision(pending, 'reject', 'policy:expired')
-      this.host.state.pendingPermissions.delete(requestId)
-      throw new Error(`Permission request expired: ${requestId}`)
+      this.dropPendingPermission(pending)
+      throw new Error(`Permission request expired: ${pending.request.id}`)
     }
     if (reply === 'always' && pending.policy.risk === 'critical') {
       throw new Error('Critical permissions cannot be approved permanently')
@@ -140,24 +209,24 @@ export class ChatEnginePermissions {
     try {
       await driver.replyPermission(
         pending.session.projectPath,
-        requestId,
+        pending.request.id,
         resolvedReply,
         alternativeInstruction,
         pending.request.sessionId
       )
     } catch (error) {
       if (!(error instanceof PermissionRequestGoneError)) throw error
-      this.host.state.pendingPermissions.delete(requestId)
-      await this.recordPermissionDecision(pending, resolvedReply, 'user:stale-request')
+      this.dropPendingPermission(pending)
+      await this.recordPermissionDecision(pending, resolvedReply, `${decidedBy}:stale-request`)
       // The decision cannot be delivered after the driver's blocking request
       // disappears. Never pretend the turn resumed: terminate it cleanly so a
       // stale approval or rejection cannot leave a tool call spinning forever.
       await this.interruptRejectedPermission(pending, driver)
-      Logger.dev(`Reconciled resolved permission request: ${requestId}`)
+      Logger.dev(`Reconciled resolved permission request: ${pending.request.id}`)
       return
     }
-    await this.recordPermissionDecision(pending, resolvedReply, 'user')
-    this.host.state.pendingPermissions.delete(requestId)
+    await this.recordPermissionDecision(pending, resolvedReply, decidedBy)
+    this.dropPendingPermission(pending)
     if (reply === 'reject' && alternativeInstruction === undefined) {
       await this.interruptRejectedPermission(pending, driver)
       return
@@ -185,13 +254,17 @@ export class ChatEnginePermissions {
           alternativeMessageId,
           alternativeInstruction,
           [],
-          []
+          [],
+          alternativeInstruction
         )
         this.host.units['temporary-chats'].refreshTemporaryChatExpiry(sideChat)
         return
       }
       // Surface the alternative as a visible user message; the harness already
-      // received it as corrective feedback on the permission reply.
+      // received it as corrective feedback on the permission reply. An automatic
+      // deadline refuses for the user here, so the record says the app decided
+      // instead of pretending they typed the instruction.
+      const settledByUser = decidedBy === 'user'
       const alternativeText = [
         `The requested ${pending.request.permission} action was rejected.`,
         `Do not perform the requested ${pending.request.permission} action.`,
@@ -204,7 +277,15 @@ export class ChatEnginePermissions {
         pending.session.threadId,
         alternativeMessageId,
         alternativeInstruction,
-        alternativeText,
+        settledByUser
+          ? alternativeText
+          : [
+              `The requested ${pending.request.permission} action was automatically rejected:`,
+              'nobody answered the permission card before its deadline.',
+              'Find another way to finish the task without that action.',
+              'Automatic instruction:',
+              alternativeInstruction
+            ].join('\n\n'),
         [],
         [],
         [],
@@ -215,6 +296,121 @@ export class ChatEnginePermissions {
         'user'
       )
     }
+  }
+
+  /**
+   * Arm (or re-arm) the deadline of a card waiting for the user.
+   *
+   * The countdown holds while the user is active anywhere in the app, exactly as
+   * the question and secret cards do: a card must never expire under someone who
+   * is still working, and an abandoned one gets a full window of its own rather
+   * than a deadline measured from when it appeared.
+   */
+  async schedulePermissionTimeout(pending: PendingPermissionInfo): Promise<void> {
+    const requestId = pending.request.id
+    if (this.host.state.pendingPermissions.get(requestId) !== pending) return
+    this.clearPermissionTimer(pending)
+    const timeoutMs = await this.cardTimeoutMs()
+    if (this.host.state.pendingPermissions.get(requestId) !== pending) return
+
+    if (this.host.units['turns'].isUserActive()) {
+      pending.expiresAt = undefined
+      pending.timer = setTimeout(
+        () => void this.schedulePermissionTimeout(pending),
+        ChatEngine.INACTIVITY_CHECK_INTERVAL_MS
+      )
+      pending.timer.unref?.()
+      this.reflectDeadline(pending)
+      return
+    }
+
+    if (pending.expiresAt === undefined) pending.expiresAt = Date.now() + timeoutMs
+    const delay = Math.max(0, pending.expiresAt - Date.now())
+    this.reflectDeadline(pending)
+    pending.timer = setTimeout(() => {
+      pending.timer = undefined
+      if (this.host.state.pendingPermissions.get(requestId) !== pending) return
+      // The user came back while this window ran: hold the card instead of
+      // refusing a request under their hands.
+      if (this.host.units['turns'].isUserActive()) {
+        pending.expiresAt = undefined
+        void this.schedulePermissionTimeout(pending)
+        return
+      }
+      void this.expirePermission(pending, timeoutMs).catch((error: unknown) =>
+        Logger.error('Could not expire a permission card:', error)
+      )
+    }, delay)
+    pending.timer.unref?.()
+  }
+
+  /**
+   * Refuse a card at its deadline and let the run continue.
+   *
+   * Nothing can approve a permission on the user's behalf, so the card is
+   * rejected. The instruction riding on the rejection is what keeps the turn
+   * alive: the harness fails the one blocked call with that feedback and the
+   * model continues the same turn looking for another way.
+   */
+  async expirePermission(pending: PendingPermissionInfo, timeoutMs: number): Promise<void> {
+    if (this.host.state.pendingPermissions.get(pending.request.id) !== pending) return
+    pending.expiresAt = undefined
+    const minutes = Math.max(1, Math.round(timeoutMs / 60_000))
+    const permission = pending.request.permission
+    const instruction = [
+      `The permission card for ${permission} was automatically rejected after ${minutes} minute(s) without an answer.`,
+      'Do not retry that exact action.',
+      'Find another way to finish the task without it, and if nothing works, say plainly what is blocked and why.'
+    ].join(' ')
+    this.host.units['misc'].reportAutoAnswer({
+      id: pending.request.id,
+      kind: 'permission',
+      outcome: 'expired',
+      projectId: pending.session.projectId,
+      threadId: pending.session.threadId,
+      entries: [
+        {
+          prompt: permission,
+          header: 'Permission',
+          options: ['Allow once', 'Allow always', 'Reject'],
+          picked: 'Reject'
+        }
+      ],
+      at: Date.now()
+    })
+    await this.settlePermissionReply(pending, 'reject', 'policy:timeout', instruction)
+  }
+
+  /** Publish the deadline on the card so the UI can show the same countdown. */
+  private reflectDeadline(pending: PendingPermissionInfo): void {
+    const policy = pending.request.policy
+    if (!policy) return
+    pending.request.policy = { ...policy, expiresAt: pending.expiresAt }
+  }
+
+  /** The configured human-card timeout, shared with questions and secret cards. */
+  private async cardTimeoutMs(): Promise<number> {
+    try {
+      const config = await this.host.storage.getConfig()
+      if (Number.isFinite(config.questionTimeoutMs) && config.questionTimeoutMs > 0)
+        return config.questionTimeoutMs
+    } catch (error) {
+      Logger.error('Could not read the card timeout:', error)
+    }
+    return 5 * 60_000
+  }
+
+  private clearPermissionTimer(pending: PendingPermissionInfo): void {
+    if (pending.timer) clearTimeout(pending.timer)
+    pending.timer = undefined
+  }
+
+  /** Retire a settled card: its deadline dies with it. */
+  private dropPendingPermission(pending: PendingPermissionInfo): void {
+    this.clearPermissionTimer(pending)
+    pending.expiresAt = undefined
+    if (this.host.state.pendingPermissions.get(pending.request.id) === pending)
+      this.host.state.pendingPermissions.delete(pending.request.id)
   }
 
   /** Stop a turn after the user plainly rejects its blocked action. */
@@ -324,11 +520,32 @@ export class ChatEnginePermissions {
     // `assistant-cwd/<assistantId>/` root and must never fall back to a chat
     // workspace directory for pre-authorized writes.
     const isAssistant = info.projectId === ASSISTANT_SPACE_ID
+    const thread = await this.host.threadManager.getThread(info.projectId, info.threadId)
+    // A chat on an external Oven works in that Oven's own thread root, not in
+    // this machine's `chats-cwd/<threadId>`: the root the Oven hands the
+    // session is the directory its shell starts in, and it is exactly as
+    // disposable as a local chat workspace. Naming the local chat directory
+    // here instead left every command unprovable on the Oven, so a plain
+    // `ls -la` asked for approval of its own working directory. A project
+    // thread on an Oven keeps its ordinary scope: that root is the project's
+    // checkout, not a scratch folder.
+    const ovenHosted = thread !== null && this.host.state.ovenChat.remote(thread)
+    const ovenChatHosted = isChat && ovenHosted
+    /** Keep an Oven's spelling for its own path; resolve only this machine's. */
+    const remoteSessionPath = (path: string): string => (ovenHosted ? path : resolve(path))
     const scratchPaths = isAssistant
       ? []
-      : info.projectId === GLOBAL_BROWSER_PROJECT_ID
-        ? [info.projectPath]
-        : [this.host.storage.resolve(chatThreadWorkspaceDirectory(info.threadId))]
+      : ovenChatHosted
+        ? [
+            // An Oven's paths are spelled by that machine, so this host's
+            // resolver must never touch them: on a Windows desktop
+            // `resolve('/home/u/x')` became `D:\\home\\u\\x`, a path that exists
+            // on neither machine and that no request from the Oven could match.
+            remoteSessionPath(info.projectPath)
+          ]
+        : info.projectId === GLOBAL_BROWSER_PROJECT_ID
+          ? [info.projectPath]
+          : [this.host.storage.resolve(chatThreadWorkspaceDirectory(info.threadId))]
     // An assistant, a standalone chat, and a browser tab's agent chat each own
     // the directory their session runs in (`assistant-cwd/<assistantId>`,
     // `chats-cwd/<threadId>`, `browser-cwd/<threadId>`), so the sensitive-file
@@ -339,17 +556,23 @@ export class ChatEnginePermissions {
     // thread that runs in its own scope worktree is the same case as a chat
     // workspace: the `.env` it writes there next to `.env.example` is its own
     // work, so that directory is exempt while the project root stays gated.
-    const workspaceRoots = isAssistant ? [resolve(info.projectPath)] : []
+    const workspaceRoots = isAssistant ? [remoteSessionPath(info.projectPath)] : []
     // A thread in a real project also owns that project's `.cio` scratch folder:
     // it is where the agent stages its own work, so deletes and confined shell
     // commands there never prompt. `.cio/specs` and `.cio/git` stay gated inside
     // the policy, because the platform owns those.
     if (!isChat && !isAssistant) {
-      scratchPaths.push(resolve(info.projectPath, PROJECT_DATA_DIRECTORY))
-      const projectThread = await this.host.threadManager.getThread(info.projectId, info.threadId)
-      const workingDirectory = projectThread?.workingDirectory
-      if (workingDirectory && resolve(workingDirectory) !== resolve(info.projectPath)) {
-        workspaceRoots.push(resolve(workingDirectory))
+      scratchPaths.push(
+        ovenHosted
+          ? posix.join(info.projectPath, PROJECT_DATA_DIRECTORY)
+          : resolve(info.projectPath, PROJECT_DATA_DIRECTORY)
+      )
+      const workingDirectory = thread?.workingDirectory
+      if (
+        workingDirectory &&
+        remoteSessionPath(workingDirectory) !== remoteSessionPath(info.projectPath)
+      ) {
+        workspaceRoots.push(remoteSessionPath(workingDirectory))
       }
     }
     // Reuse the allowlist until a user message invalidates it; permission
@@ -371,7 +594,6 @@ export class ChatEnginePermissions {
       }
     }
 
-    const thread = await this.host.threadManager.getThread(info.projectId, info.threadId)
     const fileSystemMode = thread?.settings?.fileSystemMode === true
     return {
       allowedPaths: [...attachmentPaths, ...chatSkillPaths(info.driverId)],
@@ -379,7 +601,7 @@ export class ChatEnginePermissions {
       // A chat owns its workspace only once it may write there: with File
       // System off it is restricted to the attached files, so the workspace
       // earns no exemption from the sensitive-file list either.
-      workspaceRoots: fileSystemMode ? [resolve(info.projectPath)] : [],
+      workspaceRoots: fileSystemMode ? [remoteSessionPath(info.projectPath)] : [],
       restrictToAllowed: !fileSystemMode
     }
   }
@@ -412,6 +634,7 @@ export class ChatEnginePermissions {
           continue
         }
         this.host.state.pendingPermissions.delete(entry.request.id)
+        this.clearPermissionTimer(entry)
       }
       if (this.host.state.pendingPermissions.has(entry.request.id)) continue
       this.host.broadcast({
@@ -510,6 +733,57 @@ export class ChatEnginePermissions {
     }
 
     const commands = permissionCommands(request.metadata)
+    // The OS temp directory is an invariant, not a permission tier: the session
+    // has its own scratch folder, and a temp path is where half-finished work
+    // leaks out of a turn. Every harness that asks the app before it writes or
+    // runs a shell command passes through here (the bundled Pi included), so
+    // this is the one place the ban is enforced for all of them: refused with
+    // the scratch folder named, never a card, and never approvable by a
+    // permission mode. Reads are exempt so a file the user attached from temp
+    // still opens.
+    const tempReferences = tempWorkspaceRequestReferences(request, commands)
+    if (tempReferences.length > 0) {
+      const reason = tempWorkspaceRefusal(tempReferences, scratchFolderHint(info.projectPath))
+      const scope = { projectRoot: info.projectPath, paths: request.patterns }
+      const pending: PendingPermissionInfo = {
+        driverId,
+        driver: sourceDriver,
+        session: info,
+        request: {
+          ...request,
+          policy: { risk: 'critical', reason, scopedPaths: [...request.patterns] }
+        },
+        policy: {
+          decision: 'ask',
+          approved: false,
+          reason,
+          risk: 'critical',
+          scope,
+          approval: { required: true },
+          ledger: {
+            permission: normalizePermissionName(request.permission),
+            risk: 'critical',
+            decision: 'ask',
+            reason,
+            scope
+          }
+        },
+        resumeStatus: info.activeTurnId ? 'executing' : 'planning'
+      }
+      this.host.state.pendingPermissions.set(request.id, pending)
+      // A refusal that carries its reason: the harness fails this one call with
+      // the text and the same turn continues in the session's scratch folder,
+      // instead of aborting or parking on a card.
+      await this.replyPermissionRaw(pending, 'reject', 'policy:temp-workspace', reason)
+      return
+    }
+    // Process lifecycle is an invariant, not a permission tier. A command that
+    // stops a process by pid, port, name, pattern, signal, interpreter or script
+    // can only reach something this session did not start, so it is answered
+    // here with a refusal instead of a card: this is the one place every harness
+    // that asks the app before running a shell command passes through, which is
+    // how ACP agents and Claude Code reach us. A card would be auto-approved in
+    // Full Access and would let the same command run.
     const unclassifiedTool = request.metadata['surface']
     const sensitiveFileProtectionEnabled =
       request.permission !== 'bundled-pi-sensitive-files' ||
@@ -519,7 +793,10 @@ export class ChatEnginePermissions {
     const agentCreatedPaths = [...(this.host.state.agentCreatedFiles.get(info.sessionId) ?? [])]
     let policy = new PermissionPolicy({
       projectRoot: info.projectPath,
-      mode: restrictToAllowed ? 'auto_review' : level,
+      // Oven Mode is the one level that outranks the file-access restriction:
+      // the whole point of it is that the machine is someone else's and the task
+      // needs everything on it, so the chat clamp must not demote it.
+      mode: !isOvenMode(level) && restrictToAllowed ? 'auto_review' : level,
       sensitiveFileProtectionEnabled,
       ...(allowedPaths.length > 0 ? { allowedPaths } : {}),
       ...(scratchPaths.length > 0 ? { scratchPaths } : {}),
@@ -648,7 +925,30 @@ export class ChatEnginePermissions {
       resumeStatus
     }
     this.host.state.pendingPermissions.set(request.id, pending)
-    this.host.units['turns'].markProjectActive(info.projectId)
+    this.host.units['turns'].markHarnessActive(info.projectId, info.driverId)
+
+    // The refusal is answered before any tier logic below can approve it.
+    const threadBrowserAvailable = !isRemoteOvenId(thread?.settings?.ovenId)
+    const refusedCommand = commands.find(
+      (command) =>
+        unmanagedProcessKillReason('bash', { command }) !== null ||
+        unmanagedBrowserShellReason('bash', { command }, { threadBrowserAvailable }) !== null
+    )
+    if (refusedCommand !== undefined) {
+      const processReason = unmanagedProcessKillReason('bash', { command: refusedCommand })
+      const browserReason = unmanagedBrowserShellReason(
+        'bash',
+        { command: refusedCommand },
+        { threadBrowserAvailable }
+      )
+      await this.replyPermissionRaw(
+        pending,
+        'reject',
+        processReason ? 'policy:process-lifecycle' : 'policy:browser-ownership',
+        processReason ?? browserReason ?? undefined
+      )
+      return
+    }
 
     // A temporary side chat registers its session against the parent thread, but
     // its permission gate is the side chat's own: the parent thread is idle and
@@ -671,6 +971,10 @@ export class ChatEnginePermissions {
       }
       if (this.host.state.pendingPermissions.get(request.id) !== pending) return
       this.host.broadcast({ ...event, permission: enrichedRequest })
+      // A card nobody answers must not park the turn forever. The deadline is
+      // armed only once the card is actually on screen, and the same timeout the
+      // question and secret cards use applies here.
+      await this.schedulePermissionTimeout(pending)
     }
     if (
       info.projectId === GLOBAL_BROWSER_PROJECT_ID &&
@@ -692,7 +996,7 @@ export class ChatEnginePermissions {
       try {
         await this.replyPermissionRaw(
           pending,
-          level === 'full_access' ? 'always' : 'once',
+          isUnrestrictedLevel(level) ? 'always' : 'once',
           `achievement:${level}`
         )
         return
@@ -748,12 +1052,12 @@ export class ChatEnginePermissions {
           remaining ? 'awaiting_approval' : pending.resumeStatus
         )
       } catch (error) {
-        this.host.state.pendingPermissions.delete(pending.request.id)
+        this.dropPendingPermission(pending)
         pending.settleBrowserAction(false)
         throw error
       }
       if (this.host.state.pendingPermissions.get(pending.request.id) !== pending) return
-      this.host.state.pendingPermissions.delete(pending.request.id)
+      this.dropPendingPermission(pending)
       this.host.broadcast({
         type: 'permission.replied',
         sessionId: pending.request.sessionId,
@@ -774,16 +1078,19 @@ export class ChatEnginePermissions {
       pending.session.projectPath,
       pending.request.id,
       reply,
-      undefined,
+      // A policy refusal is a decision with words: without them the harness
+      // fails the call with nothing, and the model retries the same thing.
+      alternative,
       pending.request.sessionId
     )
     await this.recordPermissionDecision(pending, reply, decidedBy)
-    this.host.state.pendingPermissions.delete(pending.request.id)
+    this.dropPendingPermission(pending)
   }
 
   clearPendingPermissionsForSession(sessionId: string): void {
     for (const [requestId, pending] of this.host.state.pendingPermissions) {
       if (pending.request.sessionId === sessionId) {
+        this.clearPermissionTimer(pending)
         this.host.state.pendingPermissions.delete(requestId)
         pending.settleBrowserAction?.(false)
         this.host.broadcast({ type: 'permission.replied', sessionId, requestId, reply: 'reject' })

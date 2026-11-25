@@ -42,6 +42,7 @@
   import ThreadViewComposer from './ThreadView/ThreadViewComposer.svelte'
   import ThreadParentLink from './ThreadParentLink.svelte'
   import { permissionLevelActions } from '$lib/actions'
+  import { isRemoteOvenId } from '$shared/ovens'
 
   let {
     thread: threadProp,
@@ -59,6 +60,7 @@
     onContinueInProject,
     onProjectCreated,
     onContinueInThread,
+    onAttachToParent,
     controller,
     headerSnippet,
     allowCenteredComposer = true,
@@ -85,6 +87,7 @@
     onContinueInProject,
     onProjectCreated,
     onContinueInThread,
+    onAttachToParent,
     controller,
     headerSnippet,
     allowCenteredComposer,
@@ -173,9 +176,14 @@
     }
 
     // Chat mode only surfaces permission levels once File System is enabled:
-    // chats run with auto permission review until the user opts into files.
+    // chats run with auto permission review until the user opts into files. Oven
+    // Mode joins the list only while the thread targets an external Oven.
     if (!board.props.chatMode || board.loadOlderMessages.settings.fileSystemMode === true) {
-      actions.push(...permissionLevelActions(board.state.applicationActionSource))
+      actions.push(
+        ...permissionLevelActions(board.state.applicationActionSource, {
+          oven: isRemoteOvenId(board.loadOlderMessages.settings.ovenId)
+        })
+      )
     }
 
     actions.push({
@@ -230,6 +238,34 @@
         category: 'command',
         source: board.state.applicationActionSource,
         keywords: ['browser', 'web', 'browse', 'tab', 'page', 'site', 'address', 'url']
+      })
+    }
+
+    // The device preview: the panel that otherwise docks by itself only once an
+    // agent starts mirroring a device it booted or attached to. Asking for it
+    // here is the user's own way in, so it takes no arguments and runs on
+    // selection   there is never anything to type after it. Offered where a
+    // conversation owns a panel of its own, the same places the browser is.
+    if (!board.loadOlderMessages.hasController) {
+      actions.push({
+        id: 'command:monitor',
+        title: '/monitor',
+        description: 'Open the device preview: mirror an emulator, simulator or connected phone',
+        category: 'command',
+        source: board.state.applicationActionSource,
+        keywords: [
+          'monitor',
+          'display',
+          'preview',
+          'device',
+          'emulator',
+          'simulator',
+          'screen',
+          'mirror',
+          'android',
+          'ios',
+          'phone'
+        ]
       })
     }
 
@@ -776,6 +812,20 @@
       />
     {/await}
   {/if}
+{/if}
+
+<!-- A passage a message carries, read back at full size: the same lightbox a
+     text attachment opens in, with the excerpt and its comment rather than a
+     file. -->
+{#if board.studioTemporaryChatContext.referencePreview}
+  {@const referencePreview = board.studioTemporaryChatContext.referencePreview}
+  {#await loadCachedPanelModule('module:lib/components/chats/ReferencePreview.svelte', () => import('../chats/ReferencePreview.svelte')) then { default: ReferencePreview }}
+    <ReferencePreview
+      reference={referencePreview.items[referencePreview.index]}
+      pager={board.studioTemporaryChatContext.referencePreviewPager}
+      onClose={board.studioTemporaryChatContext.closeReferencePreview}
+    />
+  {/await}
 {/if}
 
 {#if board.studioTemporaryChatContext.queuedAttachmentViewer}

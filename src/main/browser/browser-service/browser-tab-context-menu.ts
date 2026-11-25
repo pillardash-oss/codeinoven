@@ -40,11 +40,13 @@ export function showBrowserTabContextMenu(
       input.bookmarkAvailable
     )
     append('Duplicate tab', { action: 'duplicate' })
-    // Releasing a page is a global browser's own move: a thread's browser tabs
-    // are never hibernated, and neither is a tab already asleep, a pinned tab, an
-    // address-less one, or the tab the surface has on screen. The label stays put
-    // and the item greys out, the way the bookmark and reopen items already do,
-    // so the menu does not change shape under the pointer.
+    // Release a page, keeping its row. Both kinds of strip offer this now: a
+    // thread browser tab is slept by the same clock as a global one, so the menu
+    // offers the same move. A tab already asleep has nothing to release, a pinned
+    // tab stays live on purpose, an address-less tab has no page at all, and the
+    // tab a surface has on screen is what the user is looking at. The label stays
+    // put and the item greys out, the way the bookmark and reopen items already
+    // do, so the menu does not change shape under the pointer.
     append('Put tab to sleep', { action: 'sleep' }, canSleepTab(input))
     appendSeparator()
     append('New tab before this tab', { action: 'newBefore' })
@@ -184,14 +186,15 @@ export function showBrowserTabContextMenu(
 /**
  * Whether this tab has a page to release.
  *
- * A thread's browser tabs are never hibernated (they go with their thread), a
- * tab already asleep has nothing left to release, a pinned tab stays live on
+ * A tab already asleep has nothing left to release, a pinned tab stays live on
  * purpose, a tab with no address has no page at all, and the tab the surface has
  * on screen is what the user is looking at. The renderer refuses the same list,
- * so a menu that somehow offers the action still cannot take a page away.
+ * so a menu that somehow offers the action still cannot take a page away. A
+ * thread browser tab is offered it on the same terms as a global one: its own
+ * idle clock sleeps it, and this is the same move on demand.
  */
 function canSleepTab(input: BrowserTabContextMenuInput): boolean {
-  if (input.threadScoped === true || input.hibernated || input.pinned) return false
+  if (input.hibernated || input.pinned) return false
   return input.url !== '' && !input.active
 }
 

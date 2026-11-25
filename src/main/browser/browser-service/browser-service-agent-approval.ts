@@ -18,7 +18,13 @@ import { type BrowserActionReview } from './browser-action-policy'
  * mutations pass through action-aware Auto Review. File upload uses a native
  * file chooser or exact-file confirmation, while Full Access may name files.
  */
-export const ATTACHED_PAGE_READ_OPERATIONS = new Set(['snapshot', 'screenshot', 'console', 'wait'])
+export const ATTACHED_PAGE_READ_OPERATIONS = new Set([
+  'snapshot',
+  'screenshot',
+  'console',
+  'wait',
+  'query'
+])
 
 export const ATTACHED_PAGE_MUTATION_OPERATIONS = new Set([
   'click',
@@ -33,7 +39,8 @@ export const ATTACHED_PAGE_MUTATION_OPERATIONS = new Set([
   'reload',
   'viewport',
   'upload',
-  'evaluate'
+  'evaluate',
+  'run'
 ])
 
 /** Approval request for an agent mutation on the page the user is viewing. */

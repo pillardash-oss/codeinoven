@@ -9,6 +9,9 @@ import {
   type TemporaryChatContextTab
 } from '$lib/stores/context-sidebar.svelte'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+import { composerAttachmentRequests } from '$lib/stores/composer-attachment-request.svelte'
+import { uniqueThreadContextReferences } from '$lib/thread-context'
 import { browserTabVisitKey, recentVisits } from '$lib/stores/recent-visits.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
@@ -171,10 +174,29 @@ export class WorkspaceSwitcherPanelTabs extends BoardUnit<Workspace> {
    *  ("click and go") instead of lingering and blocking the composer. Runs in
    *  the capture phase so it fires before focus settles into the editor. */
   handleComposerPointerDown(event: Event): void {
-    const target = event.target
-    if (!(target instanceof Element)) return
-    if (!target.closest('[data-onboarding="composer"]')) return
+    if (!this.eventCameFromComposer(event)) return
     this.sidebar.closeAllSearches()
+  }
+
+  /**
+   * Typing in the composer dismisses an open sidebar search just like clicking
+   * into it does. A composer that already owned the focus never gets the
+   * pointerdown above, so a search opened from the sidebar used to sit there
+   * over the list while the user typed a message. `beforeinput` covers every
+   * way text reaches the editor (typing, paste, deleting) and only fires for
+   * real edits, so keyboard shortcuts that happen to land in the composer leave
+   * the search alone.
+   */
+  handleComposerTyping(event: Event): void {
+    if (!this.eventCameFromComposer(event)) return
+    this.sidebar.closeAllSearches()
+  }
+
+  /** Whether a DOM event originated inside the chat composer. */
+  private eventCameFromComposer(event: Event): boolean {
+    const target = event.target
+    if (!(target instanceof Element)) return false
+    return target.closest('[data-onboarding="composer"]') !== null
   }
 
   // ─── Context dock (right rail) ───────────────────────────────────────────
@@ -215,8 +237,10 @@ export class WorkspaceSwitcherPanelTabs extends BoardUnit<Workspace> {
     getSelectedProjectId: () => this.root.openThreadFromSwitcher.selectedThread?.projectId ?? null,
     getSelectedThreadId: () => this.root.openThreadFromSwitcher.selectedThread?.id ?? null,
     closeThreadBrowser: () => {
-      if (this.dockKindActive('browser'))
-        this.toggleDockPanel('browser', this.root.state.focusBrowser)
+      // Closing must never toggle the browser open when another context tool is
+      // current: the menu item says "Close browser", so an invisible browser
+      // has nothing left to do.
+      if (this.dockKindActive('browser')) contextSidebarState.hide()
     }
   })
 
@@ -586,5 +610,35 @@ export class WorkspaceSwitcherPanelTabs extends BoardUnit<Workspace> {
     )
     contextSidebarState.close(tab.id)
     this.openCreatedThread(converted)
+  }
+
+  /**
+   * Attach a side chat to the chat it was opened from.
+   *
+   * The conversation becomes a durable worker thread of that chat (`parent`,
+   * which the agent reads back by id) and is handed to the chat's composer as an
+   * attached conversation, so the next message can point at it. The side chat
+   * itself is done: its transcript now lives in the worker thread, and leaving the
+   * panel open would be a second copy of the same words.
+   */
+  async handleAttachToParentChat(tab: TemporaryChatContextTab): Promise<void> {
+    const attached = await invoke(
+      'temporary-chat:attachToThread',
+      tab.projectId,
+      tab.threadId,
+      tab.temporaryChatId,
+      tab.settings,
+      tab.title
+    )
+    contextSidebarState.close(tab.id)
+    const references = uniqueThreadContextReferences([
+      ...rendererRecovery.threadReferencesFor(tab.projectId, tab.threadId),
+      { projectId: attached.projectId, threadId: attached.id, title: attached.title }
+    ])
+    rendererRecovery.setThreadReferences(tab.projectId, tab.threadId, references)
+    // A composer that is already mounted seeds its attachments once, so the
+    // view has to re-read them for the new chip to appear beside the draft the
+    // user is writing.
+    composerAttachmentRequests.request(tab.projectId, tab.threadId)
   }
 }

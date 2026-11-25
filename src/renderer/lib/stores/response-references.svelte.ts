@@ -262,7 +262,12 @@ class ResponseReferencesState {
     })
   }
 
-  setForThread(projectId: string, threadId: string, references: ResponseReferenceAnchor[]): void {
+  setForThread(
+    projectId: string,
+    threadId: string,
+    references: ResponseReferenceAnchor[],
+    typingComment = false
+  ): void {
     const key = referenceKey(projectId, threadId)
     const next = { ...this.references }
     let stored: ResponseReferenceAnchor[] = []
@@ -301,8 +306,11 @@ class ResponseReferencesState {
     }
     this.references = next
     // Mirror into the recovery snapshot so annotations survive thread switches
-    // and app restarts, alongside the rest of the composer draft.
-    rendererRecovery.setPromptReferences(projectId, threadId, stored)
+    // and app restarts, alongside the rest of the composer draft. Writing the
+    // references is a deliberate edit, so the store commits the slot at once
+    // rather than after the typing debounce. A comment still being typed is
+    // the exception: it commits once the typing pauses.
+    rendererRecovery.setPromptReferences(projectId, threadId, stored, typingComment)
     for (const listener of this.listeners) listener(projectId, threadId)
   }
 
@@ -323,14 +331,21 @@ class ResponseReferencesState {
     referenceId: string,
     comment: string
   ): void {
-    this.updateStoredComment(projectId, threadId, referenceId, comment.trim() ? comment : undefined)
+    this.updateStoredComment(
+      projectId,
+      threadId,
+      referenceId,
+      comment.trim() ? comment : undefined,
+      true
+    )
   }
 
   private updateStoredComment(
     projectId: string,
     threadId: string,
     referenceId: string,
-    comment: string | undefined
+    comment: string | undefined,
+    typingComment = false
   ): void {
     const key = referenceKey(projectId, threadId)
     const current = this.references[key] ?? []
@@ -339,7 +354,8 @@ class ResponseReferencesState {
       threadId,
       current.map((reference) =>
         reference.id === referenceId ? { ...reference, comment } : reference
-      )
+      ),
+      typingComment
     )
   }
 }

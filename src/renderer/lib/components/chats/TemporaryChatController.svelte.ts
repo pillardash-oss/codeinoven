@@ -150,9 +150,10 @@ export class TemporaryChatController implements ConversationController {
 
   /** Drop a message and everything after it   the editing backend for side
    *  chats. Destroys the isolated harness session (its transcript still holds
-   *  the removed span) and commits the kept conversation into the cache. */
-  async truncateBefore(messageId: string): Promise<AgentMessage[]> {
-    return this.#deleteTemporaryMessages(messageId, 'down')
+   *  the removed span) and commits the kept conversation into the cache,
+   *  keeping the message the edit rewrote. */
+  async truncateBefore(messageId: string, keep?: AgentMessage): Promise<AgentMessage[]> {
+    return this.#deleteTemporaryMessages(messageId, 'down', keep)
   }
 
   /** Delete history around a message inside a side chat. */
@@ -162,7 +163,8 @@ export class TemporaryChatController implements ConversationController {
 
   async #deleteTemporaryMessages(
     messageId: string,
-    mode: 'down' | 'single' | 'up'
+    mode: 'down' | 'single' | 'up',
+    keep?: AgentMessage
   ): Promise<AgentMessage[]> {
     if (this.#tab.expired) return []
     const kept = await invoke(
@@ -173,7 +175,7 @@ export class TemporaryChatController implements ConversationController {
       messageId,
       mode
     )
-    threadMessages.applyKept(this.projectId, this.conversationId, kept)
+    threadMessages.applyKept(this.projectId, this.conversationId, kept, keep)
     // The replacement session only comes up on the next send; drop the stale
     // binding so its streamed events are not filtered against the dead one.
     this.#tab.sessionId = null
@@ -336,16 +338,31 @@ export class TemporaryChatController implements ConversationController {
   }
 
   async send(payload: SendPayload): Promise<void> {
-    const { text, attachments, transportText, promptReferences: _promptReferences } = payload
+    const {
+      text,
+      attachments,
+      transportText,
+      promptReferences: _promptReferences,
+      userMessageId: payloadUserMessageId,
+      direct
+    } = payload
     const prompt = text.trim()
     const backendPrompt = (transportText ?? text).trim()
     if (this.#tab.expired) return
     if (!prompt && !backendPrompt && !this.#carriesPayload(attachments)) return
+    // A force-send (the steer shortcut) belongs to the turn that is running:
+    // opening a second turn on the very same session would run two turns at
+    // once and orphan the first reply. A plain send never reaches this branch
+    // while busy   ThreadView parks it in the side chat's queue instead.
+    if (direct && agentRuns.isBusy(this.projectId, this.conversationId)) {
+      await this.steer(payload)
+      return
+    }
 
     this.#touch()
 
     const references = this.#selectionReferences()
-    const userMessageId = this.#tab.autoPromptMessageId ?? undefined
+    const userMessageId = payloadUserMessageId ?? this.#tab.autoPromptMessageId ?? undefined
     this.#tab.autoPromptMessageId = null
     // The parent-conversation recap rides only the very first turn.
     const initialContext =

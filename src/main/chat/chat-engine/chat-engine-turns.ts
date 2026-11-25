@@ -14,6 +14,7 @@ import { instanceRegistry } from '../../system/instance-registry'
 import type {
   AgentAccountUsage,
   AgentEvent,
+  AgentPart,
   AgentProviderIssue,
   AgentSessionStatus,
   PromptProjectReference,
@@ -21,6 +22,9 @@ import type {
   Thread
 } from '../../../lib/types'
 import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '../../../lib/types'
+
+/** Sub-agent lifecycle states that mean the worker is over, whatever its outcome. */
+const SETTLED_SUBAGENT_STATUSES: ReadonlySet<string> = new Set(['completed', 'error', 'aborted'])
 import { foldTurnStreamDetailed } from '../turn-stream'
 import { auxiliarySelectionFor } from '../../../lib/auxiliary-agents'
 import { classifyProviderIssue, isUsageResetWaitIssue } from '../../../lib/provider-issue'
@@ -44,10 +48,28 @@ import { turnStreamPath } from './chat-engine-pure'
 import { toolActionLabelForPart } from '../../../lib/tool-action-label'
 import { displayDeviceAttention } from '../../display/display-device-attention'
 import { ChatEngine, isTurnBoundaryPrompt } from '../chat-engine'
+import { IdleSignalParking, type ParkedIdle } from './chat-engine-turns-idle-parking'
 
 /** ChatEngine turns: one concern, moved verbatim from the composition root. */
 export class ChatEngineTurns {
-  constructor(private readonly host: ChatEngine) {}
+  /**
+   * Idle signals parked because their driver still registered the turn.
+   *
+   * In memory only: a parked signal is a live instruction for one turn, and a
+   * restart has no turn left to settle.
+   */
+  private readonly parkedIdles: IdleSignalParking
+
+  constructor(private readonly host: ChatEngine) {
+    this.parkedIdles = new IdleSignalParking({
+      driverHoldsTurn: (idle) =>
+        this.driverHoldsTurn(idle.sessionId, idle.driverId, idle.sourceDriver),
+      harnessBusy: (sessionId, idle) => this.sessionStillBusy(sessionId, idle),
+      settle: (idle) => {
+        this.handleDriverEvent(idle.driverId, idle.event, idle.sourceDriver)
+      }
+    })
+  }
 
   /**
    * Join the OpenCode install probe and converge the driver map on its result.
@@ -205,18 +227,22 @@ export class ChatEngineTurns {
     return active?.status === 'approved'
   }
 
-  /** A project is doing live work   reset its idle/released state. */
-  markProjectActive(projectId: string): void {
-    this.host.state.projectIdleSince.delete(projectId)
-    this.host.state.releasedProjects.delete(projectId)
+  /**
+   * A harness in a project is doing live work   reset that harness's idle state.
+   *
+   * Naming the harness matters: residency is per harness, so work in one must not
+   * hold another's runtime open. A caller that cannot name the harness passes
+   * none and every harness of the project is marked, which can only delay a
+   * release, never cut one short.
+   */
+  markHarnessActive(projectId: string, driverId?: string): void {
+    this.host.state.harnessIdle.markActive(projectId, driverId)
   }
 
-  /** Record a project path before a driver call can lazily allocate resources. */
-  trackProjectResourcePath(projectId: string, projectPath: string): void {
-    const paths = this.host.state.projectResourcePaths.get(projectId) ?? new Set<string>()
-    paths.add(projectPath)
-    this.host.state.projectResourcePaths.set(projectId, paths)
-    this.markProjectActive(projectId)
+  /** Record a path a driver may lazily allocate resources in before a session. */
+  trackProjectResourcePath(projectId: string, driverId: string, projectPath: string): void {
+    this.host.state.harnessIdle.notePath(projectId, driverId, projectPath)
+    this.markHarnessActive(projectId, driverId)
   }
 
   async validateProjectReferences(
@@ -397,7 +423,7 @@ export class ChatEngineTurns {
       ? await this.host.resolveThreadPath(projectId, threadId)
       : await this.resolveProjectPath(projectId)
     const driver = await this.host.driverForAccount(driverId, accountId)
-    this.trackProjectResourcePath(projectId, projectPath)
+    this.trackProjectResourcePath(projectId, driverId, projectPath)
 
     // Installation/version probes belong to the explicit Settings harness check.
     // Thread operations call the driver directly so a transient probe cannot
@@ -486,6 +512,40 @@ export class ChatEngineTurns {
   }
 
   /** Process an event from a driver: apply permission policy, then broadcast. */
+  /**
+   * Write one settled sub-agent card into the thread's mirrored conversation.
+   *
+   * The lifecycle fields are the only thing a settle carries, so the existing
+   * card supplies everything else (its message, its output, its model). A card
+   * already in a terminal state is left alone: it carries the richer payload.
+   */
+  private async persistSettledSubagentCard(
+    owner: { projectId: string; threadId: string },
+    part: Extract<AgentPart, { type: 'subagent' }>
+  ): Promise<void> {
+    try {
+      const messages = await this.host.threadManager.loadMessages(owner.projectId, owner.threadId)
+      for (const message of messages) {
+        const index = message.parts.findIndex((candidate) => candidate.id === part.id)
+        if (index === -1) continue
+        const existing = message.parts[index]
+        if (existing?.type !== 'subagent') return
+        if (SETTLED_SUBAGENT_STATUSES.has(existing.activity.status)) return
+        const parts = [...message.parts]
+        parts[index] = part
+        await this.host.threadManager.upsertMessages(owner.projectId, owner.threadId, [
+          { ...message, parts }
+        ])
+        return
+      }
+    } catch (error) {
+      Logger.dev('Settled sub-agent card persistence failed:', {
+        threadId: owner.threadId,
+        error: rawErrorMessage(error)
+      })
+    }
+  }
+
   handleDriverEvent(driverId: string, event: AgentEvent, sourceDriver?: HarnessDriver): void {
     // A driver finished enriching its catalog in the background (e.g. Cline's
     // remote list). Re-merge every project we already exposed a catalog for and
@@ -515,6 +575,7 @@ export class ChatEngineTurns {
     if (event.type === 'message.part.updated' && event.part.type === 'tool') {
       event.part = toolActionLabelForPart(event.part)
     }
+    if (!isIdleSignalEvent(event)) this.parkedIdles.cancel(event.sessionId)
     // Any live harness activity means the session's project is doing work
     // keep its idle-server clock reset until the stream goes quiet.
     const eventOwner = this.host.sessionRegistry.get(event.sessionId)
@@ -536,8 +597,7 @@ export class ChatEngineTurns {
       )
     }
     if (eventOwner) {
-      this.host.state.projectIdleSince.delete(eventOwner.projectId)
-      this.host.state.releasedProjects.delete(eventOwner.projectId)
+      this.markHarnessActive(eventOwner.projectId, eventOwner.driverId)
       // Live traffic is the only proof of life the silence watchdog has, and its
       // timer is armed once from the session's `working` status. Without this
       // reset the watchdog fires a fixed window later   even while the harness
@@ -647,6 +707,20 @@ export class ChatEngineTurns {
         event.tokenUsageScope ?? 'message'
       )
     }
+    // A sub-agent card can settle after the turn that owned it is gone: a worker
+    // carried over by a cross-instance move outlives the adopting turn, and a
+    // stopped thread's workers settle seconds after the stop. Nothing else
+    // writes the mirror at that point, so without this a reopened thread shows
+    // the finished worker as still running.
+    if (
+      eventOwner &&
+      !eventOwner.ephemeral &&
+      event.type === 'message.part.updated' &&
+      event.part.type === 'subagent' &&
+      SETTLED_SUBAGENT_STATUSES.has(event.part.activity.status)
+    ) {
+      void this.persistSettledSubagentCard(eventOwner, event.part)
+    }
     if (
       eventOwner &&
       !eventOwner.ephemeral &&
@@ -745,12 +819,24 @@ export class ChatEngineTurns {
     // fails the session when the process is gone).
     const idleEvent = isIdleSignalEvent(event)
     if (idleEvent && this.driverHoldsTurn(event.sessionId, driverId, sourceDriver)) {
-      Logger.dev('Ignored an idle from a driver that still holds the turn:', {
+      Logger.dev('Parking an idle from a driver that still holds the turn:', {
         sessionId: event.sessionId,
         driverId
       })
+      // Parked, not dropped: the driver's terminal idle is supposed to follow
+      // once it releases the registration, and when the two cross nothing ever
+      // settles the turn. Re-checking a few times over is what closes that
+      // window without ever settling a turn the driver still owns.
+      this.parkedIdles.park(event.sessionId, {
+        event,
+        driverId,
+        ...(sourceDriver ? { sourceDriver } : {})
+      })
       return
     }
+    // An idle that is honoured makes any parked copy of this session's end
+    // redundant: delivering it later would settle the same turn twice.
+    if (idleEvent) this.parkedIdles.cancel(event.sessionId)
     this.host.units['runtime-connectivity'].updateCompletionWaiter(event)
     this.host.units['assignment-workers'].observeChildSession(driverId, event)
 
@@ -1410,6 +1496,23 @@ export class ChatEngineTurns {
         error: rawErrorMessage(error)
       })
       return { text: nudge, attachments: [] }
+    }
+  }
+
+  /** Whether the harness itself still reports the session as busy. */
+  private async sessionStillBusy(sessionId: string, parked: ParkedIdle): Promise<boolean> {
+    const info = this.host.sessionRegistry.get(sessionId)
+    if (!info) return false
+    const driver =
+      parked.sourceDriver ??
+      this.host.units['turns-dispatch'].driverForRuntime(parked.driverId, info.accountId)
+    // Without a probe the driver's released registration is the only answer we
+    // have, which is the same bargain every other caller of the probe makes.
+    if (!driver?.isSessionBusy) return false
+    try {
+      return await driver.isSessionBusy(info.projectPath, sessionId)
+    } catch {
+      return false
     }
   }
 

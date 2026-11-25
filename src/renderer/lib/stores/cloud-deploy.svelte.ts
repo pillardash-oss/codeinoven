@@ -1,6 +1,7 @@
 import { toast } from 'svelte-sonner'
 import { invoke } from '$lib/ipc.svelte'
 import { ipcErrorMessage } from '$lib/ipc-errors'
+import { parseDeploymentLog, type DeploymentLogLine } from '$lib/cloud/deployment-log'
 import {
   CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS,
   type CloudDeploymentContainer,
@@ -42,6 +43,24 @@ export interface CloudDeployMonitorTarget {
 
 /** Logs change rarely and are heavy — hold them a little longer. */
 const LOG_CACHE_TTL_MS = 5 * 60_000
+
+/**
+ * A container log as the panel holds it: the newest page the provider served,
+ * plus every earlier page the reader has scrolled back through. Nothing is ever
+ * dropped, so a long build log stays whole in the view.
+ */
+export interface LoadedDeploymentLog {
+  containerId: string
+  deploymentId: string | null
+  /** Raw payload pages, oldest first. */
+  pages: string[]
+  /** Readable lines from those pages, oldest first. */
+  lines: DeploymentLogLine[]
+  /** True while earlier pages exist behind {@link cursor}. */
+  hasMore: boolean
+  /** Cursor for the page above the oldest loaded one; null at the head. */
+  cursor: string | null
+}
 
 /**
  * How long a failed request is remembered before it may be tried again.
@@ -92,10 +111,7 @@ export class CloudDeployState {
   containerErrors: Record<string, string> = $state({})
 
   /** Cached per-container logs, keyed by `${projectId}/${providerKind}[/accountId]/${containerId}[/deploymentId]`. */
-  containerLogs: Record<
-    string,
-    CacheEntry<{ containerId: string; deploymentId: string | null; log: string }>
-  > = $state({})
+  containerLogs: Record<string, CacheEntry<LoadedDeploymentLog>> = $state({})
 
   /** Cached per-container deployment lists, keyed by `${projectId}/${providerKind}[/accountId]/${containerId}`. */
   containerDeployments: Record<string, CacheEntry<CloudDeploymentDeployment[]>> = $state({})
@@ -338,17 +354,16 @@ export class CloudDeployState {
     force = false,
     accountId?: string,
     serviceName?: string
-  ): Promise<{ containerId: string; deploymentId: string | null; log: string } | null> {
+  ): Promise<LoadedDeploymentLog | null> {
     if (this.handleNotImplemented(providerKind)) return null
-    const key = CloudDeployState.containerKey(projectId, providerKind, containerId, accountId)
-    // The three log reads of one container never share a cache entry: the
-    // container's latest log, one deployment's log, and one compose service's
-    // runtime log are different payloads.
-    const logKey = serviceName
-      ? `${key}/service/${serviceName}`
-      : deploymentId
-        ? `${key}/${deploymentId}`
-        : key
+    const logKey = CloudDeployState.logKey(
+      projectId,
+      providerKind,
+      containerId,
+      deploymentId,
+      accountId,
+      serviceName
+    )
     const cached = this.containerLogs[logKey]
     if (cached && !force) {
       if (Date.now() - cached.fetchedAt < LOG_CACHE_TTL_MS) return cached.value
@@ -379,6 +394,92 @@ export class CloudDeployState {
         serviceName
       )
     )
+  }
+
+  /**
+   * Load the page that precedes the log already on screen (the reader scrolled to
+   * the top). The provider serves a log tail-first and keeps the whole payload,
+   * so this walks back through the same log instead of ever truncating it.
+   *
+   * Returns false when there is nothing earlier left, when the log is not loaded
+   * yet, or when the same page is already in flight.
+   */
+  async loadEarlierLog(
+    projectId: string,
+    providerKind: CloudDeploymentProviderKind,
+    containerId: string,
+    deploymentId?: string,
+    accountId?: string,
+    serviceName?: string
+  ): Promise<boolean> {
+    if (this.handleNotImplemented(providerKind)) return false
+    const logKey = CloudDeployState.logKey(
+      projectId,
+      providerKind,
+      containerId,
+      deploymentId,
+      accountId,
+      serviceName
+    )
+    const cached = this.containerLogs[logKey]
+    const cursor = cached?.value.cursor ?? null
+    if (!cached || !cached.value.hasMore || cursor === null) return false
+    const requestKey = `${logKey}/earlier/${cursor}`
+    try {
+      await this.dedupe(requestKey, async () => {
+        const page = await invoke(
+          'cloudDeploy:containerLog',
+          projectId,
+          providerKind,
+          containerId,
+          deploymentId,
+          accountId,
+          serviceName,
+          cursor
+        )
+        // Re-read the entry: the log may have been replaced while this page was
+        // in flight (a refresh, or another log opened), and the page belongs to
+        // the one it was asked for.
+        const current = this.containerLogs[logKey]
+        if (!current || current.value.cursor !== cursor) return
+        this.containerLogs = {
+          ...this.containerLogs,
+          [logKey]: {
+            // The TTL clock belongs to the newest page read, not to an older one.
+            fetchedAt: current.fetchedAt,
+            value: {
+              ...current.value,
+              pages: [page.log, ...current.value.pages],
+              lines: [...parseDeploymentLog(page.log), ...current.value.lines],
+              hasMore: page.hasMore === true,
+              cursor: page.cursor ?? null
+            }
+          }
+        }
+        delete this.failures[logKey]
+      })
+      return true
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Earlier log lines could not be loaded')
+      throw reason
+    }
+  }
+
+  /** Cache key of one log payload: its container, deployment, account, and stream. */
+  static logKey(
+    projectId: string,
+    providerKind: CloudDeploymentProviderKind,
+    containerId: string,
+    deploymentId?: string,
+    accountId?: string,
+    serviceName?: string
+  ): string {
+    const key = CloudDeployState.containerKey(projectId, providerKind, containerId, accountId)
+    // The three log reads of one container never share a cache entry: the
+    // container's latest log, one deployment's log, and one compose service's
+    // runtime log are different payloads.
+    if (serviceName) return `${key}/service/${serviceName}`
+    return deploymentId ? `${key}/${deploymentId}` : key
   }
 
   /**
@@ -418,24 +519,35 @@ export class CloudDeployState {
     deploymentId?: string,
     accountId?: string,
     serviceName?: string
-  ): Promise<{ containerId: string; deploymentId: string | null; log: string } | null> {
+  ): Promise<LoadedDeploymentLog | null> {
     try {
-      const result = await invoke(
+      const page = await invoke(
         'cloudDeploy:containerLog',
         projectId,
         providerKind,
         containerId,
         deploymentId,
         accountId,
-        serviceName
+        serviceName,
+        undefined,
+        // A forced read asks the provider again: a running build grows at the end.
+        true
       )
+      const loaded: LoadedDeploymentLog = {
+        containerId,
+        deploymentId: deploymentId ?? null,
+        pages: [page.log],
+        lines: parseDeploymentLog(page.log),
+        hasMore: page.hasMore === true,
+        cursor: page.cursor ?? null
+      }
       this.containerLogs = {
         ...this.containerLogs,
-        [key]: { value: result, fetchedAt: Date.now() }
+        [key]: { value: loaded, fetchedAt: Date.now() }
       }
       delete this.failures[key]
       this.error = null
-      return result
+      return loaded
     } catch (reason) {
       this.markFailure(key)
       this.error = errorMessage(reason, 'Container log could not be loaded')

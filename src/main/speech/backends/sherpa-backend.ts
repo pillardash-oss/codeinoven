@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import type { SpeechCapability } from '../../../lib/speech/types'
 import { Logger } from '../../system/logger'
 import { broadcastAppToast } from '../../ipc/app-toast'
+import { SHERPA_MODULE_ROOT_ENV, type SherpaRuntime } from '../sherpa-runtime'
 import type {
   SpeechBackend,
   SpeechBackendArtifact,
@@ -54,13 +55,33 @@ function stageForRequest(request: SpeechWorkerRequest): SpeechWorkerStage {
 export class SherpaSpeechBackend implements SpeechBackend {
   readonly runtime = 'sherpa-onnx' as const
   private readonly engines = new Map<SpeechWorkerStage, UtilityProcess>()
+  /** One engine start per stage, shared by every request that arrives meanwhile. */
+  private readonly starting = new Map<SpeechWorkerStage, Promise<UtilityProcess>>()
   private readonly pending = new Map<string, PendingRequest>()
   /** Engines this backend asked to stop, whose exit must not read as a crash. */
   private readonly stopping = new WeakSet<UtilityProcess>()
   private readonly stderrTails = new WeakMap<UtilityProcess, string>()
+  private failure: string | null = null
+
+  constructor(private readonly engineRuntime: SherpaRuntime) {}
 
   async capabilities(): Promise<SpeechCapability[]> {
-    return ['asr', 'cleanup', 'tts']
+    try {
+      // The native addon is no longer shipped: the engine reports itself
+      // unavailable until its platform package has been provisioned, which is
+      // what makes the models list offer the download instead of a broken run.
+      await this.engineRuntime.prepare()
+      this.failure = null
+      return ['asr', 'cleanup', 'tts']
+    } catch (error) {
+      this.failure = error instanceof Error ? error.message : String(error)
+      return []
+    }
+  }
+
+  /** Why this runtime is unavailable, when the capability probe could tell. */
+  unavailableReason(): string | null {
+    return this.failure
   }
 
   async warmup(artifact: SpeechBackendArtifact, signal: AbortSignal): Promise<void> {
@@ -151,14 +172,38 @@ export class SherpaSpeechBackend implements SpeechBackend {
     for (const engine of engines) this.stopEngine(engine)
   }
 
-  private ensureEngine(stage: SpeechWorkerStage): UtilityProcess {
+  private ensureEngine(stage: SpeechWorkerStage): Promise<UtilityProcess> {
+    const existing = this.engines.get(stage)
+    if (existing) return Promise.resolve(existing)
+    const inFlight = this.starting.get(stage)
+    if (inFlight) return inFlight
+    const starting = this.engineRuntime
+      .prepare()
+      .then((moduleRoot) => this.forkEngine(stage, moduleRoot))
+      .finally(() => {
+        this.starting.delete(stage)
+      })
+    this.starting.set(stage, starting)
+    return starting
+  }
+
+  private forkEngine(stage: SpeechWorkerStage, moduleRoot: string): UtilityProcess {
     const existing = this.engines.get(stage)
     if (existing) return existing
+    const environment: Record<string, string> = {}
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value !== undefined) environment[key] = value
+    }
+    // The engine resolves `sherpa-onnx-node` from the provisioned tree, whose
+    // sibling platform package the addon's own `../sherpa-onnx-<platform>/`
+    // lookup then finds.
+    environment[SHERPA_MODULE_ROOT_ENV] = moduleRoot
     const engine = utilityProcess.fork(sherpaEnginePath, [], {
       // Only stderr is kept, and only as a bounded tail: an engine that dies
       // silently is diagnosable exactly to the point of what it printed.
       stdio: ['ignore', 'ignore', 'pipe'],
-      serviceName: `CodeInOven speech ${stage}`
+      serviceName: `CodeInOven speech ${stage}`,
+      env: environment
     })
     engine.on('message', (response: SpeechWorkerResponse) => {
       const pending = this.pending.get(response.id)
@@ -252,12 +297,16 @@ export class SherpaSpeechBackend implements SpeechBackend {
     engine.once('exit', () => clearTimeout(killer))
   }
 
-  private request(
+  private async request(
     request: SpeechWorkerRequest,
     signal: AbortSignal
   ): Promise<SpeechWorkerResponse> {
-    if (signal.aborted) return Promise.reject(new Error('Speech operation cancelled.'))
-    const engine = this.ensureEngine(stageForRequest(request))
+    if (signal.aborted) throw new Error('Speech operation cancelled.')
+    const engine = await this.ensureEngine(stageForRequest(request))
+    if (signal.aborted) {
+      this.stopEngine(engine)
+      throw new Error('Speech operation cancelled.')
+    }
     return new Promise<SpeechWorkerResponse>((resolve, reject) => {
       const abort = (): void => {
         this.pending.delete(request.id)

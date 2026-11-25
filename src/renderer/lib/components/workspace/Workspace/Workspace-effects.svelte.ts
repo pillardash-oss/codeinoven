@@ -1,6 +1,7 @@
 import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { viewShowsWorkspaceShell } from '$lib/content-view-projects'
+import { deletedThreadLanding } from '$shared/thread-deletion-landing'
 import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -663,7 +664,20 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
           this.root.openThreadFromSwitcher.browserFullscreenTabId = null
         }
         void invoke('browser:destroyThread', projectId, threadId)
-        if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
+        // Two subscribers hear `thread:deleted`: this one, registered first because
+        // the workspace mounts before the shell wires its channels, and the
+        // app-level one, which knows where the reader should land   an auditor's
+        // Sr. Engineer, an assistant's own thread   and clears the selection when
+        // there is nowhere to go. Clearing unconditionally here ran first and made
+        // that landing impossible: by the time the second subscriber heard the
+        // event, nothing was selected, so it had nothing to rescue and the reader
+        // fell through to the empty shell. Only a deletion with no landing target
+        // is cleared here, so a window without the app wiring still cannot leave a
+        // deleted thread on screen.
+        const selected = workspaceState.selectedThread
+        if (selected?.id === threadId && deletedThreadLanding(selected).kind === 'none') {
+          workspaceState.clearThread()
+        }
       })
     })
 
@@ -814,6 +828,15 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
           return
         }
         if (contextSidebarState.openBrowser(url) === null) void invoke('shell:openExternal', url)
+      })
+    })
+
+    $effect(() => {
+      return subscribe('browser:releaseTabs', (tabIds) => {
+        // Main releases an agent page that no conversation has used for a while. The
+        // row is the strip's, so the strip closes it: that removes the row and asks
+        // main to destroy the tab, in the one order that cannot leave either behind.
+        for (const tabId of tabIds) this.root.openThreadFromSwitcher.closeContextTab(tabId)
       })
     })
 

@@ -12,6 +12,12 @@
  * 3. The first upward scroll or wheel tick detaches the reader: from that
  *    moment the viewport is never moved again until they explicitly jump
  *    back to the latest message.
+ * 4. Sitting on the true bottom always counts as attached, whatever moved
+ *    the viewport there. Content shrinking above a reader pinned to the
+ *    bottom is clamped by the browser to the new bottom, and that clamp
+ *    raises `scrollTop` without the reader travelling anywhere; reading it
+ *    as an upward scroll is what left a reader who had just scrolled to the
+ *    latest message detached from a tail that never came back.
  */
 
 /** Distance (px) from the live bottom within which the viewport still counts
@@ -41,4 +47,29 @@ export function isAtLatest(extents: ScrollExtents): boolean {
  *  stays exactly where they put it while new content arrives. */
 export function mayReanchorToLatest(detached: boolean): boolean {
   return !detached
+}
+
+/** Slack (px) under which a scroll position *is* the bottom: a rounding error
+ *  or a sub-pixel clamp, never travel. */
+const AT_TRUE_BOTTOM_SLACK = 1
+
+/** True when no scrollable distance is left below the viewport, i.e. the
+ *  viewport sits on the true bottom rather than inside the reading band.
+ *  Content shorter than the viewport counts as the bottom too. */
+export function isAtTrueLatest(extents: ScrollExtents): boolean {
+  return extents.scrollHeight - extents.scrollTop - extents.clientHeight <= AT_TRUE_BOTTOM_SLACK
+}
+
+/** Whether one scroll event detaches the reader from the live tail.
+ *
+ *  An upward move inside the reading band detaches, so a trackpad nudge is
+ *  never grabbed back by the tail follower. The one exception is the true
+ *  bottom: the browser clamps there whenever content above shrinks (a folding
+ *  trace, a re-measuring picture), and that clamp raises `scrollTop` exactly
+ *  like a scroll does. A reader the clamp left on the bottom is still reading
+ *  the latest message, so they stay attached   that is also what re-attaches
+ *  someone who manually scrolled back down. */
+export function scrollDetachesFromLatest(movedUp: boolean, extents: ScrollExtents): boolean {
+  if (isAtTrueLatest(extents)) return false
+  return movedUp || !isAtLatest(extents)
 }

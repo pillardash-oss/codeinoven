@@ -1,6 +1,7 @@
 import type { PromptAttachment } from '../../../lib/types'
 import { resolveFastModelId } from '../../../lib/fast-inference'
 import type { SendPromptOptions } from '../driver.interface'
+import { materializeAttachment } from '../attachment-data-url'
 import {
   isDocumentAttachment,
   formatDocumentAsText,
@@ -13,42 +14,53 @@ import { opencodePermissionTools } from './opencode-models'
 /**
  * Build OpenCode prompt parts, inlining SVG, text, and document attachments as
  * text because the backend's default decoder cannot rasterize them.
+ *
+ * An embedded `data:` payload or a remote `http(s)` source is staged in
+ * `scratchDirectory` first and dispatched as a file part: the backend resolves a
+ * file part's URL with `Bun.file`, which reads the whole `data:...` or
+ * `http://...` string as a filesystem path and fails with ENOENT before the
+ * model ever sees the image.
  */
 export async function buildOpenCodePromptParts(
-  attachments: readonly PromptAttachment[]
+  attachments: readonly PromptAttachment[],
+  scratchDirectory?: string
 ): Promise<Array<Record<string, unknown>>> {
   const parts: Array<Record<string, unknown>> = []
   for (const attachment of attachments) {
-    if (isSvgAttachment(attachment)) {
+    const resolved =
+      scratchDirectory === undefined
+        ? attachment
+        : await materializeAttachment(attachment, scratchDirectory)
+    if (isSvgAttachment(resolved)) {
       // The opencode backend rasterizes image parts and its default decoder
       // cannot decode SVG, so inline the raw markup as text instead.
-      const content = await readSvgAttachmentText(attachment)
+      const content = await readSvgAttachmentText(resolved)
       if (content !== null) {
-        parts.push({ type: 'text', text: formatSvgAsText(attachment, content) })
+        parts.push({ type: 'text', text: formatSvgAsText(resolved, content) })
         continue
       }
     }
-    if (isTextAttachment(attachment)) {
+    if (isTextAttachment(resolved)) {
       // Some providers reject file parts whose media type they do not
       // support (e.g. application/json), so inline text-ish content instead.
-      const content = await readTextAttachment(attachment)
+      const content = await readTextAttachment(resolved)
       if (content !== null) {
-        parts.push({ type: 'text', text: formatTextAsText(attachment, content) })
+        parts.push({ type: 'text', text: formatTextAsText(resolved, content) })
         continue
       }
     }
-    if (isDocumentAttachment(attachment)) {
-      const content = await readDocumentText(attachment)
+    if (isDocumentAttachment(resolved)) {
+      const content = await readDocumentText(resolved)
       if (content !== null) {
-        parts.push({ type: 'text', text: formatDocumentAsText(attachment, content) })
+        parts.push({ type: 'text', text: formatDocumentAsText(resolved, content) })
         continue
       }
     }
     parts.push({
       type: 'file',
-      mime: attachment.mime,
-      url: attachment.url,
-      filename: attachment.filename
+      mime: resolved.mime,
+      url: resolved.url,
+      filename: resolved.filename
     })
   }
   return parts

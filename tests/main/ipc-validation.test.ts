@@ -142,6 +142,12 @@ describe('IPC structured input validation', () => {
     expect(() => validateThreadSettings({ ...validSettings, permissionLevel: 'all' })).toThrow(
       TypeError
     )
+    // Oven Mode is storable: a thread whose composer is set to an external Oven
+    // has to survive the save and the restore.
+    expect(validateThreadSettings({ ...validSettings, permissionLevel: 'oven_mode' })).toEqual({
+      ...validSettings,
+      permissionLevel: 'oven_mode'
+    })
     // The legacy engineeringMode flag persisted before the scrub is tolerated and dropped.
     expect(validateThreadSettings({ ...validSettings, engineeringMode: true })).toEqual(
       validSettings
@@ -387,6 +393,33 @@ describe('privileged-IPC sender validation', () => {
     expect(validator.isTrustedSenderFrame({ url: 'http://localhost:5173/' })).toBe(true)
     expect(validator.isTrustedSenderFrame({ url: 'file:///app/out/renderer/index.html' })).toBe(
       true
+    )
+  })
+
+  it('accepts a trusted document that carries a fragment', () => {
+    const validator = createValidator({
+      navigationTargets: ['http://localhost:5173', 'file:///app/out/renderer/index.html']
+    })
+    // A hash is a same-document navigation: the frame is still the app's own
+    // document, and refusing it made the whole window unusable.
+    expect(
+      validator.isTrustedSenderFrame({ url: 'file:///app/out/renderer/index.html#step-2' })
+    ).toBe(true)
+    expect(validator.isTrustedSenderFrame({ url: 'http://localhost:5173/#/settings' })).toBe(true)
+  })
+
+  it('still rejects a subframe and a foreign document that carries a fragment', () => {
+    const validator = createValidator({
+      navigationTargets: ['file:///app/out/renderer/index.html']
+    })
+    expect(
+      validator.isTrustedSenderFrame({
+        url: 'file:///app/out/renderer/index.html#step-2',
+        parent: { url: 'file:///app/out/renderer/index.html' }
+      })
+    ).toBe(false)
+    expect(validator.isTrustedSenderFrame({ url: 'file:///app/out/renderer/other.html#x' })).toBe(
+      false
     )
   })
 

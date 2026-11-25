@@ -24,6 +24,7 @@ import {
   isActivityOnlyUserMessage,
   isTurnCompleted,
   isTurnTransparentUserMessage,
+  newestTurnPromptCreatedAt,
   pendingTurnAnchorIndex,
   splitTurnTraceParts,
   streamWorkingPartsForTurn,
@@ -121,6 +122,19 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
     }
     return -1
   })
+
+  /**
+   * Whether a turn was cut by an answered question.
+   *
+   * A cut turn draws its work at each slice's own mount point, so the answer
+   * card sits between the work that asked it and the work it unblocked. A turn
+   * with no cut has one slice and is drawn whole.
+   */
+  turnHasAnswerCuts(turnStart: number): boolean {
+    return this.traceSegmentLayout.some(
+      (segment) => segment.turnStart === turnStart && segment.boundaries.length > 0
+    )
+  }
 
   /**
    * One turn's trace as a single slice.
@@ -510,31 +524,17 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
   })
 
   /**
-   * Creation time of the newest prompt that opened a turn.
-   *
-   * Activity-only user messages (compaction notices, sub-agent envelopes, the
-   * app's own continuation prompts) ride mid-turn and a steer the harness has
-   * not taken yet opens no turn at all, so both are skipped   the same boundary
-   * the main process folds its turn stream by. This is the instant the turn on
+   * Creation time of the newest prompt that opened a turn, or null when none
+   * did. The rule lives beside the other turn-boundary rules, so this instant,
+   * the task list and the main process's turn fold all skip the same mid-turn
+   * rows (see `newestTurnPromptCreatedAt`). This is the instant the turn on
    * screen is measured from, and unlike the run store's in-memory start it is
    * persisted, so it survives a window reload.
    */
   turnAnchorCreatedAt(): number | null {
-    for (let index = this.root.loadOlderMessages.messages.length - 1; index >= 0; index--) {
-      const message = this.root.loadOlderMessages.messages[index]
-      if (!message || message.role !== 'user') continue
-      if (isActivityOnlyUserMessage(message)) continue
-      if (
-        threadMessages.isSteerHeld(
-          this.root.handleAgentEvent.thread.projectId,
-          this.conversationId,
-          message.id
-        )
-      )
-        continue
-      return message.createdAt || null
-    }
-    return null
+    return newestTurnPromptCreatedAt(this.root.loadOlderMessages.messages, (message) =>
+      this.isTransparentTurnMessage(message)
+    )
   }
 
   /**
@@ -609,6 +609,51 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
     } catch (error) {
       this.root.handleAgentEvent.errorMessage =
         error instanceof Error ? error.message : 'The steer could not be undone.'
+    }
+  }
+
+  /**
+   * Recall a user message that never reached the agent.
+   *
+   * A failed send leaves the words on screen carrying their error, which is the
+   * right place to see them and the wrong place to keep them: this pulls them
+   * back into the composer so they can be edited and sent again, and removes the
+   * row so the conversation stops showing a message the agent never received. It
+   * is the same promise as undoing a held steer, applied to a send that failed
+   * outright, and the words are never dropped: they are moved, not deleted.
+   */
+  async recallUnsentMessage(msg: AgentMessage): Promise<void> {
+    const projectId = this.root.handleAgentEvent.thread.projectId
+    const conversationId = this.conversationId
+    const text = msg.parts
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n\n')
+    const attachments: PromptAttachment[] = msg.parts
+      .filter((part) => part.type === 'file')
+      .map((part) => ({ mime: part.mime, url: part.url, filename: part.filename }))
+    try {
+      // Temporary side chats own no durable thread: their row is dropped and the
+      // words go back to the composer of the thread the user is looking at.
+      if (conversationId === this.root.handleAgentEvent.thread.id) {
+        threadMessages.removeUnsentMessage(projectId, conversationId, msg.id)
+      } else {
+        threadMessages.removeUnsentMessage(projectId, conversationId, msg.id)
+      }
+      rendererRecovery.setDraft(
+        projectId,
+        this.root.handleAgentEvent.thread.id,
+        text,
+        attachments,
+        [],
+        []
+      )
+      rendererRecovery.persistQueuedNow()
+      this.root.currentWorkingTraceAttribution.composerRestoreKey += 1
+      this.root.handleAgentEvent.errorMessage = ''
+    } catch (error) {
+      this.root.handleAgentEvent.errorMessage =
+        error instanceof Error ? error.message : 'The message could not be recalled.'
     }
   }
 

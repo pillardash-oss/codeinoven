@@ -63,9 +63,21 @@ import type { WorkerNameSettings } from '../assignment/worker-names'
 import type { AcpAgentAuthStatus, AcpAgentInput, AcpAgentSettings } from '../acp'
 import type { CustomVendorIconSet, CustomVendorIconVariant } from '../custom-vendor-icon'
 import type { CioPromptId, CioPromptSetting } from '../cio-prompts'
+import type { AdmissionDecision, ThreadResourceGateAnswer } from '../resource-admission'
 import type { Contract } from './contract-helpers'
 
 export const invokeProviderContract = {
+  /** Whether this device can take new agent work now, or has to hold it. */
+  'system:resourceAdmission': {} as Contract<[], AdmissionDecision>,
+  /**
+   * Whether the machine that will run one thread's next turn can take it now,
+   * and whose machine answered: this device for a local thread, the named Oven
+   * for an Oven thread.
+   */
+  'system:threadResourceGate': {} as Contract<
+    [projectId: string, threadId: string],
+    ThreadResourceGateAnswer
+  >,
   'plugins:listMarketplaces': {} as Contract<[], AgentPluginMarketplace[]>,
   'plugins:addMarketplace': {} as Contract<
     [{ url: string; platform: 'codex' | 'claude' }],

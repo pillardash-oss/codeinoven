@@ -31,6 +31,7 @@
       tone={status.tone}
       kind={status.kind}
       variant={status.variant ?? 'dot'}
+      icon={status.icon}
       size="sm"
       title={status.label}
     />

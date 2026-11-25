@@ -52,6 +52,20 @@ export const invokeThreadContract = {
     ],
     Thread
   >,
+  /**
+   * A side chat attached to the conversation it was opened from: the durable
+   * worker thread that now holds its transcript.
+   */
+  'temporary-chat:attachToThread': {} as Contract<
+    [
+      projectId: string,
+      threadId: string,
+      temporaryChatId: string,
+      settings: ThreadSettings,
+      title?: string
+    ],
+    Thread
+  >,
   'checklist:generate': {} as Contract<
     [projectId: string, threadId: string, planContent: string],
     Checklist
@@ -67,7 +81,13 @@ export const invokeThreadContract = {
     ],
     Checklist | null
   >,
-  'checkpoint:list': {} as Contract<[projectId: string, threadId: string], TurnCheckpointSummary[]>,
+  // `limit` is the newest window of checkpoints to read, not a page: a card is
+  // drawn only for a checkpoint anchored to a message the transcript holds, so a
+  // caller can only use the newest window and the main process clamps it.
+  'checkpoint:list': {} as Contract<
+    [projectId: string, threadId: string, limit?: number],
+    TurnCheckpointSummary[]
+  >,
   'checkpoint:activeSummary': {} as Contract<
     [projectId: string, threadId: string],
     TurnCheckpointSummary | null

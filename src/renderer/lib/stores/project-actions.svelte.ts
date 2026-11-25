@@ -1,6 +1,14 @@
 import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
 import type { ProjectAction, ProjectActionInput } from '$shared/project-actions'
+import { logRendererDev } from '$lib/system/renderer-logger'
 import { SvelteMap } from 'svelte/reactivity'
+
+/**
+ * A save is one small IPC round trip, so this budget is the point where the
+ * wait is no longer the work. Main logs its own share; this side logs the whole
+ * round trip, and a gap between the two is the queueing or the renderer itself.
+ */
+const SLOW_PROJECT_ACTION_SAVE_ROUND_TRIP_MS = 1000
 
 export interface ProjectActionRun {
   actionId: string
@@ -14,6 +22,8 @@ export interface ProjectActionRun {
    *  at when they pressed Run, never against whatever scope the panel happens to
    *  show once its terminal finishes attaching. */
   scopeBucketId: string
+  /** Root identity captured at launch, so later scope edits cannot rewrite history. */
+  scopeRootIdentity: string | null
   running: boolean
   expanded: boolean
 }
@@ -87,7 +97,20 @@ class ProjectActionsState {
     input: ProjectActionInput,
     insertAfterId?: string | null
   ): Promise<void> {
+    const startedAt = performance.now()
     const saved = await invoke('projectActions:save', projectId, actionId, input, insertAfterId)
+    const roundTripMs = performance.now() - startedAt
+    // A slow round trip whose main-side save was fast was waited on here, not
+    // written there: the reply sat in a renderer that had no free task slot.
+    if (roundTripMs >= SLOW_PROJECT_ACTION_SAVE_ROUND_TRIP_MS) {
+      logRendererDev(
+        `Project action save round trip was slow ${JSON.stringify({
+          projectId,
+          actionId,
+          roundTripMs: Math.round(roundTripMs)
+        })}`
+      )
+    }
     const current = this.actions(projectId)
     // Editing, or a create whose broadcast already landed, is an in-place swap.
     if (current.some((action) => action.id === saved.id)) {
@@ -137,7 +160,8 @@ class ProjectActionsState {
     projectId: string,
     action: ProjectAction,
     variables: Record<string, string>,
-    scopeBucketId: string
+    scopeBucketId: string,
+    scopeRootIdentity: string | null
   ): void {
     const terminalId = `action-${action.id}-${crypto.randomUUID()}`
     this.exitSubscriptions.get(action.id)?.()
@@ -147,6 +171,7 @@ class ProjectActionsState {
       script: action.script,
       variables,
       scopeBucketId,
+      scopeRootIdentity,
       running: true,
       expanded: true
     })

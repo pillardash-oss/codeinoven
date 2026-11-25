@@ -183,4 +183,37 @@ describe('the rail badge for a view', () => {
     const badges = viewBadgesFor('threads', 'projects', counts({ attention: 1 }), NO_TRANSFERS)
     expect(badges.activity).toBeNull()
   })
+
+  it('counts a thread a finished side chat left unread on its family', () => {
+    const badges = viewBadgesFor(
+      'projects',
+      'projects',
+      counts({}),
+      NO_TRANSFERS,
+      emptyThreadStateCounts(),
+      undefined,
+      { projects: new Set(['thread-9']), chats: new Set(), assistant: new Set() }
+    )
+    expect(badges.unread?.count).toBe(1)
+    expect(badges.unread?.label).toBe('1 unread project thread')
+  })
+
+  it('counts a side-chat thread once when its own notice reports it too', () => {
+    rail.unread = {
+      count: 1,
+      threadIds: ['thread-9'],
+      label: '1 unread project',
+      colors: ['var(--color-chat-success)']
+    }
+    const badges = viewBadgesFor(
+      'projects',
+      'projects',
+      counts({}),
+      NO_TRANSFERS,
+      emptyThreadStateCounts(),
+      undefined,
+      { projects: new Set(['thread-9']), chats: new Set(), assistant: new Set() }
+    )
+    expect(badges.unread?.count).toBe(1)
+  })
 })

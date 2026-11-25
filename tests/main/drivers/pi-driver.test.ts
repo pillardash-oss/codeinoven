@@ -4,6 +4,7 @@ import { join } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StorageEngine } from '../../../src/main/storage/storage-engine'
 import { PiDriver, mapPiRecord } from '../../../src/main/drivers/pi-driver'
+import { piHostSupervisor } from '../../../src/main/agents/pi-host-runtime'
 import {
   PI_STATUS_EXTENSION_KEY,
   PI_STATUS_IDLE,
@@ -65,6 +66,8 @@ const rpcMock = vi.hoisted(() => {
       respondToExtensionUiRequest: ReturnType<typeof vi.fn>
       dispose: ReturnType<typeof vi.fn>
       process: ChildProcess
+      /** The real client answers whether its child is still alive; this double is. */
+      running: boolean
       constructor(options: {
         onEvent?: (record: Record<string, unknown>) => void
         onUiRequest?: (record: Record<string, unknown>) => void
@@ -104,6 +107,7 @@ const rpcMock = vi.hoisted(() => {
         this.setAutoCompaction = vi.fn(async () => undefined)
         this.respondToExtensionUiRequest = vi.fn()
         this.dispose = vi.fn()
+        this.running = true
         this.process = {
           pid: 4242,
           once: vi.fn()
@@ -668,6 +672,43 @@ describe('PiDriver', () => {
     ])
   })
 
+  it('reports a turn starting and settling to the host, so its row counts work', async () => {
+    // The task manager's host row counts threads that are working, not sessions
+    // it keeps warm for an instant follow-up. The driver owns what a turn is, so
+    // it is the one that has to say when one starts and when one settles.
+    const note = vi.spyOn(piHostSupervisor(), 'noteSessionBusy')
+    const driver = new PiDriver(await storage())
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
+    expect(note).toHaveBeenCalledWith(sessionId, true)
+
+    const client = rpcMock.client
+    expect(client).toBeDefined()
+    client.emit({ type: 'agent_settled' })
+    await vi.waitFor(() => expect(note).toHaveBeenCalledWith(sessionId, false))
+    note.mockRestore()
+  })
+
+  it('answers idle when the session has no live client, even if the registration survived', async () => {
+    // The registration is cleared by pi's own settle hook, so a process that
+    // died before that hook ran left the session looking mid-turn forever: the
+    // engine parked every idle, and after its bounded re-checks it dropped the
+    // signal, stranding the turn with a queued message behind it.
+    const driver = new PiDriver(await storage())
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
+    expect(driver.hasActiveTurn(sessionId)).toBe(true)
+
+    // The process goes away without settling: dropping the mock's client list
+    // is exactly that state, and the registration is left behind by the missing
+    // settle hook. `abort` then finds no live client and clears it.
+    rpcMock.clients.splice(0)
+    await driver.abort(projectPath(), sessionId)
+    expect(driver.hasActiveTurn(sessionId)).toBe(false)
+    // And the stale registration is gone, so the next read agrees.
+    expect(driver.hasActiveTurn(sessionId)).toBe(false)
+  })
+
   it('ignores status records from foreign extension keys', async () => {
     const driver = new PiDriver(await storage())
     const sessionId = await driver.createSession(projectPath(), 'Pi')
@@ -946,6 +987,112 @@ describe('PiDriver', () => {
     expect(client.respondToExtensionUiRequest).toHaveBeenCalledWith('ui-q1', {
       value: JSON.stringify([['Fix both (Recommended)']])
     })
+  })
+
+  it('waits for pi to finish compacting instead of restarting the session', async () => {
+    const driver = new PiDriver(await storage())
+    const events: SessionAgentEvent[] = []
+    driver.onEvent((event) => events.push(event as SessionAgentEvent))
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
+    const client = rpcMock.client
+    expect(client).toBeDefined()
+
+    // pi reports the compaction finished only after two reads, and the first
+    // continuation prompt lands inside that window the way a real session
+    // refuses it.
+    let compacting = false
+    let settleReads = 0
+    client.compact.mockImplementation(async () => {
+      compacting = true
+    })
+    client.getState.mockImplementation(async () => {
+      if (compacting) {
+        settleReads += 1
+        if (settleReads >= 2) compacting = false
+      }
+      return {
+        sessionId: 'native-1',
+        model: null,
+        thinkingLevel: 'medium',
+        isCompacting: compacting,
+        isStreaming: false,
+        pendingMessageCount: 0
+      }
+    })
+    // Only the checkpoint continuation is refused; the turn's own dispatch
+    // prompt already went out.
+    client.prompt.mockClear()
+    let promptCalls = 0
+    client.prompt.mockImplementation(async () => {
+      promptCalls += 1
+      if (promptCalls === 1) {
+        throw new Error(
+          'Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.'
+        )
+      }
+    })
+
+    client.emitStatus({
+      type: 'extension_ui_request',
+      method: 'setStatus',
+      statusKey: 'codeinoven-compaction',
+      statusText: JSON.stringify({ type: 'threshold', resume: true })
+    })
+
+    await vi.waitFor(() => expect(client.prompt).toHaveBeenCalledTimes(2), { timeout: 10_000 })
+    // The session was never thrown away: a fresh process would abort the
+    // compaction the user had already paid for and start the cycle again.
+    expect(client.dispose).not.toHaveBeenCalled()
+    expect(events.some((event) => event.type === 'session.error')).toBe(false)
+  }, 20_000)
+
+  it('ends the turn when checkpoints keep compacting without answering', async () => {
+    const driver = new PiDriver(await storage())
+    const events: SessionAgentEvent[] = []
+    driver.onEvent((event) => events.push(event as SessionAgentEvent))
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
+    const client = rpcMock.client
+    expect(client).toBeDefined()
+    client.compact.mockImplementation(async () => undefined)
+
+    const requestCheckpoint = (): void => {
+      client.emitStatus({
+        type: 'extension_ui_request',
+        method: 'setStatus',
+        statusKey: 'codeinoven-compaction',
+        statusText: JSON.stringify({ type: 'threshold', resume: true })
+      })
+    }
+
+    requestCheckpoint()
+    await vi.waitFor(() => expect(client.compact).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(client.prompt).toHaveBeenCalledTimes(2))
+    requestCheckpoint()
+    await vi.waitFor(() => expect(client.compact).toHaveBeenCalledTimes(2))
+    requestCheckpoint()
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'session.error',
+          sessionId,
+          error: expect.stringContaining('kept checkpointing') as unknown as string
+        })
+      )
+    })
+    // The third checkpoint never ran: the turn ended instead of paying for it.
+    expect(client.compact).toHaveBeenCalledTimes(2)
+  }, 20_000)
+
+  it('cannot trim history natively without a native transcript', async () => {
+    const driver = new PiDriver(await storage())
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
+    // Nothing reported a native session id, so there is no transcript this
+    // harness could edit: the engine has to fall back to discarding the session.
+    expect(await driver.trimSessionHistory(projectPath(), sessionId, [])).toBe(false)
   })
 
   it('keeps sub-agent-done custom messages out of the transcript', () => {

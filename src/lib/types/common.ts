@@ -32,8 +32,14 @@ export type ThinkingLevel = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'm
  */
 export type InferenceMode = 'normal' | 'fast' | 'ultrafast'
 
-/** How tool-call permissions are handled for a thread. */
-export type PermissionLevel = 'auto_review' | 'full_access'
+/** How tool-call permissions are handled for a thread.
+ *
+ *  `oven_mode` is the highest level, strictly more permissive than
+ *  `full_access`. It exists only for a thread whose composer is set to an
+ *  external Oven (a remote machine) before the message is sent: the agent may
+ *  need to do anything on that machine to finish the task, so no protective
+ *  check applies. See `src/lib/permission-level.ts` for its semantics. */
+export type PermissionLevel = 'auto_review' | 'full_access' | 'oven_mode'
 
 /** Harness/provider/model identity used for a secondary agent role. */
 export interface ModelRuntimeSettings {

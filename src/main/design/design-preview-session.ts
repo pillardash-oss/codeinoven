@@ -57,11 +57,17 @@ export interface DesignPreviewRequest {
   projectId: string
   threadId: string
   /**
-   * Project-relative folder, as the caller spelled it. Validated here rather
-   * than at each call site, so the agent's untrusted input and the coordinator's
-   * IPC argument go through one check.
+   * Folder relative to `projectPath`, as the caller spelled it. Validated here
+   * rather than at each call site, so the agent's untrusted input and the
+   * coordinator's IPC argument go through one check.
    */
   directory: unknown
+  /**
+   * The spelling the caller's board knows the folder by, when the folder is kept in
+   * another checkout of the project. A served folder is named by that spelling so
+   * every record and tab mark keeps the root it really lives in.
+   */
+  display?: string
   /**
    * Project-relative entry inside the folder, or null/undefined for the default.
    */
@@ -120,7 +126,11 @@ export async function openDesignPreview(
   deps: DesignPreviewDeps,
   request: DesignPreviewRequest
 ): Promise<DesignPreviewResult> {
-  const directory = resolveServedFolder(request.projectPath, request.directory, request.defaultRoot)
+  const resolved = resolveServedFolder(request.projectPath, request.directory, request.defaultRoot)
+  const directory: typeof resolved = {
+    absolute: resolved.absolute,
+    display: request.display ?? resolved.display
+  }
   const targets = deps.targets ?? null
   // A server belongs to a folder rather than to a screen, so every screen of one
   // design shares it: the port is a property of the folder, and only the tabs are

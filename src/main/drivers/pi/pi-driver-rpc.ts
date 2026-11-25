@@ -1,6 +1,10 @@
 import { buildProcessEnvironmentAsync, OWNED_SESSION_MARKER } from '../cli-environment'
 import { prepareHarnessInvocation, resolveHarnessRuntime } from '../harness-runtime'
 import { PiRpcClient } from '../pi-rpc-client'
+import type { RpcTransport } from '../pi-rpc-transport'
+import type { PiSessionClient } from './pi-client'
+import { PiHostClient } from './pi-host-client'
+import { piHostSupervisor } from '../../agents/pi-host-runtime'
 import { SpawnAdmission } from '../spawn-admission'
 import type { AgentMessage } from '../../../lib/types'
 import { Logger } from '../../system/logger'
@@ -32,23 +36,85 @@ const PI_SESSION_IDLE_DISPOSE_MS = 30 * 60_000
 /** Cadence of the idle sweep. One timer serves every session of the driver. */
 const PI_SESSION_IDLE_SWEEP_MS = 60_000
 
+/**
+ * One session's start-up, as the local spawn would have performed it.
+ *
+ * The launcher receives exactly what `PiRpcClient` would have spawned, so an
+ * implementation that starts the peer somewhere else (an Oven) runs the same
+ * argv in the same directory with the same environment, and nothing above the
+ * transport can tell the two apart.
+ */
+export interface PiRpcLaunchInput {
+  sessionId: string
+  /** The command the caller resolved for this machine, e.g. 'pi'. */
+  command: string
+  /** The full argv the local spawn would have used, `--mode rpc` first. */
+  args: string[]
+  cwd: string
+  env: NodeJS.ProcessEnv
+}
+
+export interface PiRpcLaunchResult {
+  transport: RpcTransport
+  /** Local pid when the peer runs on this machine; absent for a remote peer. */
+  pid?: number
+}
+
+/** Starts the peer for one session and returns the channel to speak on. */
+export type PiRpcLaunch = (input: PiRpcLaunchInput) => Promise<PiRpcLaunchResult>
+
 /** Everything the RPC process lifecycle needs from the driver. */
 export interface PiRpcSessionsHost {
   readonly id: string
   readonly accountEnvironment: NodeJS.ProcessEnv
+  /** The account's Pi agent dir, which a hosted session is created under. */
+  readonly agentDirectory: string | undefined
   requireSession(projectPath: string, sessionId: string): Promise<PersistentCliSession>
   isTitleSession(sessionId: string): boolean
   utilityRuntime(sessionId: string): PreparedUtilityRuntime | undefined
   resolveRuntimePlaceholders(value: string, runtime: PreparedUtilityRuntime): string
+  /** Optional: a path that is not on this machine (an Oven checkout) answers none. */
   workspaceTemporaryEnvironment(
     projectPath: string
-  ): Promise<{ TMPDIR: string; TEMP: string; TMP: string }>
+  ): Promise<{ TMPDIR?: string; TEMP?: string; TMP?: string }>
+  /**
+   * Register a session's local harness child with the app's process tracker.
+   * Only a real child is observed, so a launched (remote) session never calls
+   * this.
+   */
   observeHarnessProcess(
     sessionId: string,
     process: ChildProcess,
     command: string,
     projectPath: string
   ): void
+  /**
+   * Register the pooled Pi host a hosted session runs on with the process
+   * tracker.
+   *
+   * A hosted session has no child process of its own: its shell tool, and every
+   * process that shell starts, run inside the long-lived Pi host. Up to
+   * `maxSessionsPerHost` sessions share that one host pid, and the host's
+   * environment names only whichever session wrote it last, so the host cannot
+   * be attributed to one thread. It is registered app-wide instead (an
+   * undefined session id), which is the pool the tracker already models: the
+   * commands appear in the task manager with their real pid, and a thread
+   * cleanup can never signal a host other threads are still running on.
+   *
+   * A process the agent needs to stop by pid is started with the app's own
+   * process tool instead, which records the pid against its thread.
+   *
+   * Optional for the same reason `launch` is: a host driven without a process
+   * tracker (a test) simply has nothing to register.
+   */
+  observeHostedProcess?(pid: number, command: string, cwd: string): void
+  /**
+   * Start the session's peer somewhere other than this machine's child, e.g. a
+   * run on an Oven. Absent means the session spawns `pi --mode rpc` itself,
+   * exactly as it always has. A launched session is never a hosted session:
+   * the returned transport is the only channel it has.
+   */
+  launch?: PiRpcLaunch
   materializeCoreToolsExtension(
     sessionId: string,
     bundledRuntime: boolean,
@@ -57,7 +123,11 @@ export interface PiRpcSessionsHost {
   materializeProvidersExtension(sessionId: string): Promise<string | null>
   providerExtensionEnv(sessionId: string): Record<string, string> | undefined
   forgetCioSession(sessionId: string): void
-  resumeNativeSession(projectPath: string, sessionId: string, client: PiRpcClient): Promise<void>
+  resumeNativeSession(
+    projectPath: string,
+    sessionId: string,
+    client: PiSessionClient
+  ): Promise<void>
   syncNativeSessionId(projectPath: string, sessionId: string): Promise<void>
   /** Start the session's turn state from its mirrored messages. */
   initializeTurnState(sessionId: string, messages: AgentMessage[]): void
@@ -87,7 +157,7 @@ export interface PiRpcSessionsHost {
  * releases a process the user has stopped using.
  */
 export class PiRpcSessions {
-  private readonly rpcClients = new Map<string, PiRpcClient>()
+  private readonly rpcClients = new Map<string, PiSessionClient>()
   /**
    * In-flight session bootstraps, keyed by session id.
    *
@@ -103,7 +173,7 @@ export class PiRpcSessions {
    * turn), because the second caller found the client in `rpcClients` and
    * dispatched immediately. Every caller now awaits the one bootstrap.
    */
-  private readonly rpcClientBootstraps = new Map<string, Promise<PiRpcClient>>()
+  private readonly rpcClientBootstraps = new Map<string, Promise<PiSessionClient>>()
   private readonly sessionProjects = new Map<string, string>()
   /**
    * Last activity per live RPC session (any RPC record, prompt, steer, or
@@ -142,7 +212,7 @@ export class PiRpcSessions {
 
   constructor(private readonly host: PiRpcSessionsHost) {}
 
-  client(sessionId: string): PiRpcClient | undefined {
+  client(sessionId: string): PiSessionClient | undefined {
     return this.rpcClients.get(sessionId)
   }
 
@@ -154,7 +224,7 @@ export class PiRpcSessions {
     return [...this.rpcClients.keys()]
   }
 
-  clientEntries(): IterableIterator<[string, PiRpcClient]> {
+  clientEntries(): IterableIterator<[string, PiSessionClient]> {
     return this.rpcClients.entries()
   }
 
@@ -203,7 +273,7 @@ export class PiRpcSessions {
     projectPath: string,
     sessionId: string,
     steps?: DevStepClock
-  ): Promise<PiRpcClient> {
+  ): Promise<PiSessionClient> {
     // The in-flight bootstrap wins over the published client: `rpcClients` holds
     // the client from the moment it is spawned (Pi's events, UI requests, exit
     // handling and the task manager all need that reference), but the client is
@@ -211,7 +281,13 @@ export class PiRpcSessions {
     const bootstrap = this.rpcClientBootstraps.get(sessionId)
     if (bootstrap) return bootstrap
     const existing = this.rpcClients.get(sessionId)
-    if (existing) return existing
+    if (existing) {
+      // A hosted client outlives its host process unless somebody notices. A
+      // client that is no longer running settles the same way a crashed child
+      // does, so the thread leaves "working" and the next turn resumes.
+      if (existing.running) return existing
+      this.settleDeadClient(sessionId)
+    }
     const started = this.startClient(projectPath, sessionId, steps)
     this.rpcClientBootstraps.set(sessionId, started)
     try {
@@ -230,7 +306,7 @@ export class PiRpcSessions {
    * that failed leaves the caller with whatever the map holds, let it fail its
    * own way rather than surfacing the bootstrap error twice.
    */
-  async settledClient(sessionId: string): Promise<PiRpcClient | undefined> {
+  async settledClient(sessionId: string): Promise<PiSessionClient | undefined> {
     const bootstrap = this.rpcClientBootstraps.get(sessionId)
     if (!bootstrap) return this.rpcClients.get(sessionId)
     try {
@@ -253,7 +329,7 @@ export class PiRpcSessions {
     projectPath: string,
     sessionId: string,
     steps?: DevStepClock
-  ): Promise<PiRpcClient> {
+  ): Promise<PiSessionClient> {
     const finishAdmissionWait = steps?.begin('spawnAdmission')
     const releaseSpawn = await this.spawnAdmission.enter(
       this.host.isTitleSession(sessionId) ? 'background' : 'interactive'
@@ -271,7 +347,7 @@ export class PiRpcSessions {
     projectPath: string,
     sessionId: string,
     steps?: DevStepClock
-  ): Promise<PiRpcClient> {
+  ): Promise<PiSessionClient> {
     const session = await this.timedStep(
       steps,
       'sessionLookup',
@@ -361,21 +437,99 @@ export class PiRpcSessions {
       )
       if (!rematerialized) throw new Error('Cannot start Pi without its file-access policy')
     }
-    const client = new PiRpcClient({
-      invocation,
-      onEvent: (record) => {
+    // The bundled harness runs on the app's own CIO Pi host: one long-lived
+    // process for every thread, instead of a `pi --mode rpc` child per session.
+    // An installed Pi keeps the process it always had. `CIO_PI_HOST=0` opts out
+    // for a single run when the host has to be ruled out of a failure.
+    const runtimeKind = invocation.runtime.target.kind
+    // A caller that owns the peer elsewhere (a run on an Oven) starts this
+    // session's process itself, so neither the shared Pi host nor a local child
+    // is involved: the transport it hands back is the session's only channel.
+    const launch = this.host.launch
+    const hosted =
+      launch === undefined && runtimeKind === 'bundled' && process.env['CIO_PI_HOST'] !== '0'
+    const extensionPaths = [
+      cioCoreToolsExtensionPath,
+      ...(providersExtensionPath === null ? [] : [providersExtensionPath])
+    ]
+    // Every client reports the same session events; only the exit is bound to a
+    // client instance, because a replaced client's stale exit must be ignored.
+    const sessionCallbacks = {
+      onEvent: (record: Record<string, unknown>) => {
         void this.host.handleRpcEvent(record, sessionId, projectPath)
       },
-      onUiRequest: (record) => {
+      onUiRequest: (record: Record<string, unknown>) => {
         this.host.handleUiRequest(record, sessionId)
       },
-      onExtensionStatus: (record) => {
+      onExtensionStatus: (record: Record<string, unknown>) => {
         this.host.handleExtensionStatus(record, sessionId)
-      },
-      onExit: (code) => {
-        this.handleExit(code, sessionId, client)
       }
-    })
+    }
+    let client: PiSessionClient
+    /** The child this process spawned, or null when no local child exists. */
+    let localClient: PiRpcClient | null = null
+    /** The hosted client, once a session was acquired from the Pi host. */
+    let hostedClient: PiHostClient | null = null
+    if (launch) {
+      const launched = await launch({
+        sessionId,
+        command: invocation.command,
+        args: invocation.args,
+        cwd: invocation.cwd ?? projectPath,
+        env: invocation.env
+      })
+      client = new PiRpcClient({
+        ...sessionCallbacks,
+        transport: launched.transport,
+        onExit: (code) => {
+          this.handleExit(code, sessionId, client)
+        }
+      })
+    } else if (hosted) {
+      // The session runs with exactly the environment the harness process was
+      // prepared with: the account's provider credentials and its isolated
+      // agent directory arrive through it, not through this process.
+      const sessionEnv = hostedSessionEnvironment(invocation.env)
+      const agentDirectory = sessionEnv?.['PI_CODING_AGENT_DIR']?.trim() || undefined
+      const hostClient = new PiHostClient({
+        supervisor: piHostSupervisor(),
+        sessionId,
+        cwd: projectPath,
+        // An account with no agent directory names none here: the host applies
+        // Pi's own default, which is what the CLI would have done.
+        ...(agentDirectory === undefined || agentDirectory.length === 0
+          ? {}
+          : { agentDir: agentDirectory }),
+        extensionPaths,
+        // A CLI child receives the account environment and the custom-provider
+        // keys. A hosted session has no child, so the same environment travels
+        // with the session and the host applies it before building services.
+        ...(sessionEnv === undefined ? {} : { sessionEnv }),
+        onEvent: (record) => {
+          void this.host.handleRpcEvent(record, sessionId, projectPath)
+        },
+        onUiRequest: (record) => {
+          this.host.handleUiRequest(record, sessionId)
+        },
+        onExtensionStatus: (record) => {
+          this.host.handleExtensionStatus(record, sessionId)
+        },
+        onExit: (code) => {
+          this.handleExit(code, sessionId, hostClient)
+        }
+      })
+      hostedClient = hostClient
+      client = hostClient
+    } else {
+      localClient = new PiRpcClient({
+        ...sessionCallbacks,
+        invocation,
+        onExit: (code) => {
+          this.handleExit(code, sessionId, client)
+        }
+      })
+      client = localClient
+    }
     this.rpcClients.set(sessionId, client)
     this.sessionProjects.set(sessionId, projectPath)
     this.touchSessionActivity(sessionId)
@@ -389,12 +543,21 @@ export class PiRpcSessions {
     // `CodeInOven-electron` instead of `pi`. `runtime.command` is the command
     // the user asked for in both the bundled and native cases, so the row reads
     // the harness that actually owns the process again.
-    this.host.observeHarnessProcess(
-      sessionId,
-      client.process,
-      invocation.runtime?.command ?? invocation.command,
-      projectPath
-    )
+    // A hosted session has no child of its own, but the host process it runs on
+    // is the process its shell tool starts commands in, so the host is the
+    // session's root. It is registered below, once the host has answered the
+    // session's create request: an Electron utility process names its pid when it
+    // starts, and a session only gets an answer from a host that is running, so
+    // by then the pid is there to register. A launched session's peer is not
+    // this process's child and has no pid here at all.
+    if (localClient) {
+      this.host.observeHarnessProcess(
+        sessionId,
+        localClient.process,
+        invocation.runtime?.command ?? invocation.command,
+        projectPath
+      )
+    }
     try {
       this.compactionReadySessions.delete(sessionId)
       await this.timedStep(steps, 'newSession', client.newSession())
@@ -437,6 +600,22 @@ export class PiRpcSessions {
         { cause: error }
       )
     }
+    // The session is acquired, so the host that runs it is a known process. It
+    // is registered with the tracker so the commands an agent starts in the
+    // session (a dev server, a probe run) appear in the task manager with a real
+    // pid instead of running under a process nothing walks. The host is shared by
+    // several sessions, so it is registered app-wide and never as one thread's
+    // root: neither the host's environment nor its pid can prove which thread a
+    // child came from, and a thread cleanup must not stop a host its siblings
+    // are using. Nothing has to unregister it: the app-wide pool is dropped by
+    // the scan's liveness check when the host exits, and by `killAll` on quit.
+    if (hostedClient) {
+      this.host.observeHostedProcess?.(
+        hostedClient.pid,
+        invocation.runtime?.command ?? invocation.command,
+        projectPath
+      )
+    }
     return client
   }
 
@@ -450,7 +629,7 @@ export class PiRpcSessions {
   }
 
   /** A client's exit event; a replaced client's stale exit is ignored. */
-  handleExit(code: number | null, sessionId: string, exitedClient: PiRpcClient): void {
+  handleExit(code: number | null, sessionId: string, exitedClient: PiSessionClient): void {
     void code
     // A session can replace its RPC process while the old child is still
     // delivering its exit event. Never let that stale callback dispose the
@@ -504,6 +683,24 @@ export class PiRpcSessions {
     this.host.forgetCioSession(sessionId)
   }
 
+  /**
+   * Release one session's resident process if it is genuinely idle.
+   *
+   * An Oven counts every live harness process against its own run limit, so a
+   * machine with four resident sessions refuses a fifth thread with "This Oven
+   * already has four active runs". Releasing an idle one is how a new conversation
+   * gets the slot: the process comes back on the next turn, from the persisted
+   * native transcript.
+   */
+  releaseIdleSession(sessionId: string): boolean {
+    if (!this.rpcClients.has(sessionId)) return false
+    if (this.host.hasActiveTurn(sessionId)) return false
+    if (this.host.hasLiveChildSession(sessionId)) return false
+    if (this.host.hasPendingUiRequest(sessionId)) return false
+    this.disposeClient(sessionId)
+    return true
+  }
+
   /** Release every idle client of one project (a project closed). */
   releaseProject(projectPath: string): void {
     for (const [sessionId, clientProject] of this.sessionProjects) {
@@ -528,6 +725,28 @@ export class PiRpcSessions {
       this.rpcClients.get(sessionId)?.dispose()
       this.settleDeadClient(sessionId)
     }
+  }
+
+  /**
+   * Move a hosted session to a host process of its own.
+   *
+   * Only a hosted session can move: an installed Pi runs the process launched
+   * for that thread, and there is no second host to hand it to. The transcript
+   * is the state, so the target resumes it and both the app's session key and
+   * the native id stay the same.
+   */
+  async moveToNewHost(
+    sessionId: string
+  ): Promise<{ hostPid: number | null; nativeSessionId: string }> {
+    const client = this.rpcClients.get(sessionId)
+    if (client === undefined) throw new Error('No live session to move')
+    if (!(client instanceof PiHostClient)) {
+      throw new Error('Only a hosted Pi session can move to another host')
+    }
+    const supervisor = piHostSupervisor()
+    const state = await supervisor.moveToNewHost(sessionId)
+    this.touchSessionActivity(sessionId)
+    return { hostPid: supervisor.hostOf(sessionId), nativeSessionId: state.nativeSessionId }
   }
 
   /** Drop every client and its bookkeeping (driver disposal). */
@@ -583,4 +802,26 @@ export class PiRpcSessions {
       this.disposeClient(sessionId)
     }
   }
+}
+
+/**
+ * The environment a hosted session runs with, or undefined when there is none.
+ *
+ * A harness process is launched with an environment the app composed for the
+ * session: the account's provider credentials, its isolated agent directory, and
+ * the custom-provider keys. The host has no child per session, so the same set
+ * travels with the session instead. Keys that wire a CLI child (the Electron
+ * run-as-node switch and its module search path) mean nothing to a host that is
+ * already running, so they are left behind.
+ */
+const HOST_CLI_ONLY_ENV = new Set(['ELECTRON_RUN_AS_NODE', 'NODE_PATH', 'NODE_OPTIONS'])
+
+function hostedSessionEnvironment(composed: NodeJS.ProcessEnv): Record<string, string> | undefined {
+  const sessionEnv: Record<string, string> = {}
+  for (const [name, value] of Object.entries(composed)) {
+    if (typeof value !== 'string' || value.length === 0) continue
+    if (HOST_CLI_ONLY_ENV.has(name)) continue
+    sessionEnv[name] = value
+  }
+  return Object.keys(sessionEnv).length === 0 ? undefined : sessionEnv
 }

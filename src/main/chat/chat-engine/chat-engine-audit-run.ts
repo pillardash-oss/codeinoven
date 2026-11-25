@@ -14,6 +14,10 @@ import {
   parseAuditReportContent,
   validateAuditReportContent
 } from '../../../lib/audit/audit-validation'
+import {
+  INDEPENDENT_AUDIT_STOPPED_MESSAGE,
+  auditStopAppliesToRun
+} from '../../../lib/audit/audit-stop-request'
 import type { AssignmentAuditRepairManifest } from './chat-engine-types'
 import { rawErrorDetail, rawErrorMessage } from './chat-engine-errors'
 import {
@@ -48,11 +52,30 @@ class AuditWithoutToolEvidenceError extends Error {}
 export class ChatEngineAuditRun {
   constructor(private readonly host: ChatEngine) {}
 
+  /**
+   * True when the user stopped this independent audit run, consuming the
+   * request so it never reaches the next audit.
+   */
+  private consumeIndependentAuditStop(
+    projectId: string,
+    coordinatorThreadId: string,
+    runStartedAt: number
+  ): boolean {
+    const key = `${projectId}:${coordinatorThreadId}`
+    const requestedAt = this.host.state.stoppedIndependentAuditRuns.get(key)
+    if (requestedAt === undefined) return false
+    this.host.state.stoppedIndependentAuditRuns.delete(key)
+    return auditStopAppliesToRun(requestedAt, runStartedAt)
+  }
+
   async runIndependentAudit(
     projectId: string,
     coordinatorThreadId: string,
     settings: ThreadSettings
   ): Promise<{ report: AuditReport; auditorThread: Thread }> {
+    /** When this run took ownership. A stop request older than this belongs to
+     *  an earlier run, so the run never cancels itself over a stale click. */
+    const runStartedAt = Date.now()
     const coordinator = await this.host.threadManager.getThread(projectId, coordinatorThreadId)
     if (!coordinator || coordinator.independentAudit !== true) {
       throw new Error('Independent audit is not enabled for this thread.')
@@ -116,6 +139,8 @@ export class ChatEngineAuditRun {
     const auditStartedAt = Date.now()
     const runId = `${auditStartedAt}-${randomBytes(4).toString('hex')}`
     let lastError: Error | null = null
+    /** The user stopped this run: no retry, no partial report, no failure. */
+    let stopped = false
     /** The most recent structurally-valid report content plus the evidence
      *  gaps that kept it from full validation. When the correction attempts are
      *  exhausted this is persisted as a partial report instead of discarding
@@ -157,6 +182,10 @@ export class ChatEngineAuditRun {
       independentAuditInitialized: true
     })
     for (let attemptIndex = 0; attemptIndex < 3; attemptIndex += 1) {
+      if (this.consumeIndependentAuditStop(projectId, coordinatorThreadId, runStartedAt)) {
+        stopped = true
+        break
+      }
       const attemptStartedAt = Date.now()
       await this.host.threadManager.setStatus(projectId, auditorThread.id, 'executing')
       this.host.handledIdleSessions.delete(sessionId)
@@ -307,6 +336,12 @@ export class ChatEngineAuditRun {
           content,
           checkInvocations
         })
+        // The user may have stopped the run while the auditor's last answer was
+        // being validated. A stop must never produce a report they cancelled.
+        if (this.consumeIndependentAuditStop(projectId, coordinatorThreadId, runStartedAt)) {
+          stopped = true
+          break
+        }
         const report = await this.host.state.auditEngine.create({
           projectId,
           threadId: coordinatorThreadId,
@@ -356,6 +391,12 @@ export class ChatEngineAuditRun {
         }
       } catch (error) {
         lastError = error instanceof Error ? error : new Error('The Auditor failed.')
+        // A deliberate Stop is not a failure: it ends the run here, before any
+        // continuation attempt gets a chance to dispatch again.
+        if (this.consumeIndependentAuditStop(projectId, coordinatorThreadId, runStartedAt)) {
+          stopped = true
+          break
+        }
         previousFailure = lastError.message
         // A provider usage/rate-limit reset parks the session in a retry wait
         // (sometimes hours away). Every further prompt in this run bounces off
@@ -396,6 +437,15 @@ export class ChatEngineAuditRun {
           sessionId
         )
       }
+    }
+
+    if (stopped) {
+      // The auditor session was aborted, but a stop observed between attempts
+      // never reached it: the terminal status is written here either way.
+      await this.host.threadManager.setStatus(projectId, auditorThread.id, 'interrupted', {
+        read: true
+      })
+      throw new Error(INDEPENDENT_AUDIT_STOPPED_MESSAGE)
     }
 
     // The auditor generated a structurally-valid report but every correction

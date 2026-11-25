@@ -1,5 +1,10 @@
 /** Standalone Node service. No Electron, desktop paths, or app-owned process markers. */
-import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import {
+  execFile,
+  spawn,
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams
+} from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createServer, connect, type Socket } from 'node:net'
 import {
@@ -18,9 +23,11 @@ import { availableParallelism, hostname, homedir, totalmem, tmpdir, uptime } fro
 import { createInterface } from 'node:readline'
 import { join, isAbsolute } from 'node:path'
 import { harnessLaunchSpec, launchSpec } from './oven-windows-command'
-import { constants } from 'node:fs'
+import { Logger } from '../../system/logger'
+import { constants, existsSync, readdirSync } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { once } from 'node:events'
+import { promisify } from 'node:util'
 import type { OvenHarnessInventoryItem, OvenProbe, OvenRun, OvenRunEvent } from '../../../lib/ovens'
 import { ovenHarnessIdForCommand } from '../../../lib/ovens'
 import { listHarnesses } from '../../agents/harness-registry'
@@ -28,6 +35,7 @@ import { OPENCODE_COMMAND_ALIASES } from '../../../lib/opencode-version'
 import { OVEN_DATA_DIRECTORY, OVEN_LEGACY_DATA_DIRECTORY } from './oven-root-paths'
 import { isCurrentServiceAnswer } from '../oven-service-bundle'
 import { OVEN_NPM_PREFIX } from '../oven-harness-paths'
+import { runtimePath } from './oven-runtime-path'
 import {
   NON_INTERACTIVE_WSL_DISTRIBUTIONS,
   WSL_DISCOVERY_SCRIPT,
@@ -38,6 +46,23 @@ import {
 } from '../oven-wsl'
 import { ovenRootOperation } from './oven-root-operations'
 import { ovenWorkspace } from './oven-workspace'
+import {
+  OVEN_UTILITY_HOST_MODE,
+  OVEN_UTILITY_RELAY_MODE,
+  type OvenUtilityHostState
+} from '../../../lib/oven-utility-host'
+import { startOvenUtilityHost } from './oven-utility-host'
+import { openOvenUtilityHostLog } from './oven-utility-host/oven-utility-host-log'
+import { createOvenUtilityLocalHost } from './oven-utility-host/oven-utility-local'
+import { OvenUtilitySecrets } from './oven-utility-host/oven-utility-secrets'
+import { answerOvenUtilityAdminRequest, getOvenUtilityJson } from './oven-service-utility-secrets'
+import { ovenUtilityUrl } from './oven-utility-http'
+import { runOvenUtilityRelay } from './oven-utility-relay'
+import {
+  readOvenUtilityHostState,
+  removeOvenUtilityHostState,
+  waitForOvenUtilityHostState
+} from './oven-utility-host/oven-utility-host-state'
 import {
   WINDOWS_LAUNCHER_FILE,
   enableWindowsTask,
@@ -116,10 +141,29 @@ function harnessInstallDirs(): string[] {
 }
 
 const installDirs = harnessInstallDirs()
-if (installDirs.length > 0) {
-  const separator = process.platform === 'win32' ? ';' : ':'
-  process.env['PATH'] = `${installDirs.join(separator)}${separator}${process.env['PATH'] ?? ''}`
-}
+const pathSeparator = process.platform === 'win32' ? ';' : ':'
+const basePath = [...installDirs, process.env['PATH'] ?? ''].filter(Boolean).join(pathSeparator)
+process.env['PATH'] =
+  process.platform === 'win32'
+    ? basePath
+    : // A harness shim is `#!/usr/bin/env node`, so the runtime that satisfies it
+      // has to be on this PATH too: the service is started by an SSH exec channel,
+      // which never sources the login files a version manager installs into.
+      runtimePath({
+        home: homedir(),
+        npmPrefix: OVEN_NPM_PREFIX,
+        basePath,
+        probe: {
+          exists: existsSync,
+          readDir: (path) => {
+            try {
+              return readdirSync(path)
+            } catch {
+              return []
+            }
+          }
+        }
+      })
 if (process.platform !== 'win32')
   process.env['npm_config_prefix'] = join(homedir(), OVEN_NPM_PREFIX)
 /**
@@ -250,7 +294,14 @@ async function forceStopDaemon(): Promise<void> {
 }
 const jobs = new Map<string, Job>()
 let shutDownServer: (() => void) | undefined
+/**
+ * The one utility host this daemon started, kept so a repeated ask reuses it
+ * instead of leaving a second listener and a second state file behind.
+ */
+let utilityHostChild: ChildProcess | undefined
 let requestTail: Promise<unknown> = Promise.resolve()
+/** How long a host this daemon did not start gets to prove it is alive. */
+const UTILITY_HOST_CHECK_MS = 2000
 const MAX_REQUEST = 1024 * 1024
 const MAX_RUNS = 64
 const MAX_ACTIVE = 4
@@ -650,6 +701,62 @@ async function probeInventory(force = false): Promise<NonNullable<OvenProbe['inv
   return inventory
 }
 
+/**
+ * Memory this machine can hand to new work right now, or null when the
+ * platform read could not answer.
+ *
+ * The desktop's dispatch gate queues a run when the Oven reports less than its
+ * floor, the same policy the local device uses, so the Oven must report the
+ * number itself: the machine running the app cannot see inside another
+ * computer's memory. Linux answers from `/proc/meminfo`, macOS from `vm_stat`,
+ * and Windows from CIM through PowerShell. Every path is best-effort: a
+ * sampler that cannot answer must never make the Oven look busy.
+ */
+async function availableMemoryBytes(): Promise<number | null> {
+  try {
+    if (process.platform === 'linux') {
+      const meminfo = await readFile('/proc/meminfo', 'utf8')
+      const match = /^MemAvailable:\s+(\d+) kB$/mu.exec(meminfo)
+      return match === null ? null : Number(match[1]) * 1024
+    }
+    if (process.platform === 'darwin') {
+      const { stdout } = await promisifiedExecFile('/usr/bin/vm_stat', [], { timeout: 1000 })
+      let pageSize = 0
+      const pages: Record<string, number> = {}
+      for (const line of stdout.split('\n')) {
+        const sizeLine = /^page size of (\d+) bytes$/u.exec(line.trim())
+        if (sizeLine !== null) {
+          pageSize = Number(sizeLine[1])
+          continue
+        }
+        const parsed = /^(.+):\s+(\d+)\.$/u.exec(line.trim())
+        if (parsed !== null) pages[parsed[1]] = Number(parsed[2])
+      }
+      const free =
+        (pages['Pages free'] ?? 0) +
+        (pages['Pages inactive'] ?? 0) +
+        (pages['Pages speculative'] ?? 0) +
+        (pages['Pages purgeable'] ?? 0)
+      return pageSize === 0 ? null : free * pageSize
+    }
+    if (process.platform === 'win32') {
+      const { stdout } = await promisifiedExecFile(
+        'powershell.exe',
+        ['-NoProfile', '-Command', '(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory'],
+        { timeout: 5000 }
+      )
+      const kilobytes = Number(stdout.trim())
+      return Number.isFinite(kilobytes) && kilobytes > 0 ? kilobytes * 1024 : null
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+/** Promisified `execFile` for the platform memory samplers. */
+const promisifiedExecFile = promisify(execFile)
+
 async function probe(refresh = false): Promise<OvenProbe> {
   const inventory = await probeInventory(refresh)
   const inventoryByCommand = new Map(inventory.map((item) => [item.command, item.executablePath]))
@@ -658,7 +765,7 @@ async function probe(refresh = false): Promise<OvenProbe> {
     path: inventoryByCommand.get(command) ?? null
   }))
   const home = homedir()
-  const disk = await statfs(home)
+  const [disk, memoryAvailable] = await Promise.all([statfs(home), availableMemoryBytes()])
   return {
     protocolVersion: PROTOCOL,
     serviceRevision: revision,
@@ -675,6 +782,7 @@ async function probe(refresh = false): Promise<OvenProbe> {
       architecture: process.arch,
       cpuCount: availableParallelism(),
       memoryBytes: totalmem(),
+      ...(memoryAvailable === null ? {} : { memoryAvailableBytes: memoryAvailable }),
       diskBytes: disk.blocks * disk.bsize,
       diskAvailableBytes: disk.bavail * disk.bsize,
       nodeVersion: process.versions.node,
@@ -755,12 +863,19 @@ async function start(raw: unknown): Promise<OvenRun> {
   const input = value.input === undefined ? '' : value.input
   if (typeof input !== 'string' || Buffer.byteLength(input) > MAX_REQUEST)
     throw new Error('Invalid harness input.')
+  // Which client owns this run travels with it, so a later service update can
+  // tell its own runs from another client's and never stop someone else's work.
+  const clientId =
+    typeof value.clientId === 'string' && /^[A-Za-z0-9._@/-]{1,80}$/u.test(value.clientId)
+      ? value.clientId
+      : undefined
   const run: OvenRun = {
     id: runId,
     command: value.command,
     cwd: value.cwd,
     status: 'running',
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    ...(clientId === undefined ? {} : { clientId })
   }
   const job: Job = {
     run,
@@ -849,12 +964,98 @@ async function events(job: Job, after: unknown): Promise<{ run: OvenRun; events:
   return { run: job.run, events: result }
 }
 
+/**
+ * Start this Oven's utility host, once, and report the port it published.
+ *
+ * The host is an ordinary child of this daemon rather than a second daemon: it
+ * is only reachable over the Oven's own loopback, holds nothing worth surviving
+ * a service restart, and its state file is read by the relay the app spawns.
+ * Every attempt re-reads the state file, so a host that was still starting when
+ * it was asked, or one this daemon lost track of, is found rather than doubled.
+ */
+async function utilityHost(): Promise<{ port: number }> {
+  // The host lives under the account's own app data root, where a client looks
+  // for it, which is not necessarily a daemon started with an overridden root.
+  const home = homedir()
+  const published = await readOvenUtilityHostState(home)
+  if (published && (await utilityHostUsable(published))) return { port: published.port }
+  // A state file whose host is gone names a port nothing listens on, so it is
+  // withdrawn before a new host publishes over it.
+  if (published) await removeOvenUtilityHostState(home, published.hostToken)
+  if (
+    !utilityHostChild ||
+    utilityHostChild.exitCode !== null ||
+    utilityHostChild.signalCode !== null
+  ) {
+    const child = spawn(process.execPath, [process.argv[1], OVEN_UTILITY_HOST_MODE], {
+      detached: false,
+      // The host's stderr is the only place an Oven records why a capability it
+      // was handed could not run here and went back to the app, so it is kept in
+      // a bounded file instead of being discarded with the rest of its output.
+      stdio: ['ignore', 'ignore', 'pipe']
+    })
+    child.stderr?.pipe(openOvenUtilityHostLog(home))
+    utilityHostChild = child
+    const release = (): void => {
+      if (utilityHostChild === child) utilityHostChild = undefined
+    }
+    child.once('exit', release)
+    child.once('error', release)
+  }
+  const started = await waitForOvenUtilityHostState(home)
+  if (!started) throw new Error('The Oven utility host did not start.')
+  return { port: started.port }
+}
+
+/**
+ * Whether a published host is one to keep using.
+ *
+ * A live pid is not enough: a crashed host's pid gets reused, and a host that
+ * outlived a killed daemon still runs the bundle an update meant to replace.
+ * This daemon's own child is trusted, so a busy host is never started twice.
+ */
+async function utilityHostUsable(host: OvenUtilityHostState): Promise<boolean> {
+  if (!processAlive(host.pid)) return false
+  if (host.pid === utilityHostChild?.pid) return true
+  if (host.revision !== revision) return false
+  return await getOvenUtilityJson(
+    `${ovenUtilityUrl(host.port)}/host/status`,
+    host.hostToken,
+    UTILITY_HOST_CHECK_MS
+  ).then(
+    () => true,
+    () => false
+  )
+}
+
+/** Stop the utility host this daemon started, if it is still its own. */
+function stopUtilityHost(): void {
+  const child = utilityHostChild
+  utilityHostChild = undefined
+  child?.kill('SIGTERM')
+}
+
 async function dispatch(raw: unknown): Promise<unknown> {
   const request = record(raw)
   if (request.protocolVersion !== PROTOCOL) throw new Error('Oven protocol version mismatch.')
   if (request.method === 'probe') return probe(request.refresh === true)
   if (request.method === 'runs') return [...jobs.values()].map((job) => job.run)
   if (request.method === 'workspace') return ovenWorkspace(request.input)
+  // Additive: a bundle that predates it answers "unknown method", which is how
+  // the app already treats a stale Oven service.
+  if (request.method === 'utility-host') return utilityHost()
+  // The credential store's administration travels the same way: the app cannot
+  // see this machine's loopback, so the daemon ensures the host and asks it.
+  const adminMethod = request.method
+  if (
+    adminMethod === 'utility-secrets' ||
+    adminMethod === 'utility-secrets-enabled' ||
+    adminMethod === 'utility-secret-forget'
+  )
+    return answerOvenUtilityAdminRequest(adminMethod, request.input, {
+      home: homedir(),
+      ensureHost: utilityHost
+    })
   if (request.method === 'shutdown') {
     if ([...jobs.values()].some((job) => job.child))
       throw new Error('Finish or stop active runs before updating the Oven service.')
@@ -1173,6 +1374,7 @@ async function daemon(): Promise<void> {
   )
   server.maxConnections = 8
   shutDownServer = () => {
+    stopUtilityHost()
     server.close(() => {
       void unlink(socketPath)
         .catch(() => undefined)
@@ -1184,6 +1386,8 @@ async function daemon(): Promise<void> {
   await once(server, 'listening')
   // A named pipe on Windows carries no file mode to restrict.
   if (process.platform !== 'win32') await chmod(socketPath, 0o600)
+  // The host is this daemon's child, so it must never outlive it.
+  process.once('exit', stopUtilityHost)
 }
 
 function request(data: string): Promise<string> {
@@ -1270,7 +1474,51 @@ async function attach(): Promise<void> {
   }
 }
 
+/**
+ * Run this Oven's utility host until the daemon stops it.
+ *
+ * The listening server is the long-lived handle: `startOvenUtilityHost`
+ * resolves once the host is published, and the event loop then keeps it alive.
+ * A stop signal withdraws the state file before the process goes, so the next
+ * `utility-host` request never reads a port nothing is listening on.
+ *
+ * The host runs the utilities a turn carries on this machine rather than
+ * forwarding them to an app that lives on another one, and closes the MCP
+ * servers it started whenever a turn ends.
+ */
+async function utilityHostMode(): Promise<void> {
+  // The host's stdout carries no protocol, only the lines an operator reads, and
+  // its parent keeps exactly one channel: stderr, into the bounded host log. So
+  // every level goes there rather than half of it being written to a stdout
+  // nobody holds.
+  Logger.useStandardError()
+  const home = homedir()
+  // One store for both halves: the routes write through it and the local
+  // executor reads from it, so a secret kept now is the one the next turn runs
+  // with, and a forgotten one is gone from the next turn.
+  const secrets = new OvenUtilitySecrets({ home })
+  const host = await startOvenUtilityHost({
+    home,
+    revision,
+    secrets,
+    local: createOvenUtilityLocalHost({ credentials: secrets })
+  })
+  const stop = (): void => {
+    void host.close().finally(() => process.exit(0))
+  }
+  process.once('SIGTERM', stop)
+  process.once('SIGINT', stop)
+}
+
+/** Run one client's relay until its pipe closes or the client retires it. */
+async function utilityRelayMode(): Promise<void> {
+  const relay = await runOvenUtilityRelay({ home: homedir() })
+  if (!relay.ok) process.exitCode = 1
+}
+
 async function main(): Promise<void> {
+  if (process.argv[2] === OVEN_UTILITY_HOST_MODE) return utilityHostMode()
+  if (process.argv[2] === OVEN_UTILITY_RELAY_MODE) return utilityRelayMode()
   if (process.argv[2] === 'daemon') return daemon()
   if (process.argv[2] === 'attach') return attach()
   if (process.argv[2] === 'ensure') {

@@ -11,9 +11,12 @@
  * source of truth. Anything that is not that JSON-array shape is treated as
  * plain text and split on newlines.
  *
- * The app caps how much of a provider log it keeps, so a payload can arrive
- * with its JSON cut mid-entry. Those whole leading entries are salvaged and the
- * view ends with a notice, because the alternative is dumping raw JSON text.
+ * A long log is never truncated: main keeps the full payload and serves it in
+ * pages, each of which is a complete JSON array of whole entries, so this
+ * parser sees one page at a time and the view simply appends them. A page that
+ * is still cut mid-entry (a provider that capped its own payload) salvages the
+ * entries that closed and ends with a notice, because the alternative is dumping
+ * raw JSON text.
  */
 
 export interface DeploymentLogLine {

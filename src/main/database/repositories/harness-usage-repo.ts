@@ -238,69 +238,10 @@ export interface UsageCostCoverage {
   totalEvents: number
 }
 
-export class HarnessUsageRepo {
-  constructor(private db: Database) {}
-
-  /** Persist one immutable usage attempt. Replaying its stable identity is a no-op. */
-  recordEvent(event: UsageEvent): void {
-    try {
-      const reconciled = reconcileRecordedCost(event)
-      this.insertEvent(reconciled)
-      this.reconcileContextCost(reconciled)
-    } catch (error) {
-      Logger.dev('Failed to record usage event; dropping telemetry', {
-        feature: event.feature,
-        parentTurnId: event.parentTurnId,
-        error
-      })
-    }
-  }
-
-  /**
-   * Replace one turn's ledger row in place.
-   *
-   * A user turn can finalize more than once (a resumed or continued turn, or a
-   * driver that reports idle per response). Each finalization folds the turn's
-   * responses into one aggregate row, so that row must be rewritten from the
-   * newest aggregate instead of appended: appending would count the same
-   * responses again. `(parent_turn_id, feature)` is what makes a turn's row
-   * unique, and only turn-scoped features use this path.
-   */
-  recordReplacingEvent(event: UsageEvent): void {
-    try {
-      const reconciled = reconcileRecordedCost(event)
-      this.db.transaction(() => {
-        this.db.run(
-          'DELETE FROM usage_events WHERE parent_turn_id = ? AND feature = ?',
-          event.parentTurnId,
-          event.feature
-        )
-        this.insertEvent(reconciled)
-      })
-      this.reconcileContextCost(reconciled)
-    } catch (error) {
-      Logger.dev('Failed to replace usage event; dropping telemetry', {
-        feature: event.feature,
-        parentTurnId: event.parentTurnId,
-        error
-      })
-    }
-  }
-
-  private reconcileContextCost(event: UsageEvent): void {
-    if (!['main', 'assignment', 'audit'].includes(event.feature)) return
-    void this.db
-      .executeViaWorker(RECONCILE_THREAD_CONTEXT_USAGE_SQL, [event.threadId])
-      .then((result) => {
-        if (!result.ok) Logger.error('Thread usage reconciliation failed:', result.error)
-      })
-      .catch((error: unknown) => Logger.error('Thread usage reconciliation failed:', error))
-  }
-
-  /** Insert one event row; the SQL body shared by the append and replace paths. */
-  private insertEvent(event: UsageEvent): void {
-    this.db.run(
-      `INSERT OR IGNORE INTO usage_events(
+/** One event row insert; the statement shared by the append and replace paths. */
+function insertEventStatement(event: UsageEvent): { sql: string; params: unknown[] } {
+  return {
+    sql: `INSERT OR IGNORE INTO usage_events(
           id, thread_id, parent_turn_id, project_id, project_name,
           feature_call_id, attempt, feature,
           harness_id, account_id, provider_id, model_id, thinking_level, utility_id, raw_provider_usage_json,
@@ -319,6 +260,7 @@ export class HarnessUsageRepo {
           ?,?,?,?,
           ?,?,?,?
         )`,
+    params: [
       event.id,
       event.threadId,
       event.parentTurnId,
@@ -352,10 +294,98 @@ export class HarnessUsageRepo {
       event.retryCause,
       Math.max(0, Math.floor(event.durationMs ?? 0)),
       event.createdAt
+    ]
+  }
+}
+
+export class HarnessUsageRepo {
+  /** Usage writes still on their way to the worker. */
+  private readonly pendingWrites = new Set<Promise<void>>()
+
+  constructor(private db: Database) {}
+
+  /** Resolve once every usage write issued so far has landed (or failed). */
+  async flushPendingWrites(): Promise<void> {
+    await Promise.all([...this.pendingWrites])
+  }
+
+  /**
+   * Persist one immutable usage attempt. Replaying its stable identity is a no-op.
+   *
+   * The insert runs on the database worker, never on Electron main: it lands on
+   * every model response, and on a large file a synchronous insert held the
+   * main thread for up to 130 ms per call mid-turn. Telemetry is fire-and-forget,
+   * so nothing waits on the write, and the worker's FIFO queue keeps a later
+   * read of the same thread ordered behind it.
+   */
+  recordEvent(event: UsageEvent): void {
+    const reconciled = reconcileRecordedCost(event)
+    const insert = insertEventStatement(reconciled)
+    this.settle(
+      this.db.executeViaWorker(insert.sql, insert.params),
+      reconciled,
+      'Failed to record usage event; dropping telemetry'
     )
   }
 
-  /** Cost totals with explicit coverage; unavailable events never enter USD sums. */
+  /**
+   * Replace one turn's ledger row in place.
+   *
+   * A user turn can finalize more than once (a resumed or continued turn, or a
+   * driver that reports idle per response). Each finalization folds the turn's
+   * responses into one aggregate row, so that row must be rewritten from the
+   * newest aggregate instead of appended: appending would count the same
+   * responses again. `(parent_turn_id, feature)` is what makes a turn's row
+   * unique, and only turn-scoped features use this path.
+   */
+  recordReplacingEvent(event: UsageEvent): void {
+    const reconciled = reconcileRecordedCost(event)
+    this.settle(
+      this.db.transactionViaWorker([
+        {
+          sql: 'DELETE FROM usage_events WHERE parent_turn_id = ? AND feature = ?',
+          params: [event.parentTurnId, event.feature]
+        },
+        insertEventStatement(reconciled)
+      ]),
+      reconciled,
+      'Failed to replace usage event; dropping telemetry'
+    )
+  }
+
+  /** Reconcile the thread's context cost once the usage write has landed. */
+  private settle(
+    write: Promise<{ ok: boolean; error?: string }>,
+    event: UsageEvent,
+    failure: string
+  ): void {
+    const pending: Promise<void> = write
+      .then((result) => {
+        if (result.ok) this.reconcileContextCost(event)
+        else
+          Logger.dev(failure, {
+            feature: event.feature,
+            parentTurnId: event.parentTurnId,
+            error: result.error
+          })
+      })
+      .catch((error: unknown) =>
+        Logger.dev(failure, { feature: event.feature, parentTurnId: event.parentTurnId, error })
+      )
+    this.pendingWrites.add(pending)
+    void pending.finally(() => this.pendingWrites.delete(pending))
+  }
+
+  private reconcileContextCost(event: UsageEvent): void {
+    if (!['main', 'assignment', 'audit'].includes(event.feature)) return
+    void this.db
+      .executeViaWorker(RECONCILE_THREAD_CONTEXT_USAGE_SQL, [event.threadId])
+      .then((result) => {
+        if (!result.ok) Logger.error('Thread usage reconciliation failed:', result.error)
+      })
+      .catch((error: unknown) => Logger.error('Thread usage reconciliation failed:', error))
+  }
+
   /** Cost totals with explicit coverage; unavailable events never enter USD sums. */
   costCoverage(threadId?: string): UsageCostCoverage {
     const row = this.db.get<{
@@ -961,7 +991,13 @@ export class HarnessUsageRepo {
    * set; any caller-owned LIMIT remains valid inside the worker's outer bound.
    */
   private async aggregate<T>(sql: string, params: unknown[]): Promise<T[]> {
-    const result = await this.db.queryViaWorker(sql, params, ANALYTICS_MAX_ROWS)
+    // A usage rollup scans every matching usage event: 2,152 ms in the durable
+    // log, queued ahead of a 7,928 ms single-row thread read. Nobody waits on it
+    // with a pointer in hand, and it cannot be deferred either, so it belongs on
+    // the async lane's own connection.
+    const result = await this.db.queryViaWorker(sql, params, ANALYTICS_MAX_ROWS, {
+      lane: 'async'
+    })
     return result.rows as T[]
   }
 

@@ -49,7 +49,9 @@
     TaskManagerProcess,
     TaskManagerService,
     TaskManagerServiceKind,
-    TaskManagerSnapshot
+    TaskManagerSnapshot,
+    TaskManagerSurface,
+    TaskManagerSurfaceKind
   } from '$shared/types'
   import { APP_NAME } from '$shared/brand'
   import { posixBasename } from '$shared/paths'
@@ -86,6 +88,8 @@
 
   let processes = $state<TaskManagerProcess[]>([])
   let services = $state<TaskManagerService[]>([])
+  /** Renderer surfaces: the windows, tabs and stages the renderers belong to. */
+  let surfaces = $state<TaskManagerSurface[]>([])
   let power = $state<TaskManagerSnapshot['power']>({ source: 'ac', thermalState: 'unknown' })
   let sampledAt = $state(0)
   /** True only during the initial open-time snapshot or an explicit refresh. */
@@ -472,6 +476,20 @@
     worker: 'Worker'
   }
 
+  /** How many surface rows are drawn. The section answers "which renderer is
+   *  hot", and the hot ones are already sorted to the top, so a long tail adds
+   *  nothing but height to a modal that must stay readable. */
+  const SURFACE_ROW_LIMIT = 8
+
+  /** Electron's WebContents types named as the surface a user recognises. */
+  const SURFACE_KIND_LABELS: Record<TaskManagerSurfaceKind, string> = {
+    window: 'Window',
+    tab: 'Tab',
+    webview: 'Webview',
+    offscreen: 'Offscreen',
+    other: 'Other'
+  }
+
   function toggleSelected(process: TaskManagerProcess): void {
     if (selected.has(process.pid)) selected.delete(process.pid)
     else selected.add(process.pid)
@@ -488,6 +506,9 @@
   const processTotals = $derived(aggregateResources(processes, services))
   const totalRamBytes = $derived(processTotals.memoryBytes)
   const totalCpuPercent = $derived(processTotals.cpuPercent)
+  /** Surfaces arrive sorted by CPU, so the visible slice is already the hot end. */
+  const visibleSurfaces = $derived(surfaces.slice(0, SURFACE_ROW_LIMIT))
+  const hiddenSurfaceCount = $derived(Math.max(0, surfaces.length - SURFACE_ROW_LIMIT))
 
   async function load(): Promise<void> {
     if (checking) return
@@ -497,6 +518,9 @@
       const snapshot = await invoke('taskManager:list')
       processes = snapshot.processes
       services = snapshot.services
+      // An older main process sends no surfaces at all, which must show as
+      // "none" rather than crash the modal on a missing field.
+      surfaces = snapshot.surfaces ?? []
       power = snapshot.power
       sampledAt = snapshot.sampledAt
       pruneSelection()
@@ -516,6 +540,7 @@
       const snapshot = await invoke('taskManager:list')
       processes = snapshot.processes
       services = snapshot.services
+      surfaces = snapshot.surfaces ?? []
       power = snapshot.power
       sampledAt = snapshot.sampledAt
       pruneSelection()
@@ -642,6 +667,21 @@
   function formatCpu(percent: number | null): string {
     if (percent === null) return 'Unavailable'
     return `${percent.toFixed(percent < 10 ? 1 : 0)}%`
+  }
+
+  /** One decimal on a surface's CPU, always: the point of the readout is
+   *  comparing renderers against each other, which a rounded integer hides. */
+  function formatSurfaceCpu(percent: number | null): string {
+    return percent === null ? 'n/a' : `${percent.toFixed(1)}%`
+  }
+
+  function formatSurfaceMemory(bytes: number | null): string {
+    return bytes === null ? 'n/a' : `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  }
+
+  /** A surface with no title is named by its address, which is all it has. */
+  function surfaceLabel(surface: TaskManagerSurface): string {
+    return surface.title.trim() || surface.url.trim() || 'Unnamed surface'
   }
 
   function setFilterProject(projectId: string | null): void {
@@ -1328,6 +1368,58 @@
             </ul>
           </TaskManagerNode>
         {/each}
+      {/if}
+
+      {#if surfaces.length > 0}
+        <!-- Renderer surfaces are their own section, not another managed
+        runtime: a window, a browser tab or a stage owns a renderer, and this is
+        the only place the task manager can say which one is burning the CPU.
+        It renders nothing at all when there is no surface to show, so an older
+        snapshot leaves no empty shell behind. -->
+        <section class="mt-2 border-t border-border">
+          <div class="flex items-center justify-between gap-3 px-5 py-1.5">
+            <p class="text-[0.625rem] font-semibold tracking-wide text-muted uppercase">Surfaces</p>
+            <p class="text-[0.625rem] text-dimmed tabular-nums">
+              {surfaces.length} live
+            </p>
+          </div>
+          <ul class="divide-y divide-border">
+            {#each visibleSurfaces as surface (surface.pid)}
+              <li class="flex items-center gap-3 px-5 py-2">
+                <span
+                  class="shrink-0 bg-raised px-1.5 py-0.5 text-[0.625rem] tracking-wide text-muted uppercase"
+                >
+                  {SURFACE_KIND_LABELS[surface.kind]}
+                </span>
+                <p
+                  class="min-w-0 flex-1 truncate text-xs text-foreground"
+                  title={surfaceLabel(surface)}
+                >
+                  {surfaceLabel(surface)}
+                </p>
+                <span
+                  class="inline-flex shrink-0 items-center gap-1 text-[0.625rem] text-muted tabular-nums"
+                  title="CPU used by this renderer surface"
+                >
+                  <CioCpu size={11} />
+                  {formatSurfaceCpu(surface.cpuPercent)}
+                </span>
+                <span
+                  class="inline-flex w-20 shrink-0 items-center justify-end gap-1 text-[0.625rem] text-muted tabular-nums"
+                  title="Memory used by this renderer surface"
+                >
+                  <CioDisk size={11} />
+                  {formatSurfaceMemory(surface.memoryBytes)}
+                </span>
+              </li>
+            {/each}
+          </ul>
+          {#if hiddenSurfaceCount > 0}
+            <p class="px-5 py-1.5 text-[0.625rem] text-dimmed tabular-nums">
+              +{hiddenSurfaceCount} more surface{hiddenSurfaceCount === 1 ? '' : 's'}
+            </p>
+          {/if}
+        </section>
       {/if}
     </div>
   </div>

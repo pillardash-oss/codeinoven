@@ -292,17 +292,17 @@ export function lastAssistantText(messages: readonly AgentMessage[]): string | n
  * A delegation lives in memory while the run is in flight, and an app restart
  * takes that memory with it. The thread still carries its dispatch origin, so a
  * run that settles after a restart reports back instead of finishing silently.
- * Only a thread Don started qualifies: its initiator is Don's own conversation
- * and it lives in the assistant space.
+ * The origin is what qualifies it: the run lives in the assistant space and was
+ * taken by an assistant, which only ever happens from one of Don's conversations,
+ * so a report lands in the conversation that started the work rather than in a
+ * reserved thread the user may not even have opened. (A project dispatch carries
+ * no assistant author and is reported by the dispatch ledger instead.)
  */
-export function delegationFromThread(
-  thread: Thread,
-  donThreadId: string
-): PendingDonDelegation | null {
+export function delegationFromThread(thread: Thread): PendingDonDelegation | null {
   const origin = thread.dispatchOrigin
   if (!origin) return null
-  if (origin.initiatorThreadId !== donThreadId) return null
   if (origin.initiatorProjectId !== ASSISTANT_SPACE_ID) return null
+  if (!origin.author) return null
   const assistantId = thread.assistantId ?? origin.assistantId
   const assistantName = origin.assistantName?.trim()
   if (!assistantId || !assistantName) return null
@@ -310,7 +310,7 @@ export function delegationFromThread(
     runThreadId: thread.id,
     donProjectId: origin.initiatorProjectId,
     donThreadId: origin.initiatorThreadId,
-    author: origin.author ?? { assistantId, name: assistantName },
+    author: origin.author,
     assistantName,
     request: thread.title,
     createdAt: thread.createdAt

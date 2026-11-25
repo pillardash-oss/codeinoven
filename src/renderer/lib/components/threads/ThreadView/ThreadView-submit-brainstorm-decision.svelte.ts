@@ -308,7 +308,15 @@ export class ThreadViewSubmitBrainstormDecision extends BoardUnit<ThreadView> {
       // the sidebar appears the moment the switch is turned on, and clicking
       // "Run audit" there is what commits the choice durably.
       if (this.root.currentWorkingTraceAttribution.independentAuditDisplayEnabled) return 'audit'
-      if (this.root.unmirroredTraceStartTime.achievementTriggered && this.spec) {
+      // A goal-based Achievement has no specification: the captured goal is what
+      // the auditor judges, and it is what the coordinator board reports. The
+      // board must dock for that run too, or the thread coordinating an
+      // Achievement showed no coordinator at all.
+      const capturedGoal = (this.root.handleAgentEvent.thread.achievementGoal ?? '').trim()
+      if (
+        this.root.unmirroredTraceStartTime.achievementTriggered &&
+        (this.spec || capturedGoal.length > 0)
+      ) {
         return 'achievement'
       }
       if (this.plainEngineeringAuditAvailable) return 'audit'

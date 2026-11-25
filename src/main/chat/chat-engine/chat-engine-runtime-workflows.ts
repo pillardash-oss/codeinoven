@@ -30,6 +30,16 @@ export class ChatEngineRuntimeWorkflows {
     if (thread?.settings?.loopMode !== true) return false
     const assignment = this.host.state.assignmentEngine.getActive(thread.projectId, thread.id)
     if (assignment) return assignment.status !== 'draft'
+    // Achievement is the stage its own audit and rework loop drives, so the loop
+    // owns the decisions taken inside it. The planning veto below belongs to a
+    // stage the user drives, where an auto-answered permission or question would
+    // decide on the user's behalf. Kept here, the veto parked every rework turn
+    // that touched a file on a card the user had to come back and press.
+    const activeStage = this.host.state.engineeringLifecycleEngine.get(
+      thread.projectId,
+      thread.id
+    )?.activeStage
+    if (activeStage === 'achievement') return true
     if (this.host.units['turns'].engineeringLifecycleActive(thread.projectId, thread.id))
       return false
     return (

@@ -16,7 +16,7 @@
    * this screen are a returning user; creating an account adds a name and the
    * twelve character rule the service enforces.
    */
-  type Mode = 'sign-in' | 'create'
+  type Mode = 'sign-in' | 'create' | 'reset'
 
   const MIN_PASSWORD = 12
 
@@ -27,6 +27,9 @@
   /** The password is written hidden, and the eye beside it reveals it. */
   let revealed = $state(false)
   let localError = $state<string | null>(null)
+  /** Set once a reset link was requested, so the form says where to look. */
+  let resetSent = $state(false)
+  let resetting = $state(false)
   /** The first field takes the caret as soon as it exists. */
   function focusOnMount(node: HTMLInputElement): void {
     node.focus()
@@ -46,19 +49,40 @@
   let message = $derived(localError ?? session.error)
   let actionLabel = $derived(actionText(mode, session.busy))
 
+  let actionBusy = $derived(session.busy || resetting)
+
   function actionText(current: Mode, busy: boolean): string {
+    if (current === 'reset') return resetting ? 'Sending link' : 'Send reset link'
     if (busy) return current === 'create' ? 'Creating account' : 'Signing in'
     return current === 'create' ? 'Create account' : 'Sign in'
   }
 
-  function toggleMode(): void {
-    mode = mode === 'sign-in' ? 'create' : 'sign-in'
+  function setMode(next: Mode): void {
+    mode = next
+    resetSent = false
     localError = null
     session.clearError()
   }
 
+  function toggleMode(): void {
+    setMode(mode === 'sign-in' ? 'create' : 'sign-in')
+  }
+
+  /** The service mails a link whether or not the address exists, so the answer never says which. */
+  async function requestReset(address: string): Promise<void> {
+    resetting = true
+    try {
+      await api.requestPasswordReset({ email: address })
+      resetSent = true
+    } catch (cause) {
+      localError = cause instanceof ApiError ? cause.message : 'Cannot reach CodeInOven right now.'
+    } finally {
+      resetting = false
+    }
+  }
+
   async function submitNow(): Promise<void> {
-    if (session.busy) return
+    if (actionBusy) return
     localError = null
     session.clearError()
 
@@ -66,6 +90,10 @@
     const person = name.trim()
     if (!address.includes('@')) {
       localError = 'Enter the email address for this account.'
+      return
+    }
+    if (mode === 'reset') {
+      await requestReset(address)
       return
     }
     if (password.length === 0) {
@@ -243,36 +271,48 @@
         />
       </label>
 
-      <div class="field">
-        <label for="sign-in-password">Password</label>
-        <span class="secret">
-          <input
-            id="sign-in-password"
-            bind:value={password}
-            onkeydown={onKeydown}
-            type={revealed ? 'text' : 'password'}
-            autocomplete={mode === 'create' ? 'new-password' : 'current-password'}
-            minlength={mode === 'create' ? MIN_PASSWORD : undefined}
-          />
-          <!-- One eye in two inks: dim while the password stays dots, lit once
+      {#if mode !== 'reset'}
+        <div class="field">
+          <label for="sign-in-password">Password</label>
+          <span class="secret">
+            <input
+              id="sign-in-password"
+              bind:value={password}
+              onkeydown={onKeydown}
+              type={revealed ? 'text' : 'password'}
+              autocomplete={mode === 'create' ? 'new-password' : 'current-password'}
+              minlength={mode === 'create' ? MIN_PASSWORD : undefined}
+            />
+            <!-- One eye in two inks: dim while the password stays dots, lit once
                the text is readable. The plate is the size of a thumb, because
                this is the only control inside a field on this screen. -->
-          <button
-            class="reveal"
-            type="button"
-            data-revealed={revealed}
-            aria-pressed={revealed}
-            aria-label={revealed ? 'Hide password' : 'Show password'}
-            title={revealed ? 'Hide password' : 'Show password'}
-            onclick={() => (revealed = !revealed)}
-          >
-            <CioEye size={17} />
-          </button>
-        </span>
-        {#if mode === 'create'}
-          <span class="hint">At least {MIN_PASSWORD} characters.</span>
-        {/if}
-      </div>
+            <button
+              class="reveal"
+              type="button"
+              data-revealed={revealed}
+              aria-pressed={revealed}
+              aria-label={revealed ? 'Hide password' : 'Show password'}
+              title={revealed ? 'Hide password' : 'Show password'}
+              onclick={() => (revealed = !revealed)}
+            >
+              <CioEye size={17} />
+            </button>
+          </span>
+          {#if mode === 'create'}
+            <span class="hint">At least {MIN_PASSWORD} characters.</span>
+          {:else}
+            <button class="forgot" type="button" onclick={() => setMode('reset')}>
+              Forgot your password?
+            </button>
+          {/if}
+        </div>
+      {:else if resetSent}
+        <p class="hint">
+          If that address has an account, a reset link is on its way. Open it on any device.
+        </p>
+      {:else}
+        <p class="hint">We will mail a link to choose a new password.</p>
+      {/if}
 
       {#if message}
         <p class="note" role="status">{message}</p>
@@ -284,7 +324,7 @@
         {mode === 'sign-in' ? 'Create an account' : 'Sign in instead'}
       </button>
       <div class="right">
-        <button class="btn primary" type="submit" disabled={session.busy}>{actionLabel}</button>
+        <button class="btn primary" type="submit" disabled={actionBusy}>{actionLabel}</button>
       </div>
     </div>
   </form>
@@ -445,6 +485,17 @@
   .card.auth .reveal:hover,
   .card.auth .reveal[data-revealed='true'] {
     color: var(--color-foreground);
+  }
+
+  .card.auth .forgot {
+    align-self: flex-end;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font: inherit;
+    font-size: 0.75rem;
+    color: var(--color-muted);
+    cursor: pointer;
   }
 
   .card.auth .note {

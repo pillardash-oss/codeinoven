@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { basename, isAbsolute } from 'node:path'
 import type { PermissionLevel } from '../../../lib/types'
+import { isUnrestrictedLevel } from '../../../lib/permission-level'
 import { fitWithin, MAX_SCREENSHOT_DIMENSION } from '../../../lib/image-payload'
 import { agentFileInputScript } from './browser-agent-page'
 import { Logger } from '../../system/logger'
@@ -110,7 +111,7 @@ export class BrowserServiceAgentFiles {
     const multiple = inputState['multiple'] === true
     const accept = typeof inputState['accept'] === 'string' ? inputState['accept'] : ''
     const requestedPaths = this.uploadPathInputs(input)
-    const suppliedPaths = permissionLevel === 'full_access' ? requestedPaths : []
+    const suppliedPaths = isUnrestrictedLevel(permissionLevel) ? requestedPaths : []
     let paths: string[]
     if (suppliedPaths.length > 0) {
       paths = await Promise.all(suppliedPaths.map((path) => this.resolveUploadPath(path)))

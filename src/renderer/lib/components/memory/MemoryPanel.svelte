@@ -34,6 +34,7 @@
     memoryEntriesHaveChanges,
     proposalVisibleOnSurface,
     MEMORY_SCOPE_OPTIONS,
+    surfaceForMemoryProject,
     type MemoryLocation,
     type MemoryPanelSurface,
     type MemorySurfaceContext
@@ -129,15 +130,7 @@
    *  get their own surface: the same scopes a project thread has, pinned to the
    *  assistant space instead of a pickable project. */
   let surface = $derived<MemoryPanelSurface>(
-    variant === 'settings'
-      ? 'settings'
-      : projectId === INBOX_PROJECT_ID
-        ? 'sidebar-chats'
-        : projectId === GLOBAL_BROWSER_PROJECT_ID
-          ? 'sidebar-browser'
-          : projectId === ASSISTANT_SPACE_ID
-            ? 'sidebar-assistant'
-            : 'sidebar-projects'
+    variant === 'settings' ? 'settings' : surfaceForMemoryProject(projectId)
   )
 
   let scopeOptions = $derived(MEMORY_SCOPE_OPTIONS[surface])

@@ -34,6 +34,7 @@
 
 import {
   ASK_SECRET_TOOL_NAME,
+  SESSION_ENVIRONMENT_ROUTE,
   GATEWAY_TOOLS,
   CORE_GATEWAY_TOOL_NAMES,
   gatewayToolForModel,
@@ -348,7 +349,44 @@ function applySecretEnvironment(result) {
   return safe
 }
 
+/** Names the last session environment refresh applied, so a removed one is unset. */
+const appliedSessionNames = new Set()
+
+/**
+ * Apply the project's ENV files and this thread's secrets to the pi process
+ * before the agent runs, so every shell it starts sees them. The process
+ * outlives a turn, so a name that left the project env is unset again. A
+ * gateway that cannot answer leaves the environment as it was.
+ */
+async function refreshSessionEnvironment() {
+  let result
+  try {
+    result = await callGateway(${JSON.stringify(SESSION_ENVIRONMENT_ROUTE)}, {})
+  } catch {
+    return
+  }
+  const environment = result && typeof result === 'object' ? result.environment : null
+  if (!environment || typeof environment !== 'object') return
+  for (const name of appliedSessionNames) {
+    if (!(name in environment)) delete process.env[name]
+  }
+  appliedSessionNames.clear()
+  for (const [name, value] of Object.entries(environment)) {
+    if (typeof value === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      process.env[name] = value
+      appliedSessionNames.add(name)
+    }
+  }
+}
+
 export default function codeInOvenUtilityGatewayExtension(pi) {
+  // A host without run events (a tool-only loader) still registers the tools.
+  if (typeof pi.on === 'function') {
+    pi.on('agent_start', async () => {
+      await refreshSessionEnvironment()
+    })
+  }
+
   registerCioGatewayTool(pi, {
     name: ${JSON.stringify(searchTool.name)},
     label: 'Search CodeInOven utilities',
@@ -621,13 +659,14 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
     promptSnippet: 'Search conversation threads for context, or look up an app, thread, assistant or log problem yourself with read-only CodeInOven diagnostics',
     promptGuidelines: [
       'When the user reports a problem with the app, a thread, an assistant, or a log line, look it up with ${JSON.stringify(diagnosticsTool.name)} instead of asking them to re-send their request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs.',
-      'When the task needs context that lives in another conversation, search for it with action search_threads: it ranks threads across every project by keyword and by meaning, includes matching passages for content hits, and action read_messages then reads that thread. Search before asking the user to explain something their own history already holds.',
+      'When the task needs context that lives in another conversation, search for it with action search_threads: it ranks threads across every project by keyword and by meaning, includes matching passages for content hits, and action read_messages then reads that thread. Narrow it with project_id, scope_id, assistant_id or family when the work belongs to one project, scope, or assistant; action list_groups returns those ids when you do not know them. Search before asking the user to explain something their own history already holds.',
       'Diagnostics output is redacted and bounded and the capability never writes, deletes, or reconfigures anything. Report the evidence you actually read, and say plainly when it is insufficient instead of guessing.'
     ],
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal('lookup_thread'),
         Type.Literal('search_threads'),
+        Type.Literal('list_groups'),
         Type.Literal('read_messages'),
         Type.Literal('read_log'),
         Type.Literal('list_schema'),
@@ -635,6 +674,16 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
       ]),
       query: Type.Optional(Type.String()),
       thread_id: Type.Optional(Type.String()),
+      project_id: Type.Optional(Type.String()),
+      scope_id: Type.Optional(Type.String()),
+      assistant_id: Type.Optional(Type.String()),
+      family: Type.Optional(
+        Type.Union([
+          Type.Literal('projects'),
+          Type.Literal('chats'),
+          Type.Literal('assistant')
+        ])
+      ),
       limit: Type.Optional(Type.Number()),
       level: Type.Optional(Type.String()),
       file: Type.Optional(Type.String()),
@@ -646,6 +695,10 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
       const body = { action: params.action }
       if (params.query !== undefined) body.query = params.query
       if (params.thread_id !== undefined) body.thread_id = params.thread_id
+      if (params.project_id !== undefined) body.project_id = params.project_id
+      if (params.scope_id !== undefined) body.scope_id = params.scope_id
+      if (params.assistant_id !== undefined) body.assistant_id = params.assistant_id
+      if (params.family !== undefined) body.family = params.family
       if (params.limit !== undefined) body.limit = params.limit
       if (params.level !== undefined) body.level = params.level
       if (params.file !== undefined) body.file = params.file

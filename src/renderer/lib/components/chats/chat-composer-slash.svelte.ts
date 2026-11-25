@@ -6,6 +6,9 @@ import type { ThinkingPreset } from '$shared/types'
 export interface ComposerSlashActionsOptions {
   getShowChatModes: () => boolean
   getFileSystemMode: () => boolean | undefined
+  /** True when this composer targets an external Oven, the only case where Oven
+   *  Mode is offered. */
+  getRemoteOven: () => boolean
   getModelSettingsVisible: () => boolean
   getSupportsThinking: () => boolean
   getAccountPickerVisible: () => boolean
@@ -160,7 +163,7 @@ export function createComposerSlashActions(options: ComposerSlashActionsOptions)
           ] satisfies ActionDefinition[])
         : []),
       ...(chatFileSystemEnabled && !hostPublishesPermissionLevels
-        ? permissionLevelActions(composerActionSource)
+        ? permissionLevelActions(composerActionSource, { oven: options.getRemoteOven() })
         : []),
       ...options
         .getActions()

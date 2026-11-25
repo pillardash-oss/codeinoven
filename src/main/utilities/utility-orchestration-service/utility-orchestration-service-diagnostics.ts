@@ -1,7 +1,31 @@
 import { CioDiagnosticsService } from '../cio-diagnostics-service'
-import { requiredDatabase, requiredString } from '../utility-orchestration/utility-input'
+import {
+  optionalString,
+  requiredDatabase,
+  requiredString
+} from '../utility-orchestration/utility-input'
+import type { ThreadSearchOptions } from '../../database/repositories/thread-repo'
 import type { TurnState } from '../utility-orchestration-service'
 import type { UtilityOrchestrationService } from '../utility-orchestration-service'
+
+/** The narrowing a `search_threads` call may carry, validated before use. */
+function searchScope(input: Record<string, unknown>): ThreadSearchOptions {
+  const options: ThreadSearchOptions = {}
+  const projectId = optionalString(input['project_id'], 128)
+  if (projectId) options.projectId = projectId
+  const scopeId = optionalString(input['scope_id'], 128)
+  if (scopeId) options.scopeBucketId = scopeId
+  const assistantId = optionalString(input['assistant_id'], 128)
+  if (assistantId) options.assistantId = assistantId
+  const family = optionalString(input['family'], 32)
+  if (family) {
+    if (family !== 'projects' && family !== 'chats' && family !== 'assistant') {
+      throw new TypeError('family must be projects, chats, or assistant')
+    }
+    options.family = family
+  }
+  return options
+}
 
 /** UtilityOrchestrationService diagnostics: one concern, moved verbatim from the composition root. */
 export class UtilityOrchestrationServiceDiagnostics {
@@ -22,7 +46,11 @@ export class UtilityOrchestrationServiceDiagnostics {
     }
     if (action === 'search_threads') {
       const query = requiredString(input['query'], 'query', 300)
-      return { threads: await diagnostics.searchThreads(query) }
+      return { threads: await diagnostics.searchThreads(query, searchScope(input)) }
+    }
+    if (action === 'list_groups') {
+      const projectId = optionalString(input['project_id'], 128)
+      return diagnostics.listGroups(projectId || undefined)
     }
     if (action === 'read_messages') {
       const threadId = requiredString(input['thread_id'], 'thread_id', 128)

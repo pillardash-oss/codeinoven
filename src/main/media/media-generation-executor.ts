@@ -1,8 +1,6 @@
-import { relative, sep } from 'node:path'
+import { isAbsolute, relative, sep } from 'node:path'
 import { EXPERT_FALLBACK_GUIDANCE } from '../../lib/experts'
-import { authoredWorkRoot } from '../design/authored-work-root'
-import { resolveServedFolder } from '../preview/served-folder'
-import { currentWorkRoot } from '../design/work-roots-state'
+import { findAuthoredWork, slashPath } from '../design/authored-work'
 import { saveDesignMedia } from '../design/design-media-service'
 import { requiredString } from '../utilities/utility-orchestration/utility-input'
 import { MAX_DESIGN_MEDIA_NAME_LENGTH } from '../../lib/design-media'
@@ -137,12 +135,13 @@ export function createMediaGenerationExecutor(
       )
     }
 
-    const scope = await authoredWorkRoot(options.database, context.projectId, context.threadId)
     const sessionKind = (await options.sessionKind(context.projectId, context.threadId)) ?? 'design'
-    const directory = resolveServedFolder(
-      scope.path,
-      input['directory'],
-      currentWorkRoot(sessionKind, context.projectId)
+    // Generated media is saved into the design or composition it belongs to,
+    // whichever checkout that folder really lives in.
+    const directory = await findAuthoredWork(
+      options.database,
+      { projectId: context.projectId, threadId: context.threadId, kind: sessionKind },
+      input['directory']
     )
 
     const result = await options.service.generate(kind, ref, assigned.model, {
@@ -160,7 +159,9 @@ export function createMediaGenerationExecutor(
       source: result.url,
       name: name ?? assigned.model.replace(/[^a-z0-9]+/giu, '-')
     })
-    const file = relative(scope.path, saved.path).split(sep).join('/')
+    const file = isAbsolute(directory.display)
+      ? slashPath(saved.path)
+      : relative(directory.root.path, saved.path).split(sep).join('/')
     const provider = mediaProviderLabel(result.providerId)
     return {
       file,

@@ -19,6 +19,7 @@ import {
   SCRCPY_VERSION,
   ScrcpyVideoParser,
   encodeKeycode,
+  encodeResetVideo,
   encodeScroll,
   encodeText,
   encodeTouch,
@@ -26,11 +27,17 @@ import {
 } from './scrcpy-protocol'
 
 /** Where the server jar lives on the device while a stream runs. */
-const REMOTE_SERVER = `/data/local/tmp/cio-scrcpy-server-${SCRCPY_VERSION}.jar`
+const REMOTE_SERVER_DIR = '/data/local/tmp'
 const ADB_STEP_TIMEOUT_MS = 15_000
-/** The server needs a moment to bind its socket after `app_process` starts. */
-const CONNECT_ATTEMPTS = 60
+/** The server needs a moment to bind its socket after `app_process` starts, and a
+ * cold device (first start after a boot, which loads classes and initialises the
+ * hardware encoder) takes seconds rather than milliseconds. */
 const CONNECT_RETRY_MS = 100
+/** How long to keep trying before calling the start a failure. A busy emulator takes
+ *  seven to eleven seconds to bind, and a server that died ends the wait at once. */
+const CONNECT_TIMEOUT_MS = 30_000
+/** How long a start may go without video before it is ended so it can be retried. */
+const LIVE_TIMEOUT_MS = 45_000
 const VIDEO_BIT_RATE = 8_000_000
 const MAX_FPS = 60
 /** The last of the server's own output, kept to say why a stream died. */
@@ -71,6 +78,8 @@ function delay(ms: number): Promise<void> {
  */
 export class AndroidScrcpyStream {
   private server: ChildProcess | null = null
+  /** This stream's own copy of the server jar on the device. */
+  private remoteServer: string | null = null
   private video: Socket | null = null
   private control: Socket | null = null
   private forwardPort: number | null = null
@@ -79,6 +88,7 @@ export class AndroidScrcpyStream {
   private size = { width: 0, height: 0 }
   private configPacket: Uint8Array | null = null
   private live = false
+  private liveTimer: ReturnType<typeof setTimeout> | null = null
   private touching = false
   private lastPoint = { x: 0, y: 0 }
   private readonly parser = new ScrcpyVideoParser()
@@ -88,12 +98,17 @@ export class AndroidScrcpyStream {
   /** Bring the stream up. Resolves once the sockets are open, rejects with the reason it could not. */
   async start(): Promise<void> {
     const { adb, serial, serverPath } = this.options
+    // A socket that is accepted and then says nothing would otherwise wait forever.
+    this.liveTimer = setTimeout(() => this.end('The device sent no video'), LIVE_TIMEOUT_MS)
     const scid = randomInt(1, 0x7fffffff).toString(16).padStart(8, '0')
-    await captureCommand(
-      adb,
-      ['-s', serial, 'push', serverPath, REMOTE_SERVER],
-      ADB_STEP_TIMEOUT_MS
-    ).promise
+    // One jar per stream. The server removes its own file when it exits, so a
+    // shared path lets a stream that is still shutting down delete the jar the next
+    // stream has just pushed: the device then cannot find its main class and the
+    // panel falls back to the polled screenshot.
+    const remoteServer = `${REMOTE_SERVER_DIR}/cio-scrcpy-${scid}.jar`
+    this.remoteServer = remoteServer
+    await captureCommand(adb, ['-s', serial, 'push', serverPath, remoteServer], ADB_STEP_TIMEOUT_MS)
+      .promise
     if (this.stopped) return
     const forwarded = await captureText(
       adb,
@@ -106,7 +121,7 @@ export class AndroidScrcpyStream {
     }
     this.forwardPort = port
     if (this.stopped) return
-    this.launchServer(scid)
+    this.launchServer(scid, remoteServer)
     const first = await this.openVideo(port)
     if (this.stopped) return
     this.control = await this.openControl(port)
@@ -122,12 +137,24 @@ export class AndroidScrcpyStream {
   stop(): void {
     if (this.stopped) return
     this.stopped = true
+    if (this.liveTimer) clearTimeout(this.liveTimer)
     this.video?.destroy()
     this.control?.destroy()
     this.video = null
     this.control = null
     this.server?.kill()
     this.server = null
+    const remote = this.remoteServer
+    this.remoteServer = null
+    if (remote) {
+      // The server unlinks its own jar on a clean exit; this covers a start that
+      // never got that far. A failure leaves one stale file, which is harmless.
+      void captureCommand(
+        this.options.adb,
+        ['-s', this.options.serial, 'shell', 'rm', '-f', remote],
+        ADB_STEP_TIMEOUT_MS
+      ).promise.catch(() => undefined)
+    }
     const port = this.forwardPort
     this.forwardPort = null
     if (port !== null) {
@@ -192,19 +219,23 @@ export class AndroidScrcpyStream {
     if (code !== undefined) this.press(code)
   }
 
+  refresh(): void {
+    this.control?.write(encodeResetVideo())
+  }
+
   private press(code: number): void {
     if (!this.control) return
     this.control.write(encodeKeycode(ANDROID_ACTION_DOWN, code))
     this.control.write(encodeKeycode(ANDROID_ACTION_UP, code))
   }
 
-  private launchServer(scid: string): void {
+  private launchServer(scid: string, remoteServer: string): void {
     const { adb, serial, maxSize } = this.options
     const args = [
       '-s',
       serial,
       'shell',
-      `CLASSPATH=${REMOTE_SERVER}`,
+      `CLASSPATH=${remoteServer}`,
       'app_process',
       '/',
       'com.genymobile.scrcpy.Server',
@@ -220,6 +251,8 @@ export class AndroidScrcpyStream {
       `video_bit_rate=${VIDEO_BIT_RATE}`,
       'send_device_meta=false',
       'clipboard_autosync=false',
+      // A rebuilt stream must not wake a device the person just locked.
+      'power_on=false',
       'cleanup=true'
     ]
     const child = spawn(adb, args, { stdio: ['ignore', 'pipe', 'pipe'] })
@@ -238,7 +271,8 @@ export class AndroidScrcpyStream {
 
   /** Connect the video socket; the first byte it yields proves the server accepted it. */
   private async openVideo(port: number): Promise<Uint8Array> {
-    for (let attempt = 0; attempt < CONNECT_ATTEMPTS && !this.stopped; attempt += 1) {
+    const deadline = Date.now() + CONNECT_TIMEOUT_MS
+    while (!this.stopped && Date.now() < deadline) {
       try {
         const { socket, first } = await this.connectOnce(port)
         this.video = socket
@@ -310,6 +344,7 @@ export class AndroidScrcpyStream {
         })
         if (!this.live) {
           this.live = true
+          if (this.liveTimer) clearTimeout(this.liveTimer)
           this.options.send({ type: 'state', phase: 'live' })
         }
         continue

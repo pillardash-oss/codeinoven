@@ -1,10 +1,11 @@
 import type { ComposerIdentity } from '../../chats/ComposerIdentity.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
-import { createAccountUsageCache } from '$lib/stores/account-usage.svelte'
+import { headlineQuotaWindow } from '$lib/format/usage'
+import { accountLimits, createAccountUsageCache } from '$lib/stores/account-usage.svelte'
 import { getProjectIcon } from '$lib/project-icons'
 import { normalizeFastInference } from '$shared/fast-inference'
 import { invoke } from '$lib/ipc.svelte'
-import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
+import { LOCAL_OVEN_ID } from '$shared/ovens'
 import { clearIndependentAuditIntent } from '$lib/stores/lifecycle-intent'
 import { normalizeChatSettings } from '$lib/stores/thread-settings.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -16,6 +17,7 @@ import {
 } from '$lib/stores/coordinator-dock.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { modelKey } from '$lib/model-keys'
+import { INDEPENDENT_AUDIT_STOPPED_MESSAGE } from '$shared/audit/audit-stop-request'
 import { ASSISTANT_SPACE_ID, GLOBAL_BROWSER_PROJECT_ID } from '$shared/types'
 import type {
   ComposerProject,
@@ -23,6 +25,7 @@ import type {
   ThreadSettings,
   ThreadContextUsage,
   AgentMessage,
+  AgentAccountUsageOverrides,
   AgentContextUsage,
   Project,
   AuditReport
@@ -143,7 +146,9 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       total: 0
     }
 
-    for (const message of this.root.loadOlderMessages.messages) {
+    // The coarse snapshot, not the per-flush array: the meter is a header
+    // value, and mid-stream updates at the snapshot cadence are indistinguishable.
+    for (const message of this.root.loadOlderMessages.scanMessages) {
       if (message.role !== 'assistant') continue
       // Usage belongs to the harness/provider that reported it. Do not carry
       // cost, context, tokens, or quota across a harness switch; records with
@@ -303,6 +308,35 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
    *  harness used on the thread. */
   accountUsageCache = createAccountUsageCache()
 
+  /** The account the composer is set to send on. */
+  selectedAccount = $derived.by((): AgentAccountUsageOverrides => {
+    const { harnessId, providerId, accountId, ovenId } = this.root.loadOlderMessages.settings
+    // The Oven this thread runs on answers only when this machine has no such
+    // harness installed; a local reading always wins over it, and a thread on
+    // this device asks no other machine at all.
+    return { harnessId, providerId, accountId, ovenId: ovenId ?? LOCAL_OVEN_ID }
+  })
+
+  selectedAccountLimits = $derived(accountLimits(this.selectedAccount))
+
+  /**
+   * Turn progress as a primitive, so a republished transcript that reports the same
+   * occupancy does not keep postponing the shoe's pending read.
+   */
+  usageActivity = $derived(this.contextUsage?.contextUsed)
+
+  /** The window the shoe states beside the context meter. */
+  shoeLimit = $derived(headlineQuotaWindow(this.selectedAccountLimits ?? []))
+
+  /**
+   * Update the shoe without committing the thread's usage snapshot: that write
+   * belongs to turns and hovers, not to opening a thread.
+   */
+  refreshShoeLimit(): void {
+    const { projectId, id: threadId } = this.root.handleAgentEvent.thread
+    void this.accountUsageCache.refresh({ ...this.selectedAccount, projectId, threadId })
+  }
+
   revealContextUsage(): void {
     if (this.contextUsage) this.commitContextUsage(this.contextUsage)
     void this.root.studioTemporaryChatContext.refreshEfficiencyKpis()
@@ -319,18 +353,16 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
    * empty rather than adopt a live session's system-prompt baseline.
    */
   private describesConversation(): boolean {
-    return this.root.loadOlderMessages.messages.some((message) => message.role === 'assistant')
+    return this.root.loadOlderMessages.scanMessages.some((message) => message.role === 'assistant')
   }
 
   async refreshAccountUsageOnDemand(): Promise<void> {
     // Drop a response for a harness selection the user already moved away
     // from   an out-of-order resolve must not clobber the current selection.
-    const refreshKey = `${this.root.loadOlderMessages.settings.harnessId}:${this.root.loadOlderMessages.settings.accountId ?? ''}:${this.root.loadOlderMessages.settings.providerId}`
+    const refreshKey = `${this.root.loadOlderMessages.settings.harnessId}:${this.root.loadOlderMessages.settings.accountId ?? ''}:${this.root.loadOlderMessages.settings.providerId}:${this.root.loadOlderMessages.settings.ovenId ?? ''}`
     const usageList = await this.accountUsageCache.refresh(
       {
-        harnessId: this.root.loadOlderMessages.settings.harnessId,
-        providerId: this.root.loadOlderMessages.settings.providerId,
-        accountId: this.root.loadOlderMessages.settings.accountId,
+        ...this.selectedAccount,
         // Name the thread so the reading can only be answered by this thread's
         // own session. Account quota ignores it; context occupancy must never
         // come from another conversation's live process.
@@ -339,16 +371,13 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       },
       () =>
         refreshKey !==
-        `${this.root.loadOlderMessages.settings.harnessId}:${this.root.loadOlderMessages.settings.accountId ?? ''}:${this.root.loadOlderMessages.settings.providerId}`
+        `${this.root.loadOlderMessages.settings.harnessId}:${this.root.loadOlderMessages.settings.accountId ?? ''}:${this.root.loadOlderMessages.settings.providerId}:${this.root.loadOlderMessages.settings.ovenId ?? ''}`
     )
+    // The main process resolves the account, and its id differs from the saved
+    // selection whenever a provider has a single account or none was pinned.
     const currentUsage = usageList.find(
       (usage) =>
         usage.harnessId === this.root.loadOlderMessages.settings.harnessId &&
-        usage.accountId ===
-          (isCodeInOvenCustomProviderId(this.root.loadOlderMessages.settings.providerId)
-            ? this.root.loadOlderMessages.settings.providerId
-            : (this.root.loadOlderMessages.settings.accountId ??
-              `${this.root.loadOlderMessages.settings.harnessId}.default`)) &&
         usage.providerId === this.root.loadOlderMessages.settings.providerId
     )
     if (currentUsage) {
@@ -450,20 +479,25 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
     }
     if (kind === 'achievement') {
       const activeSpec = this.root.submitBrainstormDecision.spec
-      if (!activeSpec) return null
+      const coordinator = this.root.handleAgentEvent.thread
+      // Without a specification the contract is the goal captured when Achievement
+      // was enabled, and the board reports that goal exactly as it reports an
+      // approved specification. Requiring the specification here left a running
+      // Achievement with no coordinator docked at all.
+      const capturedGoal = (coordinator.achievementGoal ?? '').trim()
+      if (!activeSpec && !capturedGoal) return null
       return {
         component: 'achievement',
         props: {
-          specTitle: this.root.handleAgentEvent.thread.title,
+          specTitle: coordinator.title,
           runStartedAt: activeSpec?.approvedAt ?? this.durableAuditThread?.createdAt,
-          specSummary: activeSpec.content.resolutionSummary,
+          specSummary: activeSpec ? activeSpec.content.resolutionSummary : capturedGoal,
           auditThread: this.durableAuditThread,
           auditState: this.root.submitSpecDecision.auditState,
           reportAvailable: this.auditReport !== null,
           achievementReached:
-            this.root.handleAgentEvent.thread.status === 'completed' &&
-            (this.root.handleAgentEvent.thread.loopIteration ?? 0) > 0,
-          selectedThreadId: this.root.handleAgentEvent.thread.id,
+            coordinator.status === 'completed' && (coordinator.loopIteration ?? 0) > 0,
+          selectedThreadId: coordinator.id,
           auditorSettings: this.auditSettings,
           providers: this.root.currentWorkingTraceAttribution.providers,
           projectId: this.root.handleAgentEvent.thread.projectId,
@@ -490,7 +524,12 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
         component: 'independent-audit',
         props: {
           running: this.root.currentWorkingTraceAttribution.independentAuditRunning,
-          auditThread: this.durableAuditThread,
+          // On the auditor's own thread, that thread is the audit: showing the
+          // coordinator's copy left this view claiming no audit existed while
+          // the user was looking straight at the run.
+          auditThread: this.root.currentWorkingTraceAttribution.independentAuditorChild
+            ? this.root.handleAgentEvent.thread
+            : this.durableAuditThread,
           reportAvailable: this.auditReport !== null,
           partialReport: this.auditReport?.evidenceValidation === 'partial',
           selectedThreadId: this.root.handleAgentEvent.thread.id,
@@ -501,6 +540,7 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
           recentModels: rendererRecovery.recentModels,
           onRemoveRecent: (key) => rendererRecovery.removeRecentModel(key),
           onOpenAudit: () => void this.generateIndependentAudit(this.auditSettings),
+          onStopAudit: () => this.stopIndependentAudit(),
           onViewReport: this.openAuditStudio,
           onNewAudit: () =>
             this.root.buildSpecActionPrompt.startFreshIndependentAudit(this.auditSettings),
@@ -583,7 +623,8 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
         usage.harnessId === result.harnessId && usage.providerId === result.providerId
           ? result
           : usage
-      )
+      ),
+      this.selectedAccount
     )
     if (
       result.harnessId === this.root.loadOlderMessages.settings.harnessId &&
@@ -727,18 +768,47 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       )
     } catch (error) {
       const rawError = error instanceof Error ? error.message : 'The independent audit failed.'
-      // The audit card owns this failure: it carries the error and the model
-      // picker the user needs to change the auditor's account. Pushing it into
-      // the composer's error slot instead put a card over the composer that can
-      // neither explain which audit failed nor offer the fix.
-      this.root.buildSpecActionPrompt.auditError = rawError.replace(
-        /^Error invoking remote method '[^']+': Error:\s*/u,
-        ''
-      )
-      this.root.submitSpecDecision.auditFailed = true
-      this.root.submitSpecDecision.auditState = 'offered'
+      const message = rawError.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
+      // A deliberate stop is not a failure: the run ends without a report, so
+      // the coordinator goes back to offering the audit instead of showing the
+      // failure card that asks the user to change the auditor's model.
+      if (message.includes(INDEPENDENT_AUDIT_STOPPED_MESSAGE)) {
+        this.root.submitSpecDecision.auditFailed = false
+        this.root.buildSpecActionPrompt.auditError = ''
+        this.root.submitSpecDecision.auditState =
+          this.root.handleAgentEvent.thread.auditState ?? 'offered'
+      } else {
+        // The audit card owns this failure: it carries the error and the model
+        // picker the user needs to change the auditor's account. Pushing it into
+        // the composer's error slot instead put a card over the composer that can
+        // neither explain which audit failed nor offer the fix.
+        this.root.buildSpecActionPrompt.auditError = message
+        this.root.submitSpecDecision.auditFailed = true
+        this.root.submitSpecDecision.auditState = 'offered'
+      }
     } finally {
       this.root.submitSpecDecision.auditBusy = false
+    }
+  }
+
+  /**
+   * Stop the independent audit that is running for this thread.
+   *
+   * The auditor runs on its own durable child thread, so the composer's Stop
+   * (which aborts the open thread's session) never reached it. This only asks
+   * the main process to end the run: the run's own settlement clears `auditBusy`
+   * and restores the coordinator.
+   */
+  async stopIndependentAudit(): Promise<void> {
+    try {
+      await invoke(
+        'agent:stopIndependentAudit',
+        this.root.handleAgentEvent.thread.projectId,
+        this.root.submitSpecDecision.auditWorkflowThreadId()
+      )
+    } catch (error) {
+      this.root.buildSpecActionPrompt.auditError =
+        error instanceof Error ? error.message : 'The audit could not be stopped.'
     }
   }
 

@@ -4,11 +4,19 @@ import { invoke } from '$lib/ipc.svelte'
 
 import { normalizeChatSettings } from '$lib/stores/thread-settings.svelte'
 import { playHistoryArrive } from '$lib/motion'
+import { scrollDetachesFromLatest } from '$lib/scroll-anchor'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
 import { threadHoldsOpenTrace } from '$lib/stores/thread-preload'
+import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
+import { warmThreadHold } from '$lib/stores/queued-resource-wait.svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
-import type { ThreadMessageCursor, ThreadSettings, TurnStreamPartsPage } from '$shared/types'
+import type {
+  AgentMessage,
+  ThreadMessageCursor,
+  ThreadSettings,
+  TurnStreamPartsPage
+} from '$shared/types'
 import {
   hasRenderableWorkingParts,
   isActivityOnlyUserMessage,
@@ -19,6 +27,9 @@ import { threadScrollPositions } from '../thread-scroll-memory'
 import type { ThreadView } from './ThreadView-board.svelte'
 import { DEFAULT_SETTINGS } from '$lib/stores/thread-settings.svelte'
 import { BoardUnit } from '$lib/components/board-unit'
+/** Longest the expensive whole-transcript scans may lag a live stream. */
+const MESSAGE_SCAN_CADENCE_MS = 250
+
 /** One concern of the ThreadView board. */
 export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
@@ -39,6 +50,7 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
    * built, so the board asks for it right after construction.
    */
   bind(): void {
+    this.bindScanCadence()
     const mounted = this.root.unmirroredTraceStartTime.mountedThread
     this.userScrolledAway =
       this.root.unmirroredTraceStartTime.savedScrollState?.awayFromBottom ?? false
@@ -46,6 +58,34 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       threadMessages.messages(mounted.projectId, mounted.id).length,
       this.root.composerScope.INITIAL_PAINT_MESSAGES
     )
+  }
+
+  /**
+   * Own the snapshot cadence, from `bind()` so the effect is created inside
+   * the component's setup like every other board effect.
+   */
+  private bindScanCadence(): void {
+    $effect(() => {
+      const messages = this.messages
+      if (messages.length !== this.#scanLength) {
+        // Shape changed: publish now, so counts and boundaries stay exact.
+        this.#scanLength = messages.length
+        this.#scanLastAt = Date.now()
+        this.scanMessages = messages
+        return
+      }
+      if (this.#scanTimer !== null) return
+      // Same shape with a new array identity: only the tail moved. One refresh
+      // per cadence is plenty for a header or a panel nobody reads per token.
+      const wait = Math.max(0, MESSAGE_SCAN_CADENCE_MS - (Date.now() - this.#scanLastAt))
+      this.#scanTimer = setTimeout(() => {
+        this.#scanTimer = null
+        if (!this.alive) return
+        this.#scanLastAt = Date.now()
+        this.#scanLength = this.messages.length
+        this.scanMessages = this.messages
+      }, wait)
+    })
   }
   /** True when this view is driven by an external controller (e.g. temporary chat). */
   hasController = $derived(this.root.props.controller !== undefined)
@@ -59,6 +99,35 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
         this.root.handleAgentEvent.thread.id
       )
   )
+
+  /**
+   * Coarse transcript snapshot for the expensive whole-list scans: the Sources
+   * panel fold, the context meter, the harness usage scan, and the history
+   * previews. The live `messages` array is republished on every 16 ms stream
+   * flush, and each republish re-runs those full-transcript walks even though
+   * only the streaming tail actually changed. This snapshot follows the same
+   * array, republished immediately when the transcript's shape changes (a
+   * message added or removed) and at most once per cadence while a stream
+   * runs, so the scans drop off the per-flush frame entirely and a settled
+   * transcript is never stale: with nothing streaming there is no flush, and
+   * the snapshot is the live array's exact content.
+   */
+  // Raw, not deep state: this holds the transcript array the cache already owns,
+  // and wrapping it in a proxy made every consumer read proxies instead of the
+  // real messages. Svelte warned about exactly that identity mismatch
+  // (state_proxy_equality_mismatch), and any `===` against the store's own
+  // array then answered wrong, which is how a freshly sent message could
+  // vanish from the view it had just been added to.
+  scanMessages = $state.raw<AgentMessage[]>([])
+
+  /** When the snapshot last republished, for the streaming cadence. */
+  #scanLastAt = 0
+  /** Pending cadence refresh, armed only while a stream keeps publishing. */
+  #scanTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** Length of the last snapshot, tracked outside reactivity to keep the
+   *  effect above from reading the state it writes. */
+  #scanLength = 0
 
   /** Set by `bind()`: whether the conversation was left scrolled away. */
   userScrolledAway = $state(false)
@@ -292,10 +361,15 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     // follower grabbed the viewport back on the next content resize and the
     // reader could not scroll away at all. A downward scroll onto the bottom
     // still re-attaches them, and so does an explicit jump to the latest.
+    // The true bottom always re-attaches, whatever moved the viewport there:
+    // content that shrinks above a bottom-pinned reader is clamped upward by
+    // the browser, and that clamp is not travel. Reading it as an upward
+    // scroll is what left a reader who had just scrolled back to the latest
+    // message detached from a tail that never followed again.
     const previousTop = this.lastScrollTop
     this.lastScrollTop = this.scrollEl.scrollTop
     const movedUp = this.scrollEl.scrollTop < previousTop - 0.5
-    const away = movedUp || !this.root.unmirroredTraceStartTime.isAtBottom(this.scrollEl)
+    const away = scrollDetachesFromLatest(movedUp, this.scrollEl)
     // Pin the window to what the reader is reading the moment they leave the
     // tail, and release it back to the tail-relative window when they return.
     // While pinned, a streaming turn grows the window instead of sliding it
@@ -809,8 +883,32 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     }
   }
 
+  /** Re-attach the tail follow without moving the viewport.
+   *
+   *  Used when something other than a scroll event proves the reader is on the
+   *  true bottom (a browser clamp after content above them shrank): they are
+   *  reading the latest message, so the tail must follow again instead of
+   *  holding a viewport that is already where the new content lands. */
+  reattachToLatest(): void {
+    if (!this.userScrolledAway) return
+    this.userScrolledAway = false
+    const el = this.scrollEl
+    if (!el) return
+    threadScrollPositions.set(this.root.handleAgentEvent.thread.id, {
+      top: el.scrollTop,
+      awayFromBottom: false
+    })
+  }
+
   scrollToLatest(): void {
     if (!this.scrollEl) return
+    // The reader has taken the viewport. Any pending open-at-prompt restore has
+    // to stand down: a thread that mounted empty (a brand-new conversation) only
+    // flips its loaded flag as the first message lands, so that restore runs
+    // AFTER this call and would pin the viewport to the prompt instead of
+    // following the answer streaming in below it. A send claims the viewport
+    // exactly like a jump does.
+    this.root.unmirroredTraceStartTime.scrollRestored = true
     // Snap instantly   a smooth scroll races the agent's stream: its target
     // is captured once, so while it animates the bottom keeps growing and the
     // scroll lands short, re-locking the user as "away". Arming the follow
@@ -821,12 +919,22 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     // message keeps every page they had already loaded, so scrolling up again
     // finds the same work in the document instead of mounting it from scratch.
     this.scrollEl.scrollTo({ top: this.scrollEl.scrollHeight, behavior: 'auto' })
-    void tick().then(() => {
-      if (!this.scrollEl || this.userScrolledAway) return
-      if (!this.root.unmirroredTraceStartTime.isAtBottom(this.scrollEl)) {
-        this.scrollEl.scrollTop = this.scrollEl.scrollHeight
-      }
-    })
+    // The transcript above the new message can still find its height a moment
+    // later (a trace shell mounting, a card resolving, markdown finishing), so
+    // the bottom is re-taken after the flush and again after the frame that
+    // layout lands in. Both are no-ops when the reader has scrolled away in the
+    // meantime.
+    void tick().then(() => this.reanchorToLatest())
+    requestAnimationFrame(() => this.reanchorToLatest())
+  }
+
+  /** Snap to the live bottom, unless the reader has taken the viewport back. */
+  private reanchorToLatest(): void {
+    const el = this.scrollEl
+    if (!el || this.userScrolledAway) return
+    if (!this.root.unmirroredTraceStartTime.isAtBottom(el)) {
+      el.scrollTop = el.scrollHeight
+    }
   }
 
   async loadLocal(attempt = 0): Promise<void> {
@@ -950,6 +1058,11 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       this.root.studioTemporaryChatContext.seedContextUsageSnapshot(threadData?.contextUsage)
       this.root.steerQueuedMessage.restoreQueuedMessage()
       this.root.composerScope.restoreResponseReferences()
+      // The reader is now in the thread and the next thing they may do is type
+      // and send. Read the device gate off the open path so that send finds an
+      // answer instead of paying the round-trip between the click and the
+      // message appearing.
+      warmThreadHold(projectId, id)
     } catch {
       // A single transient failure must not silently drop the settings, mirror,
       // and status restore   retry once, then degrade gracefully. Anything the
@@ -1033,6 +1146,16 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
 
     const { projectId, id } = this.root.handleAgentEvent.thread
 
+    // Register this conversation with the shared attention store and read its
+    // authoritative permission queue before anything else on this pass. A card
+    // the reader opened the thread for must never wait on an unrelated read
+    // (the session status below can be slow or fail) and must never be
+    // cancelled by another view's mount: leaving the thread for a project view
+    // unmounts this view, so the card comes from the store and is reconciled
+    // here instead of from state this mount owns.
+    conversationAttention.track(projectId, id)
+    void this.root.editVideoNote.refreshPendingPermissions()
+
     // Independent extras   each lands as it resolves, none block the paint.
     void this.root.switchProject.loadProjectContext()
     // The durable fold is not what makes a thread readable. The mirror already
@@ -1108,18 +1231,17 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       }
       const liveSessionWorking = this.root.handleAgentEvent.providerStatus?.state === 'working'
       if (liveSessionWorking) {
-        await this.root.editVideoNote.refreshPendingPermissions()
-        if (!this.alive) return
         await this.root.sources.refreshPendingImageDescriptorError()
         if (!this.alive) return
         await this.root.composerScope.refreshPendingQuestions()
         if (!this.alive) return
       } else {
-        // A completed thread has nothing waiting on these: a permission card or
-        // a question only exists while work is in flight. They enrich the opened
-        // thread, so they load after the frame instead of holding the restore.
-        scheduleDeferredWork('thread:restored-session-extras', () => {
-          void this.root.editVideoNote.refreshPendingPermissions()
+        // A completed thread has nothing waiting on these: a question only exists
+        // while work is in flight. They enrich the opened thread, so they load
+        // after the frame instead of holding the restore. The key is per-thread
+        // because this scheduler is latest-wins across the whole renderer: a
+        // shared key let another thread's mount cancel this one's restore.
+        scheduleDeferredWork(`thread:restored-session-extras:${projectId}:${id}`, () => {
           void this.root.sources.refreshPendingImageDescriptorError()
           void this.root.composerScope.refreshPendingQuestions()
         })
@@ -1157,7 +1279,7 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
         this.applyRestoredTrace(await readTraceWindow())
         if (!this.alive) return
       } else {
-        scheduleDeferredWork('thread:restored-trace', () => {
+        scheduleDeferredWork(`thread:restored-trace:${projectId}:${id}`, () => {
           void this.root.pollStreamParts.loadCompletedTurns()
           void readTraceWindow().then((page) => this.applyRestoredTrace(page))
         })

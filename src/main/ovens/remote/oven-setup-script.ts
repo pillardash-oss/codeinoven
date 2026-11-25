@@ -168,7 +168,7 @@ function packageCommands(
 }
 
 /** Documented install command for git or curl, used only when the Oven lacks it. */
-function toolInstallCommands(
+export function toolInstallCommands(
   tool: 'git' | 'curl',
   platform: string,
   manager: OvenPackageManager,

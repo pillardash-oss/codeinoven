@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -11,6 +12,9 @@ import (
 type mePayload struct {
 	store.User
 	Store store.StoreStatus `json:"store"`
+	// HasPassword is false for an account made through Google or GitHub, which
+	// sets its first password without confirming a current one.
+	HasPassword bool `json:"hasPassword"`
 }
 
 // meFor builds the payload for a signed-in user.
@@ -22,7 +26,11 @@ func (s *Server) meFor(r *http.Request, authCtx store.Auth) (mePayload, error) {
 	if err != nil {
 		return mePayload{}, err
 	}
-	return mePayload{User: authCtx.User, Store: status}, nil
+	_, err = s.store.PasswordHash(r.Context(), authCtx.User.ID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return mePayload{}, err
+	}
+	return mePayload{User: authCtx.User, Store: status, HasPassword: err == nil}, nil
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {

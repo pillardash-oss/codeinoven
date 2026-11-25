@@ -59,6 +59,7 @@ export interface ProjectFilesExplorerHost {
    *  conversations of a hidden conversation container from one another. */
   stateKeyFor(projectId: string): string
   scopeFor(projectId: string): string
+  scopeRootIdentityFor(projectId: string, scopeBucketId: string): string | null
   threadArg(projectId: string): string | undefined
   mountKeyFor(projectId: string): string
   openFile(projectId: string, path: string): Promise<void>
@@ -113,7 +114,16 @@ export class ProjectFilesExplorer {
   listingsMatchMount(projectId: string): boolean {
     const state = this.host.existingState(projectId)
     if (!state || state.listingMountKey === null) return true
-    return state.listingMountKey === this.host.mountKeyFor(projectId)
+    const mountKey = this.host.mountKeyFor(projectId)
+    const scopeBucketId = this.host.scopeFor(projectId)
+    if (mountKey !== scopeBucketId) return state.listingMountKey === mountKey
+    if (state.listingScopeBucketId === null) return state.listingMountKey === mountKey
+    const currentRoot = this.host.scopeRootIdentityFor(projectId, scopeBucketId)
+    const previousRoot =
+      state.listingScopeRootIdentity ??
+      this.host.scopeRootIdentityFor(projectId, state.listingScopeBucketId)
+    if (currentRoot === null || previousRoot === null) return true
+    return currentRoot === previousRoot
   }
 
   async loadDirectory(
@@ -181,6 +191,12 @@ export class ProjectFilesExplorer {
         state.listingFromCache = false
         if (directory === '') this.rememberRoot(projectId, state, entries)
         state.listingMountKey = mountKey
+        const scopeBucketId = this.host.scopeFor(projectId)
+        const scopeMount = mountKey === scopeBucketId
+        state.listingScopeBucketId = scopeMount ? scopeBucketId : null
+        state.listingScopeRootIdentity = scopeMount
+          ? this.host.scopeRootIdentityFor(projectId, scopeBucketId)
+          : null
         // The first time the root is listed for a freshly hydrated project,
         // cheaply restore the last-viewed position: only the ancestor chain of
         // the revealed/selected path is loaded, never the whole saved set of
@@ -821,6 +837,18 @@ export class ProjectFilesExplorer {
     state.focusRequest += 1
     this.markPendingReveal(state, path)
     this.persistExplorer(projectId)
+  }
+
+  /**
+   * Reveal one file in the tree and make sure the tree is on screen.
+   *
+   * An explicit "show me this file in the project tree" outranks a tree the
+   * reader folded, unlike a citation or an attachment link, which only record
+   * where the entry sits and leave the reader's own fold alone.
+   */
+  async revealFileInTree(projectId: string, path: string): Promise<void> {
+    this.host.stateFor(projectId).explorerVisible = true
+    await this.revealFile(projectId, path)
   }
 
   /** Keep a mounted explorer aligned with the active file tab without opening

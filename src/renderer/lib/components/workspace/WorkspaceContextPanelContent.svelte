@@ -62,6 +62,8 @@
      *  for it so the panel can never trap the user on a blank body. */
     onDismissCoordinator: () => void
     onContinueInThread: (tab: TemporaryChatContextTab) => Promise<void>
+    /** Make a side chat durable and attach it to the chat it was opened from. */
+    onAttachToParent: (tab: TemporaryChatContextTab) => Promise<void>
     onOpenSubagent: (part: Extract<AgentPart, { type: 'subagent' }>) => void
     /** Navigate to another top-level view (e.g. the Utilities page). */
     navigate: (view: MainView) => void
@@ -87,6 +89,7 @@
     browser,
     onDismissCoordinator,
     onContinueInThread,
+    onAttachToParent,
     onOpenSubagent,
     navigate,
     onOpenAssistantTask,
@@ -180,6 +183,40 @@
   })
 
   /**
+   * The design board the rail is on right now, with its own prop record.
+   *
+   * Read from the registration rather than the tab so the props stay narrowed to
+   * the design board: this is what the held board below is keyed and driven by.
+   */
+  let designBoardInFront = $derived.by(() => {
+    const tab = activeContextTab
+    const registration = boardRegistration
+    if (tab?.kind !== 'coordinator' || registration === null) return null
+    if (registration.panel.component !== 'design') return null
+    return { registration, props: registration.panel.props }
+  })
+
+  /**
+   * The design board that stays mounted, whether or not it is the tab in front.
+   *
+   * Opening a screen opens it in a browser tab, and that tab becomes the rail's
+   * active tab in the same frame. Every other tool here is destroyed when its tab
+   * goes away, which is right for a browser (its native view has to be released)
+   * and wrong for this board: its mount discards the cached work listing, re-reads
+   * the thread's work, re-captures every screen and re-reads the canvas, so the
+   * user paid a full "Capturing…" wait for looking at one screen and coming back.
+   * Held here, it returns exactly as it was left; the board's own `active` prop is
+   * what stops it working while it is hidden.
+   */
+  const lastDesignBoard = new LastKnown<{
+    registration: CoordinatorDockRegistration
+    props: Extract<CoordinatorDockRegistration['panel'], { component: 'design' }>['props']
+  }>()
+  let designBoard = $derived(lastDesignBoard.get(designBoardInFront))
+  /** Whether the held board is the tab in front, rather than parked behind one. */
+  let designBoardVisible = $derived(designBoardInFront !== null)
+
+  /**
    * Identity of the surface the active sidebar tab mounts.
    *
    * Every other kind is keyed by its own tab id, so selecting another tab of the
@@ -194,14 +231,8 @@
   let activePanelKey = $derived.by(() => {
     const tab = activeContextTab
     if (!tab) return ''
-    if (
-      tab.kind === 'coordinator' &&
-      tabCoordinator &&
-      boardRegistration?.panel.component === 'design'
-    ) {
-      const props = boardRegistration.panel.props
-      return `work:${props.projectId}:${props.threadId}:${props.kind ?? 'session'}`
-    }
+    // A design board is mounted by the held block above, keyed by the work it
+    // shows, so this rail never keys one.
     if (tab.kind !== 'files') return tab.id
     const mountThreadId =
       usesThreadWorkspaceMount(tab.projectId) ||
@@ -388,7 +419,31 @@
     {/key}
   </div>
 {/if}
-{#if activeContextTab && !filesVisible}
+{#if designBoard && (!activeProject || designBoard.props.projectId === activeProject.id)}
+  <!-- The design board is held across a tab switch. A screen opens in a browser
+       tab, which is the rail's active tab from that frame on, so rebuilding the
+       board on the way back would re-read the thread's work and re-capture every
+       screen. It is keyed by the work it shows, so another thread's board is
+       still a fresh mount, and `display` parks it without destroying it. A board
+       of another project is dropped from the mount, exactly as the registration
+       it reads is refused; the memory keeps it for when the user comes back. -->
+  <div class="h-full" style:display={designBoardVisible ? 'block' : 'none'}>
+    {#key `${designBoard.props.projectId}:${designBoard.props.threadId}:${designBoard.props.kind ?? 'session'}:${panelReloadNonce}`}
+      {#await loadCachedPanelModule(PANEL_KEYS.designCoordinator, () => import('../design/DesignCoordinatorPanel.svelte'))}
+        {@render panelLoading('Design')}
+      {:then { default: DesignCoordinatorPanel }}
+        <DesignCoordinatorPanel
+          {...designBoard.props}
+          viewingThreadId={selectedThread?.id ?? designBoard.registration.threadId}
+          active={active && contextSidebarState.sidebarVisible && designBoardVisible}
+        />
+      {:catch error}
+        {@render panelLoadFailed(PANEL_KEYS.designCoordinator, 'Design', error)}
+      {/await}
+    {/key}
+  </div>
+{/if}
+{#if activeContextTab && !filesVisible && !designBoardVisible}
   <!-- Arrival only, deliberately: no `out:` on the panel being replaced.
 
        Every panel here is absolutely placed in one cell, so the arriving tool
@@ -544,7 +599,11 @@
           {#await loadCachedPanelModule(PANEL_KEYS.temporaryChat, () => import('../chats/TemporaryChatView.svelte'))}
             {@render panelLoading('Chat')}
           {:then { default: TemporaryChatView }}
-            <TemporaryChatView tabId={activeContextTab.id} {onContinueInThread} />
+            <TemporaryChatView
+              tabId={activeContextTab.id}
+              {onContinueInThread}
+              {onAttachToParent}
+            />
           {:catch error}
             {@render panelLoadFailed(PANEL_KEYS.temporaryChat, 'Chat', error)}
           {/await}
@@ -601,19 +660,8 @@
                 {@render panelLoadFailed(PANEL_KEYS.delegationCoordinator, 'Spawned agents', error)}
               {/await}
             {:else if board.panel.component === 'design'}
-              {#await loadCachedPanelModule(PANEL_KEYS.designCoordinator, () => import('../design/DesignCoordinatorPanel.svelte'))}
-                {@render panelLoading('Design')}
-              {:then { default: DesignCoordinatorPanel }}
-                {#key `${board.projectId}:${board.panel.props.threadId}:${board.panel.props.kind ?? 'session'}`}
-                  <DesignCoordinatorPanel
-                    {...board.panel.props}
-                    viewingThreadId={selectedThread?.id ?? board.threadId}
-                    active={active && contextSidebarState.sidebarVisible}
-                  />
-                {/key}
-              {:catch error}
-                {@render panelLoadFailed(PANEL_KEYS.designCoordinator, 'Design', error)}
-              {/await}
+              <!-- Rendered by the held design block above, which survives a tab
+                   switch instead of reloading the board's work. -->
             {:else}
               {#await loadCachedPanelModule(PANEL_KEYS.independentAuditCoordinator, () => import('../threads/IndependentAuditCoordinatorPanel.svelte'))}
                 {@render panelLoading('Audit')}

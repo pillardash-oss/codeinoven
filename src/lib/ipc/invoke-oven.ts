@@ -22,6 +22,7 @@ import type {
   OvenAgentRegistration
 } from '../ovens'
 import type { OvenConnectionStatus } from '../ovens'
+import type { OvenUtilitySecretVault } from '../oven-utility-host'
 import type { Contract } from './contract-helpers'
 import type { Thread } from '../types'
 
@@ -68,6 +69,15 @@ export const invokeOvenContract = {
   'oven:reviewTransfer': {} as Contract<[input: OvenTransferInput], OvenTransferReview>,
   'oven:transfer': {} as Contract<[reviewId: string], OvenTransferReview>,
   'oven:previewPort': {} as Contract<[id: string, port: number], string>,
+  /** What this Oven can keep at rest, and which utilities it already holds. */
+  'oven:utilitySecrets': {} as Contract<[id: string], OvenUtilitySecretVault>,
+  /** Allow, or stop allowing, this Oven to keep utility credentials at rest. */
+  'oven:utilitySecretStore': {} as Contract<[id: string, enabled: boolean], { enabled: boolean }>,
+  /** Forget one utility's stored credentials on this Oven, or every one of them. */
+  'oven:forgetUtilitySecrets': {} as Contract<
+    [id: string, utilityId?: string],
+    { forgotten: number }
+  >,
   'oven:preview': {} as Contract<[id: string, root: string], string>,
   'oven:selectThread': {} as Contract<
     [projectId: string, threadId: string, id: string, root?: string],

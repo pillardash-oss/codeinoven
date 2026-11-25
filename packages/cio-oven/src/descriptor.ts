@@ -19,6 +19,8 @@ export interface DescriptorInput {
   dataRoot: string
   serviceRevision: string
   identity?: OvenAgentIdentity
+  /** This machine's public address, when an echo service could report it. */
+  publicAddress?: string
 }
 
 /** The host name the app should dial when the user does not supply one. */
@@ -68,7 +70,7 @@ export function buildDescriptor(input: DescriptorInput): OvenAgentDescriptor {
     platform: agentPlatform(),
     architecture: process.arch,
     hostname: defaultName(),
-    addresses: candidateAddresses(),
+    addresses: candidateAddresses(input.publicAddress),
     user: input.user,
     port: input.port,
     name: input.name,

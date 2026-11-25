@@ -1,4 +1,4 @@
-import { authoredWorkRoot } from '../../design/authored-work-root'
+import { authoredWorkRoot } from '../../design/authored-work'
 import { createHash } from 'node:crypto'
 import { videoTimecode } from '../../../lib/video/timeline'
 import { mkdir, writeFile } from 'node:fs/promises'

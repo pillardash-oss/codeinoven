@@ -1,18 +1,45 @@
 import { powerMonitor } from 'electron'
+import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { closeSync, openSync } from 'node:fs'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import { Logger } from '../../system/logger'
+import { buildProcessEnvironmentAsync } from '../../drivers/cli-environment'
+import { OWNED_SESSION_MARKER } from '../../system/process-ownership'
 import { validateEntityId } from '../../ipc/ipc-validation'
 import type { ReapOrphansOptions, ReapOrphansResult } from '../../agents/agent-process-service'
+import type { SecretRequestContext } from '../../utilities/utility-orchestration-service'
 import {
   projectDirectories,
   projectIdForWorkingDirectory
 } from '../../agents/process-project-attribution'
 import { appServiceRegistry } from '../../system/app-service-registry'
+import { collectSurfaceMetrics } from '../../system/surface-metrics'
 import type { AgentRunningProcess, TaskManagerSnapshot } from '../../../lib/types'
 import { DEFAULT_SCOPE_BUCKET_ID } from '../../../lib/types'
 import type { SessionInfo } from './chat-engine-types'
 import { USER_TERMINAL_SETTLE_MS } from './chat-engine-constants'
 import { ChatEngine } from '../chat-engine'
 import type { UserTerminalWindow } from '../chat-engine'
+
+/** Where background processes an agent asked for keep their output. */
+const AGENT_PROCESS_LOG_DIRECTORY = 'runtime/agent-processes'
+
+/** One command an agent asked the app to run in the background. */
+export interface AgentProcessStartRequest {
+  command: string
+  cwd?: string
+  label?: string
+}
+
+/** What the app records about a background process it started for an agent. */
+export interface AgentProcessStarted {
+  pid: number
+  command: string
+  cwd: string
+  label: string | null
+  logPath: string
+}
 
 /** ChatEngine processes: one concern, moved verbatim from the composition root. */
 export class ChatEngineProcesses {
@@ -84,14 +111,15 @@ export class ChatEngineProcesses {
   }
 
   /** Kill one app-owned process by pid for a thread. */
-  killProcess(projectId: string, threadId: string, pid: number): Promise<void> {
+  killProcess(projectId: string, threadId: string, pid: number, force = false): Promise<void> {
     if (!Number.isSafeInteger(pid) || pid <= 0) {
       throw new TypeError('Process ID must be a positive integer')
     }
     return this.host.state.agentProcesses.killProcess(
       validateEntityId(projectId, 'Project ID'),
       validateEntityId(threadId, 'Thread ID'),
-      pid
+      pid,
+      force
     )
   }
 
@@ -101,6 +129,126 @@ export class ChatEngineProcesses {
       validateEntityId(projectId, 'Project ID'),
       validateEntityId(threadId, 'Thread ID')
     )
+  }
+
+  /**
+   * Answer one app-owned process tool call for the turn that made it.
+   *
+   * The app owns process lifecycle because a shell command cannot prove what it
+   * started: `cio_process_list` reports what this thread owns, `cio_process_start`
+   * spawns the process itself and records its pid, and `cio_process_stop`
+   * re-verifies ownership in `AgentProcessService` before signalling anything.
+   */
+  async runAgentProcessTool(
+    action: 'list' | 'start' | 'stop',
+    input: Record<string, unknown>,
+    context: SecretRequestContext
+  ): Promise<unknown> {
+    const projectId = validateEntityId(context.projectId, 'Project ID')
+    const threadId = validateEntityId(context.threadId, 'Thread ID')
+    if (action === 'list') {
+      return { processes: await this.listProcesses(projectId, threadId) }
+    }
+    if (action === 'start') {
+      const command = typeof input['command'] === 'string' ? input['command'] : ''
+      const cwd = typeof input['cwd'] === 'string' ? input['cwd'] : undefined
+      const label = typeof input['label'] === 'string' ? input['label'] : undefined
+      return this.startAgentProcess(context, { command, cwd, label })
+    }
+    const pid = input['pid']
+    if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 1) {
+      throw new TypeError('Process ID must be a positive integer greater than 1')
+    }
+    const force = input['force'] === true
+    try {
+      await this.killProcess(projectId, threadId, pid, force)
+    } catch (error) {
+      // Ownership is the whole point, so a refusal names what this thread can
+      // stop instead of leaving the agent to guess another pid.
+      const stoppable = await this.listProcesses(projectId, threadId).catch(
+        () => [] as AgentRunningProcess[]
+      )
+      const pids = stoppable.map((entry) => entry.pid).join(', ')
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new Error(
+        `${reason}. This thread can stop these pids: ${pids || 'none'}. A process started outside this thread is never stopped by the app.`,
+        { cause: error }
+      )
+    }
+    return { pid, stopped: true, force }
+  }
+
+  /**
+   * Start one command as an app-owned background process and record its pid
+   * against the thread.
+   *
+   * The app spawns it detached, in its own process group, with the normalized
+   * environment and the ownership markers, so the process outlives the tool call
+   * and still belongs to this session: it is listed by `listProcesses`, stopped
+   * by `killProcess`, stopped with the thread when it is cleaned up, and reaped
+   * with the app on quit.
+   */
+  async startAgentProcess(
+    context: SecretRequestContext,
+    request: AgentProcessStartRequest
+  ): Promise<AgentProcessStarted> {
+    const command = request.command.trim()
+    if (!command) throw new TypeError('command must be a non-empty shell command')
+    const projectPath = resolve(context.projectPath)
+    const cwd = resolve(projectPath, request.cwd ?? '.')
+    const inside = relative(projectPath, cwd)
+    if (inside.startsWith('..') || isAbsolute(inside)) {
+      throw new TypeError('cwd must stay inside the project directory')
+    }
+    const label = request.label?.trim() || null
+    const stamp = `${Date.now()}-${randomUUID().slice(0, 8)}`
+    const logRelativePath = join(AGENT_PROCESS_LOG_DIRECTORY, `${context.threadId}-${stamp}.log`)
+    await this.host.storage.ensureDirectory(AGENT_PROCESS_LOG_DIRECTORY)
+    const logPath = this.host.storage.resolve(logRelativePath)
+    const logFd = openSync(logPath, 'a')
+    const environment = await buildProcessEnvironmentAsync()
+    environment[OWNED_SESSION_MARKER] = context.sessionId
+    const windows = process.platform === 'win32'
+    const shell = windows
+      ? (process.env['ComSpec'] ?? process.env['COMSPEC'] ?? 'cmd.exe')
+      : (process.env['SHELL']?.trim() ?? '') || '/bin/sh'
+    const args = windows ? ['/d', '/s', '/c', command] : ['-lc', command]
+    let pid: number | undefined
+    try {
+      const child = spawn(shell, args, {
+        cwd,
+        env: environment,
+        detached: true,
+        stdio: ['ignore', logFd, logFd],
+        windowsHide: true
+      })
+      pid = child.pid
+      child.on('error', (error) => {
+        Logger.error('A background process the agent asked for failed to start:', error)
+      })
+      child.unref()
+    } finally {
+      // The child keeps its own duplicate of the descriptor.
+      closeSync(logFd)
+    }
+    if (typeof pid !== 'number' || pid <= 0) {
+      throw new Error('The background process did not report a pid, so the app cannot own it.')
+    }
+    this.trackPtyProcess(
+      context.sessionId,
+      context.projectId,
+      context.threadId,
+      pid,
+      label ?? command,
+      cwd
+    )
+    Logger.info('Started a background process for an agent', {
+      pid,
+      command,
+      cwd,
+      threadId: context.threadId
+    })
+    return { pid, command, cwd, label, logPath }
   }
 
   /** App-wide process list for the task manager (all projects and app scope). */
@@ -171,6 +319,10 @@ export class ChatEngineProcesses {
     return {
       processes: resolvedProcesses,
       services: servicesWithResources,
+      // Renderer surfaces are read last and separately: they come from Electron
+      // rather than from the process tracker, and the modal is where a user
+      // connects a hot renderer to the tab or stage that owns it.
+      surfaces: collectSurfaceMetrics(),
       power: {
         source: powerMonitor.isOnBatteryPower() ? 'battery' : 'ac',
         thermalState:

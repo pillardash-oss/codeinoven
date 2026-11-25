@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -865,6 +865,207 @@ describe('CheckpointManager', () => {
     })
     expect(settled).toBe(1)
     expect((await manager.get('projectZ', 'threadZ', active.id))?.status).toBe('interrupted')
+  })
+
+  // Regression: a long-lived harness shell sits wherever its last `cd` left it,
+  // while write evidence is parsed from commands that start at the project root.
+  // A contested diff then kept only evidence paths, and none of them matched the
+  // real change paths, so a turn that committed three files recorded none.
+  it('lines up a write target parsed from a deeper shell directory', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const database = await createTestDb()
+    testDatabases.push(database)
+    const manager = new CheckpointManager(database)
+    const journal = join('apps', 'application', 'src', 'journal')
+    const viewer = join(journal, 'viewer')
+    await mkdir(join(projectRoot, viewer), { recursive: true })
+    await writeFile(join(projectRoot, viewer, 'carousel.ts'), 'before', 'utf-8')
+    await writeFile(join(projectRoot, journal, 'foreign.ts'), 'untouched', 'utf-8')
+
+    const turn = await manager.beginTurn(
+      'project-shelldir',
+      'thread-shelldir',
+      projectRoot,
+      'Drawer turn',
+      false
+    )
+    await writeFile(join(projectRoot, viewer, 'carousel.ts'), 'after', 'utf-8')
+    // Another thread is writing here at the same time, which is what makes the
+    // diff claimable only through this turn's own evidence.
+    await writeFile(join(projectRoot, journal, 'foreign.ts'), 'their edit', 'utf-8')
+    const completed = await manager.completeTurn(
+      'project-shelldir',
+      'thread-shelldir',
+      turn.id,
+      projectRoot,
+      'completed',
+      undefined,
+      undefined,
+      {
+        contestedDiff: true,
+        changeSources: new Map([['viewer/carousel.ts', [claimedSource('viewer/carousel.ts')]]])
+      }
+    )
+
+    expect(completed.changes.map((change) => change.path)).toEqual([
+      'apps/application/src/journal/viewer/carousel.ts'
+    ])
+    expect(
+      completed.changeSourceRefs?.['apps/application/src/journal/viewer/carousel.ts']
+    ).toHaveLength(1)
+  })
+
+  // A turn's tool calls are routinely mirrored after its checkpoint settled, so
+  // the card listed every file without provenance and its head read `Detected`.
+  // The transcript read later proves the edits, and the pass records them.
+  it('fills in the tool sources a card read from a detected diff', async () => {
+    // Canonical, because the snapshot records the resolved root while the tool
+    // input carries the path the agent typed.
+    const projectRoot = await realpath(await temporaryDirectory('codeinoven-project-'))
+    const database = await createTestDb()
+    testDatabases.push(database)
+    const manager = new CheckpointManager(database)
+    const source = join(projectRoot, 'src', 'proven.ts')
+    const generated = join(projectRoot, 'src', 'generated.ts')
+    await mkdir(join(projectRoot, 'src'), { recursive: true })
+    await writeFile(source, 'before', 'utf-8')
+    await writeFile(generated, 'before', 'utf-8')
+
+    database.run(
+      `INSERT OR IGNORE INTO projects(id, name, path, source, provider_id, workflow_id, thread_limit, change_tracking_mode, created_at, updated_at)
+       VALUES('project-proven', 'Project', ?, 'local', 'pi', 'default', 70, 'manual', 1, 1)`,
+      [projectRoot]
+    )
+    database.run(
+      `INSERT INTO threads(id, project_id, provider_id, title, status, pinned, archived, read, scope_bucket_id, created_at, updated_at, last_activity)
+       VALUES('thread-proven', 'project-proven', '', 'Proven', 'created', 0, 0, 1, 'default', 1, 1, 1)`
+    )
+    const turn = await manager.beginTurn(
+      'project-proven',
+      'thread-proven',
+      projectRoot,
+      'Turn',
+      false
+    )
+    await writeFile(source, 'edited', 'utf-8')
+    await writeFile(generated, 'rewritten by a generator', 'utf-8')
+    const completed = await manager.completeTurn(
+      'project-proven',
+      'thread-proven',
+      turn.id,
+      projectRoot,
+      'completed'
+    )
+    expect(completed.changes).toHaveLength(2)
+    expect(completed.changeSourceRefs).toBeUndefined()
+
+    database.run(
+      `INSERT INTO agent_messages(id, thread_id, role, parts, created_at)
+       VALUES('msg-proven', 'thread-proven', 'assistant', ?, ?)`,
+      [
+        JSON.stringify([
+          {
+            type: 'tool',
+            id: 'msg-proven:tool:call-1',
+            messageID: 'msg-proven',
+            callID: 'call-1',
+            tool: 'edit',
+            state: { status: 'completed', input: { path: source } }
+          }
+        ]),
+        turn.before.createdAt
+      ]
+    )
+
+    expect(await manager.backfillChangeProvenance()).toBe(1)
+    const backfilled = await manager.get('project-proven', 'thread-proven', turn.id)
+    expect(backfilled?.changes).toHaveLength(2)
+    expect(Object.keys(backfilled?.changeSourceRefs ?? {})).toEqual(['src/proven.ts'])
+    expect(backfilled?.toolSources?.['msg-proven:tool:call-1']?.tool).toBe('edit')
+    expect(backfilled?.provenanceCheckedAt).toBeGreaterThan(0)
+
+    // The card that still lists an unproven file is not rescanned every launch.
+    expect(await manager.backfillChangeProvenance()).toBe(0)
+  })
+
+  it('repairs an empty card from the scope worktree its snapshots were taken in', async () => {
+    const database = await createTestDb()
+    testDatabases.push(database)
+    const manager = new CheckpointManager(database)
+    // A scoped thread works in its own managed worktree while the project row
+    // still points at the main checkout. Evidence has to resolve against the
+    // snapshot root, or every write in the worktree resolves to nothing.
+    // Canonical, because a snapshot records the resolved root while a command
+    // carries the path the agent typed.
+    const worktree = await realpath(await temporaryDirectory('codeinoven-scope-'))
+    database.run(
+      `INSERT OR IGNORE INTO projects(id, name, path, source, provider_id, workflow_id, thread_limit, change_tracking_mode, created_at, updated_at)
+       VALUES('project-scope', 'Project', '/main-checkout', 'local', 'pi', 'default', 70, 'manual', 1, 1)`
+    )
+    database.run(
+      `INSERT INTO threads(id, project_id, provider_id, title, status, pinned, archived, read, scope_bucket_id, created_at, updated_at, last_activity)
+       VALUES('scope-thread', 'project-scope', '', 'Scope', 'created', 0, 0, 1, 'scope-a', 1, 1, 1)`
+    )
+    const journal = join(worktree, 'apps', 'application', 'src', 'journal')
+    await mkdir(journal, { recursive: true })
+    const target = join(journal, 'viewer.css')
+    await writeFile(target, 'before', 'utf-8')
+
+    const turn = await manager.beginTurn(
+      'project-scope',
+      'scope-thread',
+      worktree,
+      'Drawer turn',
+      false
+    )
+    await writeFile(target, 'after', 'utf-8')
+    database.run(
+      `INSERT INTO agent_messages(id, thread_id, role, parts, created_at)
+       VALUES('msg-scope', 'scope-thread', 'assistant', ?, ?)`,
+      [
+        JSON.stringify([
+          {
+            type: 'tool',
+            id: 'msg-scope:tool:call-1',
+            messageID: 'msg-scope',
+            callID: 'call-1',
+            tool: 'bash',
+            state: {
+              status: 'completed',
+              input: {
+                command: `cd ${journal} && python3 - <<'PY'
+p='viewer.css'
+s=open(p).read()
+open(p,'w').write(s)
+PY`
+              }
+            }
+          }
+        ]),
+        turn.before.createdAt
+      ]
+    )
+
+    // Contested, with no live evidence: completion records nothing and keeps
+    // both snapshot maps for exactly this repair.
+    const completed = await manager.completeTurn(
+      'project-scope',
+      'scope-thread',
+      turn.id,
+      worktree,
+      'completed',
+      undefined,
+      undefined,
+      { contestedDiff: true }
+    )
+    expect(completed.changes).toEqual([])
+
+    expect(await manager.repairEvidenceDroppedCheckpoints()).toBe(1)
+    const repaired = await manager.get('project-scope', 'scope-thread', turn.id)
+    expect(repaired?.changes.map((change) => change.path)).toEqual([
+      'apps/application/src/journal/viewer.css'
+    ])
+    expect(repaired?.changeSourceRefs?.['apps/application/src/journal/viewer.css']?.length).toBe(1)
   })
 
   it('strips overlong legacy failure text when reading a checkpoint', async () => {

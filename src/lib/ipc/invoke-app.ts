@@ -7,7 +7,10 @@ import type {
   EditorId,
   EditorInfo,
   InstanceRole,
-  ProjectTextFile
+  ProjectTextFile,
+  ScreenshotCapture,
+  ScreenshotCaptureOutcome,
+  ScreenshotShortcutRegistration
 } from '../types'
 import type {
   NativeFloatingPanelBounds,
@@ -113,6 +116,23 @@ export const invokeAppContract = {
   'dialog:pickCloneDestination': {} as Contract<[], string | null>,
   'clipboard:saveImage': {} as Contract<[scope: AttachmentStorageScope], string | null>,
   'clipboard:writeText': {} as Contract<[text: string], void>,
+  /**
+   * Register the system-wide chord that captures a region of the screen.
+   *
+   * A capture has to work while another app owns the keyboard, so the chord is
+   * claimed by the main process instead of by a window, and the keymap resolves
+   * it here on every change. `null` (an unbound entry) releases the chord.
+   */
+  'screenshot:setShortcut': {} as Contract<
+    [accelerator: string | null],
+    ScreenshotShortcutRegistration
+  >,
+  /** Capture a region now, for the in-app fallback when main could not claim the chord. */
+  'screenshot:capture': {} as Contract<[], ScreenshotCaptureOutcome>,
+  /** Copy a capture out of the app's screenshot folder into an attachment scope. */
+  'screenshot:retain': {} as Contract<[scope: AttachmentStorageScope, path: string], string | null>,
+  /** Captures taken while no window was open, so they are attached on reopen. */
+  'screenshot:pending': {} as Contract<[], ScreenshotCapture[]>,
   'clipboard:readText': {} as Contract<[], string>,
   'spellcheck:addWord': {} as Contract<[word: string], boolean>,
   'dialog:pickFile': {} as Contract<[scope?: AttachmentStorageScope], string | null>,

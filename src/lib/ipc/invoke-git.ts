@@ -866,8 +866,11 @@ export const invokeGitContract = {
     import('../types').CloudDeploymentDeployment[]
   >,
   /**
-   * Capped raw log text for a container: one deployment's build log, or one
-   * compose service's runtime output when `serviceName` is given.
+   * One page of a container's log: a deployment's build log, or one compose
+   * service's runtime output when `serviceName` is given. The full log is kept in
+   * main and served tail-first, so nothing is truncated: `before` reads the page
+   * that precedes the one just loaded, and `hasMore`/`cursor` say whether that is
+   * worth asking for.
    */
   'cloudDeploy:containerLog': {} as Contract<
     [
@@ -878,9 +881,22 @@ export const invokeGitContract = {
       /** Resolve through the container's bound account when present. */
       accountId?: string,
       /** One of the container's `logSources` ids (a compose service name). */
-      serviceName?: string
+      serviceName?: string,
+      /** Cursor from the previous page; omitted reads the newest lines. */
+      before?: string,
+      /** Re-read the log from the provider instead of this process's copy. */
+      refresh?: boolean
     ],
-    { containerId: string; deploymentId: string | null; log: string }
+    {
+      containerId: string
+      deploymentId: string | null
+      /** Raw text of this page: a complete JSON array, or whole log lines. */
+      log: string
+      /** True while earlier content exists behind `cursor`. */
+      hasMore: boolean
+      /** Pass back as `before` for the preceding page; null at the head. */
+      cursor: string | null
+    }
   >,
   /** Everything the PR detail view needs, fetched in parallel in one round trip. */
   'pr:bundle': {} as Contract<

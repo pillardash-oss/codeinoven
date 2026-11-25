@@ -130,7 +130,7 @@ const prompt: SendPromptOptions = {
     providerId: '',
     modelId: '',
     thinkingLevel: 'low',
-    permissionLevel: 'auto_review',
+    permissionLevel: 'auto_review'
   },
   text: 'hello',
   attachments: []
@@ -152,6 +152,16 @@ async function createStorage(): Promise<StorageEngine> {
 }
 
 describe.skipIf(process.platform === 'win32')('PersistentCliDriver', () => {
+  it('treats deleting a session with no record as already deleted', async () => {
+    const storage = await createStorage()
+    const driver = new FixtureCliDriver(storage)
+    // An Oven session never has a local CLI record, so the stale-session
+    // cleanup used to throw for a machine that held nothing to destroy.
+    await expect(
+      driver.deleteSession('/project', 'oven-not-a-local-record')
+    ).resolves.toBeUndefined()
+  })
+
   it('persists logical sessions and rehydrates their messages', async () => {
     const storage = await createStorage()
     const driver = new FixtureCliDriver(storage)

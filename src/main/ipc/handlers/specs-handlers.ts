@@ -865,7 +865,10 @@ export function registerSpecHandlers(ctx: IpcHandlerContext): void {
     if (!persisted) throw new Error(`Audit report not found: ${reportId} v${version}`)
     return auditEngine.save({
       ...persisted,
-      content: validateAuditReportContent(content)
+      // A human editing the report can delete a finding while the checks that
+      // cite it stay read-only, so a save must reconcile that drift instead of
+      // refusing to persist the user's edits.
+      content: validateAuditReportContent(content, { tolerateCrossReferenceDrift: true })
     })
   })
   ipcMain.handle(

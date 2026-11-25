@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { INSTANCE_OWNER_ID, isOwnerId } from './process-ownership'
 
 const STORE_VERSION = 1
 /** Coalesce bursty root registrations/unregistrations into a single disk write. */
@@ -11,6 +12,8 @@ export interface OwnedRoot {
   pid: number
   command: string
   cwd: string
+  /** The instance that journaled it. Absent on entries older versions wrote. */
+  owner?: string
   /**
    * True for a process the app did not spawn but adopted as its own (a daemon a
    * harness re-parented to launchd, such as an `adb` fork-server). Adopted
@@ -55,7 +58,7 @@ export class OwnedProcessJournal {
 
   /** Register a root process the app has spawned. */
   register(pid: number, command: string, cwd: string): void {
-    this.setRoot(pid, { pid, command, cwd })
+    this.setRoot(pid, { pid, command, cwd, owner: INSTANCE_OWNER_ID })
   }
 
   /**
@@ -67,7 +70,7 @@ export class OwnedProcessJournal {
    * was launched.
    */
   registerAdopted(pid: number, command: string, cwd = ''): void {
-    this.setRoot(pid, { pid, command, cwd, adopted: true })
+    this.setRoot(pid, { pid, command, cwd, owner: INSTANCE_OWNER_ID, adopted: true })
   }
 
   private setRoot(pid: number, root: OwnedRoot): void {
@@ -228,10 +231,11 @@ function parseStore(raw: string): OwnedRoot[] {
   const parsed: OwnedRoot[] = []
   for (const entry of roots) {
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
-    const { pid, command, cwd, adopted } = entry as {
+    const { pid, command, cwd, owner, adopted } = entry as {
       pid?: unknown
       command?: unknown
       cwd?: unknown
+      owner?: unknown
       adopted?: unknown
     }
     if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) continue
@@ -239,6 +243,7 @@ function parseStore(raw: string): OwnedRoot[] {
       pid,
       command: typeof command === 'string' ? command : '',
       cwd: typeof cwd === 'string' ? cwd : '',
+      ...(isOwnerId(owner) ? { owner } : {}),
       ...(adopted === true ? { adopted: true } : {})
     })
   }

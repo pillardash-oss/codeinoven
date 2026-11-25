@@ -30,6 +30,7 @@ import { openInBrowser } from '$lib/open-in-browser'
 import { isTurnCompleted, type SubagentPart } from '../thread-turn-parts'
 import { threadScrollPositions } from '../thread-scroll-memory'
 import type { ComposerStackSlot } from './ThreadView-types'
+import type { QueuedRowSummary } from '../ComposerQueuedCard/queued-row'
 import type { ThreadView } from './ThreadView-board.svelte'
 import { previewUrl } from './thread-view-preview-url'
 import { BoardUnit } from '$lib/components/board-unit'
@@ -342,6 +343,16 @@ export class ThreadViewUnmirroredTraceStartTime extends BoardUnit<ThreadView> {
       : null
   )
 
+  /** The parallel preparation steps behind that note, when the app is doing more
+   *  than one thing on the Oven at once: install the harness, install git, clone
+   *  the checkout. Each one reports its own state, so the reader can see which is
+   *  still working when one of them is slower than the others. */
+  workingStatusSteps = $derived(
+    this.root.handleAgentEvent.providerStatus?.state === 'working'
+      ? (this.root.handleAgentEvent.providerStatus.steps ?? null)
+      : null
+  )
+
   /** True once the saved position (or initial bottom) has been applied. */
   scrollRestored = $state(false)
 
@@ -357,24 +368,22 @@ export class ThreadViewUnmirroredTraceStartTime extends BoardUnit<ThreadView> {
     return status === 'completed' || status === 'failed' || status === 'interrupted'
   }
 
-  /** Count of messages waiting in the thread's FIFO queue (from the store). */
-  queuedCount = $derived(
-    rendererRecovery.queuedMessageCount(
-      this.root.handleAgentEvent.thread.projectId,
-      this.root.handleAgentEvent.thread.id
-    )
-  )
-
-  /** The rest of the queue behind the head entry, listed inside its card, with
-   *  how many files each message behind the head carries. */
-  queuedNextMessages = $derived(
+  /** The queue behind the running turn, head (next to send) first: what each
+   *  message says, how many files it carries, and what holds it back. The head's
+   *  own detail is drawn from the card's props, but it is a row of the same list
+   *  because the reader reorders the whole queue, the head included. */
+  queuedRows = $derived<QueuedRowSummary[]>(
     rendererRecovery
       .queuedMessagesFor(
         this.root.handleAgentEvent.thread.projectId,
         this.root.handleAgentEvent.thread.id
       )
-      .slice(1)
-      .map((entry) => ({ id: entry.id, text: entry.text, attachments: entry.attachments.length }))
+      .map((entry) => ({
+        id: entry.id,
+        text: entry.text,
+        attachments: entry.attachments.length,
+        waitsOn: entry.startAfterThreads.length
+      }))
   )
 
   /** True when any card sits on the composer's top edge, so the composer's top
@@ -461,7 +470,6 @@ export class ThreadViewUnmirroredTraceStartTime extends BoardUnit<ThreadView> {
   deleteQueuedMessage(): void {
     this.root.steerQueuedMessage.clearQueuedState()
   }
-
   async openCheckpointFile(checkpointId: string, path: string): Promise<void> {
     await projectFilesWorkspace.loadDirectory(this.root.handleAgentEvent.thread.projectId, '')
     contextSidebarState.openFiles(

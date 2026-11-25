@@ -21,6 +21,7 @@ import {
   type AssistantKnowledgeLoss
 } from '$lib/components/assistant/assistant-recap'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+import { openThreadMonitorFor } from '$lib/stores/thread-monitor-open'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { toast } from 'svelte-sonner'
 import { reportError } from '$lib/stores/app-errors.svelte'
@@ -725,6 +726,15 @@ export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
     // after it, and it is a rail gesture rather than a harness command.
     if (action.id === 'command:browser') {
       this.root.editVideoNote.openThreadBrowser()
+      return
+    }
+
+    // The device preview is a panel too, and the one the agent otherwise docks
+    // on its own: choosing it reveals the device this project already mirrors,
+    // or opens the chooser so a person picks the emulator, simulator or phone.
+    if (action.id === 'command:monitor') {
+      const { projectId, id } = this.root.handleAgentEvent.thread
+      openThreadMonitorFor(projectId, id)
       return
     }
 

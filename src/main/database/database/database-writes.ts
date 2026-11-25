@@ -1,5 +1,5 @@
 import { Logger } from '../../system/logger'
-import type { DatabaseWorker } from '../database-worker'
+import type { DatabaseWorker, WorkerLane } from '../database-worker'
 import type { HistoryAppendArgs } from '../repositories/history-repo'
 
 /** Everything a batched write needs from the database it belongs to. */
@@ -33,11 +33,11 @@ export class DatabaseWrites {
   async executeViaWorker(
     sql: string,
     params: unknown[],
-    options: { allowPrimaryFallback?: boolean } = {}
+    options: { allowPrimaryFallback?: boolean; lane?: WorkerLane } = {}
   ): Promise<{ ok: boolean; error?: string }> {
     const worker = this.host.getWorker()
     if (worker?.isRunning()) {
-      const response = await worker.execute(sql, params)
+      const response = await worker.execute(sql, params, options.lane)
       if (response.ok) return { ok: true }
       if (options.allowPrimaryFallback === false)
         return { ok: false, error: response.error ?? 'Database worker execution failed' }
@@ -64,11 +64,12 @@ export class DatabaseWrites {
    * batching guarantee.
    */
   async transactionViaWorker(
-    statements: Array<{ sql: string; params: unknown[] }>
+    statements: Array<{ sql: string; params: unknown[] }>,
+    options: { lane?: WorkerLane } = {}
   ): Promise<{ ok: boolean; error?: string }> {
     const worker = this.host.getWorker()
     if (worker?.isRunning()) {
-      const response = await worker.transaction(statements)
+      const response = await worker.transaction(statements, options.lane)
       if (response.ok) return { ok: true }
       if (response.error) {
         Logger.error(

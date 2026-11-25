@@ -482,7 +482,7 @@ describe('CoolifyProvider', () => {
       expect(log).toBe('older build log')
     })
 
-    it('caps an oversized deployment log at the byte cap', async () => {
+    it('returns an oversized deployment log whole: paging happens above it', async () => {
       const oversized = 'x'.repeat(250_000)
       fetchMock.mockResolvedValueOnce(
         jsonResponse([{ deployment_uuid: 'dep-1', status: 'finished', logs: oversized }])
@@ -490,10 +490,10 @@ describe('CoolifyProvider', () => {
 
       const log = await makeProvider().getLogs('app-1')
 
-      expect(log).toHaveLength(200_000)
+      expect(log).toHaveLength(250_000)
     })
 
-    it('keeps the newest entries when an oversized JSON log is trimmed', async () => {
+    it('returns every entry of an oversized JSON log, including the first', async () => {
       const entries = Array.from({ length: 4000 }, (_, index) => ({
         output: `run ${index}: ${'y'.repeat(40)}`,
         type: 'stdout',
@@ -506,22 +506,21 @@ describe('CoolifyProvider', () => {
 
       const log = await makeProvider().getLogs('app-1')
 
-      expect(log.length).toBeLessThanOrEqual(200_000)
+      expect(log).toBe(oversized)
       const kept: unknown = JSON.parse(log)
-      if (!Array.isArray(kept)) throw new Error('the trimmed log must stay a JSON array')
-      const last = kept[kept.length - 1] as { output?: string }
-      expect(last.output).toBe(`run 3999: ${'y'.repeat(40)}`)
-      expect(log.startsWith('[')).toBe(true)
+      if (!Array.isArray(kept)) throw new Error('the log must stay a JSON array')
+      expect(kept).toHaveLength(4000)
+      expect((kept[0] as { output?: string }).output).toBe(`run 0: ${'y'.repeat(40)}`)
     })
 
-    it('caps an oversized runtime log at the byte cap', async () => {
+    it('returns an oversized runtime log whole', async () => {
       const oversized = 'x'.repeat(250_000)
       fetchMock.mockResolvedValueOnce(jsonResponse([]))
       fetchMock.mockResolvedValueOnce(jsonResponse({ logs: oversized }))
 
       const log = await makeProvider().getLogs('app-1')
 
-      expect(log).toHaveLength(200_000)
+      expect(log).toHaveLength(250_000)
     })
   })
 

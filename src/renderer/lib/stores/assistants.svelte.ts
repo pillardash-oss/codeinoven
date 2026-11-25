@@ -523,6 +523,23 @@ class AssistantsState {
     return invoke('assistant:setTaskScheduled', threadId, scheduled)
   }
 
+  /**
+   * Every task an assistant owns, newest created first, read from the database.
+   * A task Don scheduled belongs to the assistant in charge like any other, so this
+   * is the complete set the Schedule tab acts on, not only the threads this window
+   * happens to hold.
+   */
+  async listTasks(assistantId: string): Promise<Thread[]> {
+    const tasks = await invoke('assistant:listTasks', assistantId)
+    return [...tasks].sort((a, b) => b.createdAt - a.createdAt)
+  }
+
+  /** Turn the whole clock off, or back on, for every task of one assistant. */
+  async setTasksScheduled(assistantId: string, scheduled: boolean | null): Promise<Thread[]> {
+    const tasks = await invoke('assistant:setTasksScheduled', assistantId, scheduled)
+    return [...tasks].sort((a, b) => b.createdAt - a.createdAt)
+  }
+
   async dismissMissedRun(id: string): Promise<void> {
     await invoke('assistant:dismissMissedRun', id)
   }

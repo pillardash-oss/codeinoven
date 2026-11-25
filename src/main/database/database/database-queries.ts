@@ -7,11 +7,24 @@ import {
   type ProviderDeltaSyncResult
 } from '../repositories/agent-message-repo'
 import { raceWorkerQuery, runLocalBoundedQuery } from './database-sql-fallbacks'
+import type { QueryLane, WorkerLane } from '../database-worker'
+
+/** The worker's own lanes only know two names: the async lane is a different
+ *  worker, so a read that reaches a worker is either interactive or background. */
+function backgroundOrInteractive(lane: QueryLane | undefined): WorkerLane | undefined {
+  return lane === 'background' ? 'background' : lane === undefined ? undefined : 'interactive'
+}
 
 /** Everything a worker-backed read needs from the database it belongs to. */
 export interface DatabaseQueriesHost {
   /** The running maintenance worker, or null when this database has none. */
   getWorker(): DatabaseWorker | null
+  /**
+   * The async lane's own worker and read connection, or null when this database
+   * has none (an in-memory test database). Reads routed here cannot occupy the
+   * connection a click is waiting on.
+   */
+  getAsyncWorker(): DatabaseWorker | null
   /** Primary-connection read, used only when no worker is available. */
   all<T = Record<string, unknown>>(sql: string, ...params: unknown[]): T[]
   /** Delta sync on the primary connection, used only when no worker is available. */
@@ -50,12 +63,22 @@ export class DatabaseQueries {
    * with what it already has. A deadline never falls back to the primary
    * connection, because answering "slowly" on the main thread is exactly the
    * freeze the deadline exists to prevent.
+   *
+   * `lane` is the queue the read joins. A whole-project maintenance scan names
+   * itself `background` so it runs only while nothing interactive is waiting;
+   * everything a person can cause stays on the default interactive lane.
    */
   async queryViaWorker(
     sql: string,
     params: unknown[],
     maxRows: number,
-    options: { allowPrimaryFallback?: boolean; deadlineMs?: number } = {}
+    options: {
+      allowPrimaryFallback?: boolean
+      deadlineMs?: number
+      /** Where this read runs. `async` is a lane of its own with its own
+       *  connection: long, never click-blocking, never deferrable. */
+      lane?: QueryLane
+    } = {}
   ): Promise<{
     ok: boolean
     rows: Record<string, unknown>[]
@@ -63,9 +86,17 @@ export class DatabaseQueries {
     error?: string
     timedOut?: boolean
   }> {
-    const worker = this.host.getWorker()
+    const lane = options.lane
+    // The async lane runs on its own thread and connection, so a long read there
+    // cannot make a click wait. It asks for the interactive queue of ITS worker,
+    // which is a single queue: there is nothing on that thread to be behind.
+    const asyncWorker = lane === 'async' ? this.host.getAsyncWorker() : null
+    const worker = asyncWorker?.isRunning() ? asyncWorker : this.host.getWorker()
     if (worker?.isRunning()) {
-      const response = await raceWorkerQuery(worker.query(sql, params, maxRows), options.deadlineMs)
+      const response = await raceWorkerQuery(
+        worker.query(sql, params, maxRows, asyncWorker ? 'interactive' : backgroundOrInteractive(lane)),
+        options.deadlineMs
+      )
       if (response === null)
         return {
           ok: false,

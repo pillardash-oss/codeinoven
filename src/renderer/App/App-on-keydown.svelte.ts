@@ -37,6 +37,7 @@ import { scopeState } from '$lib/stores/scope.svelte'
 import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
 import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
 import type { ActionSelection } from '$lib/actions'
+import { hasScreenshotTarget } from '$lib/screenshot/screenshot-capture'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
   INBOX_PROJECT_ID,
@@ -582,6 +583,18 @@ export class AppOnKeydown extends BoardUnit<App> {
   /** Global application shortcuts. */
   onKeydown(e: KeyboardEvent): void {
     const isMac = window.api?.windowInfo?.platform === 'darwin'
+    if (keymapState.matches('screenshot-region', e)) {
+      // The normal path is the system-wide chord claimed by main. This is the
+      // fallback for the one state where that claim could not be made (another
+      // app owns the chord), and main debounces a duplicate trigger.
+      // With no composer mounted there is no thread to attach to, so the chord
+      // does nothing at all.
+      if (!hasScreenshotTarget()) return
+      e.preventDefault()
+      if (e.repeat) return
+      void invoke('screenshot:capture').catch(() => undefined)
+      return
+    }
     if (keymapState.matches('app-quit-direct', e)) {
       // Quit for real, bypassing background mode's park to the menu bar. Main
       // runs the shutdown pipeline, so a turn still running settles as a

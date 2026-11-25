@@ -201,6 +201,15 @@ export interface BrowserAgentTabClaim {
   projectId: string
   /** The thread whose agent holds this tab. */
   threadId: string
+  /**
+   * When an agent last worked on this tab, or 0 when none has in this process.
+   *
+   * A page an agent is using is a page nobody may put to sleep, and this is the
+   * only side that knows when the agent last touched it. It rides the claim so
+   * the strip learns about an agent's use from the update it already receives
+   * instead of polling main for it.
+   */
+  lastUsedAt: number
 }
 
 /** Navigation state mirrored from an app-scoped browser WebContentsView. */
@@ -259,7 +268,12 @@ export interface BrowserPageState {
  * design without offering it for every page.
  */
 export interface BrowserDesignTab {
-  /** Project-relative folder being served, e.g. `.cio/designs/hero`. */
+  /**
+   * The folder being served, e.g. `.cio/designs/hero`.
+   *
+   * A design kept in another checkout of the project (a scope worktree) is spelled
+   * by its absolute path, like every entry the design board lists.
+   */
   directory: string
   /** Loopback origin the folder is served on, e.g. `http://127.0.0.1:51234`. */
   origin: string

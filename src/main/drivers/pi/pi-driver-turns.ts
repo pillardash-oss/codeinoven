@@ -1,11 +1,9 @@
-import { createReadStream } from 'node:fs'
-import { createInterface } from 'node:readline'
 import type { AgentEvent, AgentMessage, SessionAgentEvent } from '../../../lib/types'
 import { CIO_SUBAGENT_STREAM_STATUS_KEY } from '../../../lib/core-tools'
 import { parseRecord } from '../../../lib/agent-interactions'
 import type { PersistentCliSession } from '../persistent-cli-driver'
 import type { CliLineParseContext, CliLineParseResult } from '../persistent-cli-driver'
-import type { PiRpcClient } from '../pi-rpc-client'
+import type { PiSessionClient } from './pi-client'
 import { PI_COMPACTION_EXTENSION_KEY } from '../pi-compaction-extension'
 import {
   PI_STATUS_COMPACTING,
@@ -16,7 +14,7 @@ import {
 import { PI_USAGE_EXTENSION_KEY } from '../pi-usage-extension'
 import { Logger } from '../../system/logger'
 import { isOversizedRequestError } from './pi-errors'
-import { findNativePiSessionFile, reconcileNativeCompactions } from './pi-native-session'
+import { piNativeTranscriptSourceFor, reconcileNativeCompactions } from './pi-native-session'
 import { latestPiTurnIndex, mapPiRecord } from './pi-stream-fold'
 import type { PiTurnState } from './pi-stream-types'
 import { messageTimestamp, numberValue, record, stringValue } from './pi-values'
@@ -35,6 +33,37 @@ const SILENT_CONTINUE_MAX_ATTEMPTS = 10
 /** Compact-and-continue recoveries per turn for oversized request bodies. */
 const OVERSIZED_COMPACT_MAX_ATTEMPTS = 3
 
+/**
+ * How long an app-issued prompt waits for pi's compaction to finish.
+ *
+ * `compact` answers once the transcript is rewritten, but pi's compaction
+ * controller can still be armed, and a prompt issued in that window is refused
+ * with "Cannot submit a prompt while compaction is in progress". Waiting is the
+ * fix: being refused used to send the recovery down the fresh-process path,
+ * which aborted the compaction the user had already paid for and let the resumed
+ * session cross the same threshold again.
+ */
+const COMPACTION_SETTLE_BUDGET_MS = 5 * 60_000
+
+/** Poll gap while waiting for that compaction. */
+const COMPACTION_SETTLE_POLL_MS = 500
+
+/**
+ * Page checkpoints in a row that may run before the turn must show progress.
+ *
+ * Every checkpoint is a full summarization of the session, so a checkpoint that
+ * resumes into another checkpoint with no assistant text between them is a
+ * stall that costs real tokens per round. One repeat is tolerated; the second
+ * ends the turn with a visible error instead of compacting the session forever.
+ */
+const CHECKPOINT_STALL_LIMIT = 2
+
+/** True when pi refused the prompt because a compaction is still running. */
+function isCompactionBusy(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /compaction is in progress/iu.test(message)
+}
+
 /** Everything the turn lifecycle needs from the driver. */
 export interface PiTurnLifecycleHost {
   readonly agentDirectory: string | undefined
@@ -43,10 +72,10 @@ export interface PiTurnLifecycleHost {
   mergeMessages(session: PersistentCliSession, messages: AgentMessage[]): void
   applySessionEvent(session: PersistentCliSession, event: AgentEvent): void
   emitEvent(event: AgentEvent): void
-  client(sessionId: string): PiRpcClient | undefined
+  client(sessionId: string): PiSessionClient | undefined
   projectOf(sessionId: string): string | undefined
-  ensureClient(projectPath: string, sessionId: string): Promise<PiRpcClient>
-  settledClient(sessionId: string): Promise<PiRpcClient | undefined>
+  ensureClient(projectPath: string, sessionId: string): Promise<PiSessionClient>
+  settledClient(sessionId: string): Promise<PiSessionClient | undefined>
   disposeClient(sessionId: string): void
   touchActivity(sessionId: string): void
   refreshSessionUsage(session: PersistentCliSession): Promise<void>
@@ -57,6 +86,11 @@ export interface PiTurnLifecycleHost {
   /** Clear the mid-turn usage-refresh throttle at turn end. */
   clearUsageThrottle(sessionId: string): void
   markCompactionReady(sessionId: string): void
+  /**
+   * Report a turn starting or settling, so a host's task-manager row can tell
+   * work in flight from a session kept warm for the next prompt.
+   */
+  noteTurnBusy?(sessionId: string, busy: boolean): void
   handleUsageStatus(record: Record<string, unknown>, sessionId: string): Promise<void>
   handleSubagentStreamStatus(record: Record<string, unknown>, sessionId: string): void
 }
@@ -88,6 +122,14 @@ export class PiTurnLifecycle {
    * other path keeps its plain `message.completed`/finalization behavior.
    */
   private readonly silentContinues = new Map<string, PiSilentContinueState>()
+  /**
+   * Consecutive page checkpoints per session that produced no assistant text.
+   *
+   * Reset by a real assistant completion, so a long agentic turn that checkpoints
+   * several times with work in between is untouched; only a checkpoint that
+   * resumes into another checkpoint is counted as a stall.
+   */
+  private readonly checkpointStalls = new Map<string, number>()
 
   constructor(private readonly host: PiTurnLifecycleHost) {}
 
@@ -97,10 +139,22 @@ export class PiTurnLifecycle {
 
   addActiveTurn(sessionId: string): void {
     this.activeTurns.add(sessionId)
+    this.host.noteTurnBusy?.(sessionId, true)
   }
 
   removeActiveTurn(sessionId: string): void {
     this.activeTurns.delete(sessionId)
+    this.host.noteTurnBusy?.(sessionId, false)
+  }
+
+  /**
+   * Forget this session's checkpoint stall count.
+   *
+   * A new user turn is a fresh start, so a count earned by the previous turn's
+   * checkpoints must not end this one.
+   */
+  clearCheckpointStalls(sessionId: string): void {
+    this.checkpointStalls.delete(sessionId)
   }
 
   /** True while pi is retrying the session's last request (a live run). */
@@ -156,15 +210,16 @@ export class PiTurnLifecycle {
 
   /** Forget every turn mark of a deleted or parked session. */
   deleteSessionState(sessionId: string): void {
-    this.activeTurns.delete(sessionId)
+    this.removeActiveTurn(sessionId)
     this.turnStates.delete(sessionId)
     this.silentContinues.delete(sessionId)
+    this.checkpointStalls.delete(sessionId)
     this.reconcileAnswers.delete(sessionId)
   }
 
   /** Drop every session's turn marks (driver disposal). */
   clearAll(): void {
-    this.activeTurns.clear()
+    for (const sessionId of [...this.activeTurns]) this.removeActiveTurn(sessionId)
     this.turnStates.clear()
     this.reconcileAnswers.clear()
     this.silentContinues.clear()
@@ -227,27 +282,24 @@ export class PiTurnLifecycle {
           session.nativeSessionId
         ) {
           try {
-            const file = await findNativePiSessionFile(
-              projectPath,
-              session.nativeSessionId,
-              this.host.agentDirectory
-            )
-            if (file) {
-              const input = createReadStream(file)
-              const lines = createInterface({ input, crlfDelay: Infinity })
-              try {
-                for await (const line of lines) {
-                  const entry = parseRecord(line)
-                  if (entry?.['id'] === keptId) {
-                    const message = parseRecord(entry['message'])
-                    if (message) record['firstKeptCreatedAt'] = messageTimestamp(message)
-                    break
-                  }
-                  await new Promise<void>((resolve) => setImmediate(resolve))
+            // Through the transcript source, not this machine's filesystem: on an
+            // Oven the transcript being read lives on that machine, and reading a
+            // local path there silently yields nothing.
+            const source = piNativeTranscriptSourceFor(projectPath, this.host.agentDirectory)
+            const files = await source.list(projectPath)
+            const fileName = files
+              ?.filter((name) => name.endsWith(`_${session.nativeSessionId}.jsonl`))
+              .sort()
+              .at(-1)
+            const text = fileName ? await source.read(projectPath, fileName) : null
+            if (text) {
+              for (const line of text.split(/\r?\n/u)) {
+                const entry = parseRecord(line)
+                if (entry?.['id'] === keptId) {
+                  const message = parseRecord(entry['message'])
+                  if (message) record['firstKeptCreatedAt'] = messageTimestamp(message)
+                  break
                 }
-              } finally {
-                lines.close()
-                input.destroy()
               }
             }
           } catch (error) {
@@ -273,6 +325,10 @@ export class PiTurnLifecycle {
               state.attempts = 0
               this.silentContinues.set(session.id, state)
             }
+            // A completion with content is progress, so the checkpoint stall
+            // count restarts: only checkpoints that keep following each other
+            // with nothing in between are the loop this guards against.
+            this.checkpointStalls.delete(session.id)
             // The provider accepted a request again   stand the oversized
             // recovery context stripping down so future turns send full media.
             void this.host.publishOversizedRecovery(session.id, false)
@@ -355,7 +411,7 @@ export class PiTurnLifecycle {
           if (this.turnStates.get(session.id)?.compacting) return
           if (record['aborted'] === true) this.silentContinues.delete(session.id)
           else if (this.beginSilentContinue(session)) return
-          this.activeTurns.delete(session.id)
+          this.removeActiveTurn(session.id)
           void this.host.refreshSessionUsage(session).finally(() => {
             void this.finishTurn(session)
           })
@@ -370,7 +426,7 @@ export class PiTurnLifecycle {
   async compactSession(
     session: PersistentCliSession,
     projectPath: string,
-    client: PiRpcClient
+    client: PiSessionClient
   ): Promise<void> {
     const sessionId = session.id
     // pi's `compact` RPC aborts any active run and then compacts, so it works
@@ -386,7 +442,7 @@ export class PiTurnLifecycle {
       ),
       compacting: true
     })
-    this.activeTurns.add(sessionId)
+    this.addActiveTurn(sessionId)
     // pi's `compact` RPC aborts any active run before compacting. When a turn
     // was live (or a steer/follow-up was queued into the compaction window),
     // the work must resume after the checkpoint instead of silently dying:
@@ -414,6 +470,7 @@ export class PiTurnLifecycle {
         // continuation run's `agent_settled` finalizes the turn normally.
         const settled = this.turnStates.get(sessionId)
         if (settled) this.turnStates.set(sessionId, { ...settled, compacting: false })
+        if (!(await this.settleCompaction(client, sessionId))) return
         continuationStarted = true
         await client.prompt(
           'Continue from the Last working trace in the checkpoint. Complete the current step, then the next unfinished step.'
@@ -427,7 +484,7 @@ export class PiTurnLifecycle {
       const state = this.turnStates.get(sessionId)
       if (state) this.turnStates.set(sessionId, { ...state, compacting: false })
       if (!continuationStarted && this.activeTurns.has(sessionId)) {
-        this.activeTurns.delete(sessionId)
+        this.removeActiveTurn(sessionId)
         await this.host.refreshSessionUsage(session).finally(() => void this.finishTurn(session))
       }
     }
@@ -436,6 +493,14 @@ export class PiTurnLifecycle {
   /** Route app-owned extension status records and compaction requests. */
   handleExtensionStatus(record: Record<string, unknown>, sessionId: string): void {
     if (stringValue(record['statusKey']) === PI_COMPACTION_EXTENSION_KEY) {
+      // A checkpoint reports plain 'progress' while it summarizes transcript
+      // pages one call at a time. That is minutes of legitimate work on a large
+      // session, so it belongs in the log: without it a checkpoint in flight and
+      // a hung one look identical.
+      if (stringValue(record['statusText']) === 'progress') {
+        Logger.dev('Pi checkpoint is summarizing transcript pages', { sessionId })
+        return
+      }
       const request = parseRecord(record['statusText'])
       if (request?.['type'] === 'ready') this.host.markCompactionReady(sessionId)
       if (request?.['type'] === 'threshold') {
@@ -496,7 +561,27 @@ export class PiTurnLifecycle {
     const ticket = { resume }
     this.pageCompactions.set(sessionId, ticket)
     this.turnStates.set(sessionId, { ...turn, compacting: true })
-    this.activeTurns.add(sessionId)
+    this.addActiveTurn(sessionId)
+    // A checkpoint that runs into another checkpoint, with no assistant text in
+    // between, is compacting the session without making progress. Each round is
+    // a full summarization billed to the user, so a repeated one ends the turn
+    // with a visible error instead of starting another.
+    const stalls = (this.checkpointStalls.get(sessionId) ?? 0) + 1
+    this.checkpointStalls.set(sessionId, stalls)
+    if (stalls > CHECKPOINT_STALL_LIMIT) {
+      this.pageCompactions.delete(sessionId)
+      this.turnStates.set(sessionId, { ...turn, compacting: false })
+      this.removeActiveTurn(sessionId)
+      this.checkpointStalls.delete(sessionId)
+      const session = await this.host.requireSession(projectPath, sessionId).catch(() => null)
+      if (session) {
+        this.failSilentContinue(
+          session,
+          'Pi kept checkpointing this session without answering. The context was compacted again and again, so the turn was stopped instead of spending another summary on it.'
+        )
+      }
+      return
+    }
     const current = () => this.pageCompactions.get(sessionId) === ticket
     try {
       // Native overflow recovery may already own the session. Let it finish
@@ -517,12 +602,16 @@ export class PiTurnLifecycle {
       if (latest) this.turnStates.set(sessionId, { ...latest, compacting: false })
       if (after?.['isStreaming'] === true) return
       if (ticket.resume || (numberValue(after?.['pendingMessageCount']) ?? 0) > 0) {
+        // Never prompt over a compaction pi has not finished: the prompt is
+        // refused, and the refusal used to restart the whole cycle.
+        if (!(await this.settleCompaction(client, sessionId))) return
+        if (!current()) return
         await client.prompt(
           'Continue from the Last working trace in the checkpoint. Complete the current step, then the next unfinished step.'
         )
       } else {
         const session = await this.host.requireSession(projectPath, sessionId)
-        this.activeTurns.delete(sessionId)
+        this.removeActiveTurn(sessionId)
         await this.host.refreshSessionUsage(session)
         await this.finishTurn(session)
       }
@@ -677,6 +766,12 @@ export class PiTurnLifecycle {
     // session (see `ensureClient`), so wait for any in-flight bootstrap.
     const live = await this.host.settledClient(session.id)
     if (live) {
+      // A continuation is a prompt, so it must not land inside a compaction pi
+      // still owns; that refusal is a wait, not a transport failure.
+      if (!(await this.settleCompaction(live, session.id))) {
+        this.failSilentContinue(session, 'Pi never finished compacting this session')
+        return
+      }
       try {
         await live.prompt(text)
         return
@@ -686,14 +781,30 @@ export class PiTurnLifecycle {
           error: error instanceof Error ? error.message : String(error)
         })
       }
-      // The compaction lane can still be settling when the continuation is
-      // issued; a short delay clears the transient busy state.
-      await new Promise((resolve) => setTimeout(resolve, 300))
-      try {
-        await live.prompt(text)
-        return
-      } catch {
-        // Fall through to the fresh-process recovery.
+      const refusal = await live.prompt(text).then(
+        () => null,
+        (error: unknown) => error
+      )
+      if (refusal === null) return
+      Logger.error('Pi continuation prompt rejected by the live client', {
+        sessionId: session.id,
+        error: refusal instanceof Error ? refusal.message : String(refusal)
+      })
+      // A compaction that started between the wait and the prompt (pi's own
+      // threshold run) is the one refusal worth waiting for rather than
+      // discarding: the compaction is already paid for, and disposing the client
+      // would abort it and let the resumed session compact all over again. Only
+      // the refusal caused by a compaction in progress takes this branch.
+      if (isCompactionBusy(refusal) && (await this.settleCompaction(live, session.id))) {
+        try {
+          await live.prompt(text)
+          return
+        } catch (error) {
+          Logger.error('Pi continuation retry after a compaction was refused too', {
+            sessionId: session.id,
+            error: error instanceof Error ? error.message : String(error)
+          })
+        }
       }
     }
     if (projectPath) {
@@ -721,7 +832,7 @@ export class PiTurnLifecycle {
    */
   private async compactAndContinue(
     session: PersistentCliSession,
-    client: PiRpcClient,
+    client: PiSessionClient,
     state: PiSilentContinueState
   ): Promise<void> {
     const projectPath = this.host.projectOf(session.id)
@@ -769,6 +880,12 @@ export class PiTurnLifecycle {
     // keeps the originals. Disarmed again on the first successful completion.
     await this.host.publishOversizedRecovery(session.id, true)
     try {
+      // The prompt starts the continuation run, so it must not land in the
+      // window where pi still owns the compaction.
+      if (!(await this.settleCompaction(client, session.id))) {
+        this.failSilentContinue(session, 'Pi never finished compacting this session')
+        return
+      }
       await client.prompt('Continue.')
     } catch (error) {
       // Keep the recovery armed: the fresh-process retry below still needs the
@@ -782,6 +899,27 @@ export class PiTurnLifecycle {
     }
   }
 
+  /**
+   * Wait until pi is done compacting, so a prompt can be issued over a settled
+   * session. Returns false when the compaction outlasted its budget.
+   *
+   * The state read is bounded and cheap, and a failed read counts as settled:
+   * a client that cannot answer is a transport problem this wait cannot fix, and
+   * the prompt that follows surfaces it as one.
+   */
+  private async settleCompaction(client: PiSessionClient, sessionId: string): Promise<boolean> {
+    const deadline = Date.now() + COMPACTION_SETTLE_BUDGET_MS
+    for (;;) {
+      const state = await client.getState().then(record, () => null)
+      if (state?.['isCompacting'] !== true) return true
+      if (Date.now() >= deadline) {
+        Logger.error('Pi compaction never settled; refusing to prompt over it', { sessionId })
+        return false
+      }
+      await new Promise((resolve) => setTimeout(resolve, COMPACTION_SETTLE_POLL_MS))
+    }
+  }
+
   /** Surface a silent continue that could not be started as a real error. */
   private failSilentContinue(session: PersistentCliSession, error: string): void {
     // Logged at error level: a silent-continue failure kills a real turn, and
@@ -792,7 +930,7 @@ export class PiTurnLifecycle {
       error
     })
     this.silentContinues.delete(session.id)
-    this.activeTurns.delete(session.id)
+    this.removeActiveTurn(session.id)
     this.host.emitEvent({
       type: 'session.error',
       sessionId: session.id,

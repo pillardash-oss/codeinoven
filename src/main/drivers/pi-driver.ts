@@ -4,7 +4,8 @@ import type {
   AgentMessage,
   AgentRateLimitWindow,
   AgentUsageCredits,
-  ProviderCatalog
+  ProviderCatalog,
+  AgentPart
 } from '../../lib/types'
 import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { buildProcessEnvironmentAsync } from './cli-environment'
@@ -17,6 +18,7 @@ import { DevStepClock } from '../system/dev-timing'
 import type {
   CompactionFallbackContext,
   GenerateTitleOptions,
+  HandoffWorkerSession,
   HarnessCapabilities,
   SendPromptOptions,
   SteerPromptOptions
@@ -30,18 +32,31 @@ import {
   type PersistentCliSession,
   type TitleModelCandidate
 } from './persistent-cli-driver'
-import { PiRpcClient, type PiRpcImage } from './pi-rpc-client'
+import { type PiRpcImage } from './pi-rpc-client'
+import type { PiSessionClient } from './pi/pi-client'
 import { runHarnessCommand } from './harness-runtime'
 
 import { record, withTimeout } from './pi/pi-values'
 import { composePiAttachments } from './pi/pi-prompt-assembly'
+import { attachmentScratchDirectory } from './attachment-data-url'
 import { PiModelCatalog } from './pi/pi-driver-models'
 import { PiSubagentStreams } from './pi/pi-driver-subagents'
 import { PiUiRequestBoard } from './pi/pi-driver-ui-requests'
 import { PiUsageTracker } from './pi/pi-driver-usage'
 import { PiNativeSessions } from './pi/pi-driver-native-session'
-import { PiCioRuntimeFiles } from './pi/pi-driver-cio-files'
-import { PiRpcSessions } from './pi/pi-driver-rpc'
+import {
+  installRemotePiNativeTranscriptSource,
+  isPiNativeTranscriptSource,
+  type PiNativeTranscriptSource
+} from './pi/pi-native-session'
+import {
+  PiCioRuntimeFiles,
+  PiCioSessionStorages,
+  type PiCioFilesStorage
+} from './pi/pi-driver-cio-files'
+import { PiRpcSessions, type PiRpcLaunch } from './pi/pi-driver-rpc'
+import { piHostSupervisor } from '../agents/pi-host-runtime'
+import { PiHostClient } from './pi/pi-host-client'
 import { PiTurnLifecycle } from './pi/pi-driver-turns'
 
 export { isContinuableFinishReasonError, isOversizedRequestError } from './pi/pi-errors'
@@ -118,6 +133,22 @@ function isPiInputRefusal(error: unknown): boolean {
 }
 
 /**
+ * The transcript source a launcher carries.
+ *
+ * A launcher that starts every session's pi process on another machine also
+ * knows where that machine keeps pi's own session files, so the Oven runtime
+ * attaches the matching source to the launcher it supplies. Without one the
+ * sessions read pi's transcripts here, exactly as they always have.
+ */
+function launcherTranscripts(
+  launch: PiRpcLaunch | undefined
+): PiNativeTranscriptSource | undefined {
+  if (!launch || !('nativeTranscripts' in launch)) return undefined
+  const carried: unknown = launch.nativeTranscripts
+  return isPiNativeTranscriptSource(carried) ? carried : undefined
+}
+
+/**
  * Driver for Pi's headless agent. Unlike the former in-process SDK path, this
  * shells out to the `pi` CLI the user installs on PATH (like Claude Code), so
  * the heavy Pi runtime is never bundled. It drives `pi --mode rpc` over stdio
@@ -165,6 +196,9 @@ export class PiDriver extends PersistentCliDriver {
   private readonly usage: PiUsageTracker
   private readonly nativeSessions: PiNativeSessions
   private readonly cioFiles: PiCioRuntimeFiles
+  /** Which file surface each session's handoff files land on: the app engine
+   *  unless the Oven layer routed that session to a remote machine. */
+  private readonly sessionStorages: PiCioSessionStorages
   /** This driver's Pi agent directory when it serves a managed account
    *  container; undefined for the harness-global account. Every catalog input
    *  (credentials, native provider config) lives inside that directory, so the
@@ -179,9 +213,43 @@ export class PiDriver extends PersistentCliDriver {
     storage: StorageEngine,
     private readonly baseUrlProviders?: BaseUrlProviderService,
     private readonly secretVault?: SecretsService,
-    private readonly accountEnvironment: NodeJS.ProcessEnv = {}
+    private readonly accountEnvironment: NodeJS.ProcessEnv = {},
+    /**
+     * Where this driver's sessions start their Pi peer.
+     *
+     * Absent, every session spawns `pi --mode rpc` here, exactly as it always
+     * has. A driver built to serve one machine (an Oven) carries the launcher
+     * that starts each session's peer there, so the same session bootstrap,
+     * turn handling, RPC protocol and teardown run against a remote peer. The
+     * launcher belongs to the driver, never to one turn: the driver this
+     * machine's local pi turns use must not carry one, or they would be started
+     * somewhere else too.
+     */
+    launch?: PiRpcLaunch,
+    /**
+     * Where this driver's sessions keep pi's own native transcripts.
+     *
+     * Absent, every session resumes and reads its transcript on this machine,
+     * exactly as it always has. A driver built to serve one machine (an Oven)
+     * carries the source that reads that machine's copies, so a session running
+     * there resumes its own transcript instead of cold-starting on the engine's
+     * history recap. The Oven runtime hands its source along with the launcher
+     * (see `launcherTranscripts`), so an explicit one is only needed by a
+     * caller that builds a driver without a launcher.
+     */
+    nativeTranscripts?: PiNativeTranscriptSource
   ) {
     super(storage)
+    // The source a launcher carries is the one that matches the machine its
+    // sessions start on; an explicit source wins for callers that build a
+    // driver without a launcher.
+    const transcripts = nativeTranscripts ?? launcherTranscripts(launch)
+    // The turn lifecycle reaches two transcript reads by project path alone (the
+    // retained compaction boundary and the post-turn reconciliation), so a
+    // driver whose sessions start somewhere else installs its source for the
+    // whole app. A driver whose sessions run here installs nothing, and every
+    // read stays on this machine's disk exactly as it always has.
+    if (transcripts) installRemotePiNativeTranscriptSource(transcripts)
     this.agentDirectory = accountEnvironment['PI_CODING_AGENT_DIR']?.trim() || undefined
     this.authConfig = this.agentDirectory
       ? new PiAuthConfigService(join(this.agentDirectory, 'auth.json'))
@@ -208,13 +276,18 @@ export class PiDriver extends PersistentCliDriver {
         this.normalizeInteractionEvents(sessionId, events),
       clearUsageThrottle: (sessionId) => this.usage.endTurn(sessionId),
       markCompactionReady: (sessionId) => this.rpcSessions.markCompactionReady(sessionId),
+      // Residency is the host's business, so the supervisor is told what a turn
+      // is doing: its row reports working threads, not the ones it keeps warm.
+      noteTurnBusy: (sessionId, busy) => piHostSupervisor().noteSessionBusy(sessionId, busy),
       handleUsageStatus: (record, sessionId) => this.usage.handleUsageStatus(record, sessionId),
       handleSubagentStreamStatus: (record, sessionId) =>
         this.subagentStreams.handleSubagentStreamStatus(record, sessionId)
     })
     this.rpcSessions = new PiRpcSessions({
       id: this.id,
+      agentDirectory: this.agentDirectory,
       accountEnvironment,
+      ...(launch ? { launch } : {}),
       requireSession: (projectPath, sessionId) => this.requireSession(projectPath, sessionId),
       isTitleSession: (sessionId) => this.isTitleSession(sessionId),
       utilityRuntime: (sessionId) => this.utilityRuntime(sessionId),
@@ -224,12 +297,25 @@ export class PiDriver extends PersistentCliDriver {
         this.modelCatalog.workspaceTemporaryEnvironment(projectPath),
       observeHarnessProcess: (sessionId, child, command, projectPath) =>
         this.observeHarnessProcess(sessionId, child, command, projectPath),
+      // A hosted session has no child of its own: the pooled Pi host runs its
+      // shell tool, and up to eight sessions share that one host pid, so it is
+      // tracked app-wide (an undefined session) rather than as this thread's
+      // root. A thread cleanup must never signal a host its siblings are still
+      // running on, and a process an agent needs to stop by pid is started with
+      // the app's own process tool, which records the pid against its thread.
+      observeHostedProcess: (pid, command, projectPath) =>
+        this.watchHarnessRoot(undefined, pid, command, projectPath),
       materializeCoreToolsExtension: (sessionId, bundledRuntime, sessionCwd) =>
         this.cioFiles.materializeCoreToolsExtension(sessionId, bundledRuntime, sessionCwd),
       materializeProvidersExtension: (sessionId) =>
         this.modelCatalog.materializeProvidersExtension(sessionId),
       providerExtensionEnv: (sessionId) => this.cioFiles.providerExtensionEnv(sessionId),
-      forgetCioSession: (sessionId) => this.cioFiles.forgetSession(sessionId),
+      forgetCioSession: (sessionId) => {
+        this.cioFiles.forgetSession(sessionId)
+        // A dropped session's machine route goes with it: forgetting it here is
+        // what keeps a reused session id from publishing into a stale Oven.
+        this.sessionStorages.forget(sessionId)
+      },
       resumeNativeSession: (projectPath, sessionId, client) =>
         this.nativeSessions.resumeNativePiSession(projectPath, sessionId, client),
       syncNativeSessionId: (projectPath, sessionId) =>
@@ -259,6 +345,7 @@ export class PiDriver extends PersistentCliDriver {
       baseUrlProviders,
       secretVault,
       storage,
+      storageFor: (sessionId) => this.sessionStorages.storageFor(sessionId),
       authConfig: this.authConfig,
       lastSessionProject: () => this.rpcSessions.lastSessionProject(),
       setProvidersExtensionEnv: (sessionId, env) =>
@@ -292,6 +379,7 @@ export class PiDriver extends PersistentCliDriver {
     })
     this.nativeSessions = new PiNativeSessions({
       agentDirectory: this.agentDirectory,
+      ...(transcripts ? { nativeTranscripts: transcripts } : {}),
       storage,
       hasClient: (sessionId) => this.rpcSessions.hasClient(sessionId),
       rpcClient: (sessionId) => this.rpcSessions.client(sessionId),
@@ -306,12 +394,28 @@ export class PiDriver extends PersistentCliDriver {
       childSnapshot: (sessionId) => this.subagentStreams.snapshot(sessionId),
       watchChildSession: (sessionId) => this.subagentStreams.watchSubagentSession(sessionId)
     })
+    // Before the runtime files: their host reads this router on every publish.
+    this.sessionStorages = new PiCioSessionStorages(storage)
     this.cioFiles = new PiCioRuntimeFiles({
-      storage,
+      storageFor: (sessionId) => this.sessionStorages.storageFor(sessionId),
       isTitleSession: (sessionId) => this.isTitleSession(sessionId),
       registerWatchPath: (sessionId, watchFlagPath) =>
         this.subagentStreams.registerSession(sessionId, watchFlagPath)
     })
+  }
+
+  /**
+   * Route one session's handoff files to a remote machine, or back to the
+   * app's own engine with `null`.
+   *
+   * A driver instance serves many threads and only the Oven layer knows which
+   * of their machines is remote, so the choice is installed per session and the
+   * session teardown drops it: a reused session id never inherits a machine it
+   * no longer runs on. With nothing installed every session reads and writes
+   * the app engine exactly as before.
+   */
+  setSessionStorage(sessionId: string, storage: PiCioFilesStorage | null): void {
+    this.sessionStorages.set(sessionId, storage)
   }
 
   /**
@@ -422,6 +526,21 @@ export class PiDriver extends PersistentCliDriver {
   /** Narrow host surface for the extracted units; every call stays typed. */
   emitEvent(event: AgentEvent): void {
     this.emit(event)
+  }
+
+  /**
+   * Hand this instance the sub-agent cards a resumed thread already shows.
+   *
+   * The engine owns the conversation, so it is the only side that can say which
+   * card a settled worker belongs to after a move: the driver's own session was
+   * rebuilt from the harness transcript and has no cards in it.
+   */
+  prefillSubagentCards(
+    _projectPath: string,
+    sessionId: string,
+    parts: readonly Extract<AgentPart, { type: 'subagent' }>[]
+  ): void {
+    this.subagentStreams.registerCardParts(sessionId, parts)
   }
 
   cachedSession(sessionId: string): PersistentCliSession | undefined {
@@ -577,6 +696,64 @@ export class PiDriver extends PersistentCliDriver {
     return this.turns.compactSession(session, projectPath, client)
   }
 
+  /**
+   * Trim this thread's Pi history in place, keeping the live session.
+   *
+   * The app's mirror is what the user edited, so the removed messages are the
+   * ones the session carries but the kept list does not. They become Pi's own
+   * `context_edit` records in the native transcript, appended, never rewritten:
+   * the model stops seeing them and the file keeps the full audit trail. The
+   * live session then reloads the same transcript, so an idle session costs no
+   * new process and a running one is never edited underneath.
+   */
+  async trimSessionHistory(
+    projectPath: string,
+    sessionId: string,
+    kept: readonly AgentMessage[]
+  ): Promise<boolean> {
+    const session = await this.requireSession(projectPath, sessionId).catch(() => null)
+    if (!session) return false
+    const keepIds = new Set(kept.map((message) => message.id))
+    const removed = session.messages.filter((message) => !keepIds.has(message.id))
+    if (removed.length === 0) return true
+    if (!session.nativeSessionId) return false
+    const result = await this.nativeSessions
+      .trimTranscript(projectPath, session.nativeSessionId, removed)
+      .catch((error: unknown) => {
+        Logger.dev('Pi native history trim failed:', error)
+        return null
+      })
+    if (!result) return false
+    if (result.missing > 0) {
+      Logger.dev('Pi native history trim could not find every removed turn:', {
+        sessionId,
+        missing: result.missing
+      })
+      return false
+    }
+    // The driver's own mirror follows the edit, or its next idle sync would
+    // write the removed messages back into the thread.
+    session.messages = session.messages.filter((message) => keepIds.has(message.id))
+    session.updatedAt = Date.now()
+    await this.persistSession(session)
+    const client = this.rpcSessions.client(sessionId)
+    if (client?.running) {
+      try {
+        await client.switchSession(result.file)
+      } catch (error) {
+        // The transcript is already correct; a session that could not reload
+        // resumes the edited file on its next turn anyway.
+        Logger.dev('Pi session reload after a native history trim failed:', error)
+      }
+    }
+    Logger.info('Pi history trimmed natively', {
+      sessionId,
+      edited: result.edited,
+      removed: removed.length
+    })
+    return true
+  }
+
   override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
     // Dev-only phase clock for the harness half of the dispatch: the spawn (or
@@ -634,7 +811,7 @@ export class PiDriver extends PersistentCliDriver {
       )
       this.appendUserMessage(session, options)
       this.turns.clearSilentContinue(session.id)
-      await this.steerIntoActiveTurn(session.id, options.text, options.attachments)
+      await this.steerIntoActiveTurn(projectPath, session.id, options.text, options.attachments)
       return
     }
     const model = this.resolveModel(options.settings.providerId, options.settings.modelId)
@@ -675,10 +852,16 @@ export class PiDriver extends PersistentCliDriver {
     markDispatch('settings')
     this.appendUserMessage(session, options)
     this.turns.clearSilentContinue(session.id)
+    // A new turn is a fresh start: checkpoint stalls earned by the previous
+    // turn's compactions must not end this one.
+    this.turns.clearCheckpointStalls(session.id)
     this.turns.clearReconcileAnswer(session.id)
     this.turns.addActiveTurn(session.id)
 
-    const { inlineSvg, images, references } = await composePiAttachments(options.attachments)
+    const { inlineSvg, images, references } = await composePiAttachments(
+      options.attachments,
+      attachmentScratchDirectory(projectPath)
+    )
     markDispatch('attachments')
     if (options.systemPrompt) {
       await this.cioFiles.publishCioSystemPrompt(session.id, options.systemPrompt)
@@ -728,7 +911,7 @@ export class PiDriver extends PersistentCliDriver {
    */
   private async applyPiSettingsIfChanged(
     sessionId: string,
-    client: PiRpcClient,
+    client: PiSessionClient,
     model: { provider: string; modelId: string },
     thinkingLevel: string
   ): Promise<void> {
@@ -779,11 +962,19 @@ export class PiDriver extends PersistentCliDriver {
     // between agent runs. Manual compaction drains the queue afterwards
     // (see `compactSession`).
     if (client && this.turns.hasActiveTurn(options.sessionId)) {
-      await this.steerIntoActiveTurn(options.sessionId, options.text, options.attachments)
+      await this.steerIntoActiveTurn(
+        projectPath,
+        options.sessionId,
+        options.text,
+        options.attachments
+      )
       return
     }
     if (client && (await this.isSessionBusy(projectPath, options.sessionId))) {
-      const { inlineSvg, images, references } = await composePiAttachments(options.attachments)
+      const { inlineSvg, images, references } = await composePiAttachments(
+        options.attachments,
+        attachmentScratchDirectory(projectPath)
+      )
       const message = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
       this.appendUserMessage(session, options)
       this.turns.clearSilentContinue(options.sessionId)
@@ -811,7 +1002,10 @@ export class PiDriver extends PersistentCliDriver {
       Logger.dev('Pi auto-retry re-arm failed:', error)
     })
     this.turns.addActiveTurn(options.sessionId)
-    const { inlineSvg, images, references } = await composePiAttachments(options.attachments)
+    const { inlineSvg, images, references } = await composePiAttachments(
+      options.attachments,
+      attachmentScratchDirectory(projectPath)
+    )
     const message = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
     try {
       await this.promptIntoSession(activeClient, projectPath, options.sessionId, message, images)
@@ -827,6 +1021,7 @@ export class PiDriver extends PersistentCliDriver {
   /** Compose attachments + text and deliver them into the session's live turn
    *  through pi's steer channel. The caller must have verified an active turn. */
   private async steerIntoActiveTurn(
+    projectPath: string,
     sessionId: string,
     text: string,
     attachments: SendPromptOptions['attachments']
@@ -836,7 +1031,10 @@ export class PiDriver extends PersistentCliDriver {
     if (!client) {
       throw new Error(`No active Pi turn is available to steer for session ${sessionId}`)
     }
-    const { inlineSvg, images, references } = await composePiAttachments(attachments)
+    const { inlineSvg, images, references } = await composePiAttachments(
+      attachments,
+      attachmentScratchDirectory(projectPath)
+    )
     const message = [inlineSvg, ...references, text].filter(Boolean).join('\n\n')
     await client.steer(message, images)
   }
@@ -854,8 +1052,19 @@ export class PiDriver extends PersistentCliDriver {
    *  3. disarm pi's automatic retry of the aborted run;
    *  4. after the graceful abort, verify the run actually ended (bounded) and
    *     kill the process if it did not.
+   *
+   * `reason: 'transfer'` is the same teardown for a thread that is moving to
+   * another instance. The workers are not ending there, so the stop request
+   * carries that reason (the extension hands them over with their session files
+   * intact) and nothing close the cards here: they are still in flight, only in
+   * the process that is about to adopt them.
    */
-  override async abort(projectPath: string, sessionId: string): Promise<void> {
+  override async abort(
+    projectPath: string,
+    sessionId: string,
+    options: { reason?: 'user' | 'transfer' } = {}
+  ): Promise<void> {
+    const transfer = options.reason === 'transfer'
     // An owed silent continue belongs to the turn the user is stopping: pi
     // settles the aborted run with `agent_settled`, and the continuation would
     // then start a fresh run seconds after the stop.
@@ -868,7 +1077,7 @@ export class PiDriver extends PersistentCliDriver {
     this.uiRequests.cancelPendingDialogs(sessionId)
     // Published before the abort so the extension already sees it when the
     // run's own settle hook fires.
-    await this.cioFiles.publishStopRequest(sessionId)
+    await this.cioFiles.publishStopRequest(sessionId, undefined, transfer ? 'transfer' : 'user')
     const session = await this.requireSession(projectPath, sessionId).catch(() => null)
     const client = this.rpcSessions.client(sessionId)
     if (!session || !client) {
@@ -876,7 +1085,7 @@ export class PiDriver extends PersistentCliDriver {
       // registration left behind is stale and must not keep the engine
       // ignoring this session's idles as if a turn were still live.
       this.turns.removeActiveTurn(sessionId)
-      this.subagentStreams.settleChildStreams(sessionId, 'aborted')
+      if (!transfer) this.subagentStreams.settleChildStreams(sessionId, 'aborted')
       return
     }
     // Disarm pi's automatic retry before the abort, and wait for the answer. A
@@ -918,9 +1127,38 @@ export class PiDriver extends PersistentCliDriver {
     }
     // The workers report their own settle a poll window later at worst;
     // settling them here is what makes the cards and child statuses stop with
-    // the stop instead of spinning until the last transcript lands.
-    this.subagentStreams.settleChildStreams(sessionId, 'aborted')
+    // the stop instead of spinning until the last transcript lands. A move is
+    // the exception: those cards belong to work that continues elsewhere, and
+    // stamping them here would make every later update from the adopting
+    // instance land on a card the app already treats as closed.
+    if (!transfer) this.subagentStreams.settleChildStreams(sessionId, 'aborted')
     void this.enforceStoppedSession(projectPath, sessionId)
+  }
+
+  /** The transfer half of {@link abort}: the same teardown, without ending work. */
+  async abortForTransfer(projectPath: string, sessionId: string): Promise<void> {
+    await this.abort(projectPath, sessionId, { reason: 'transfer' })
+  }
+
+  /**
+   * Hand a thread's workers to this instance, which is adopting the thread.
+   *
+   * The departing process stopped its run, but a worker is only a session, and
+   * its session file is on disk in this instance's own store. Publishing the
+   * roster is what turns "the move stopped them" into "they are still working
+   * here": the extension opens each file on the resumed thread's first agent
+   * start and prompts the worker to continue under the id its primary agent
+   * already knows.
+   */
+  async resumeHandedOffWorkers(
+    _projectPath: string,
+    sessionId: string,
+    workers: readonly HandoffWorkerSession[]
+  ): Promise<void> {
+    if (workers.length === 0) return
+    // The roster is addressed by session only: the adopting process reads it
+    // from the app's own runtime directory, not from the project.
+    await this.cioFiles.publishHandoffWorkers(sessionId, workers)
   }
 
   /**
@@ -1032,6 +1270,17 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   /**
+   * Release one idle session's harness process, for an Oven that has no free run.
+   *
+   * The session process is resident so a follow-up is instant; on an Oven that
+   * residency costs one of four live runs, and a fifth thread is refused. The
+   * caller decides when that trade goes the other way.
+   */
+  releaseIdleSession(sessionId: string): boolean {
+    return this.rpcSessions.releaseIdleSession(sessionId)
+  }
+
+  /**
    * Restart every session's RPC process so the next turn spawns the Pi runtime
    * currently on disk. A session's client is long-lived (`pi --mode rpc` keeps
    * the resumed native transcript in memory), so without this an updated Pi
@@ -1040,6 +1289,22 @@ export class PiDriver extends PersistentCliDriver {
   override restartRuntime(): void {
     this.rpcSessions.restartAll()
     super.restartRuntime()
+  }
+
+  /**
+   * Move one thread's session to a host of its own, resuming the same native
+   * transcript there. Only the bundled CIO Pi host can do this; an installed
+   * Pi has no second host to move to and says so instead of pretending.
+   */
+  async moveSessionToHost(
+    projectPath: string,
+    sessionId: string
+  ): Promise<{ hostPid: number | null; nativeSessionId: string }> {
+    const client = await this.rpcSessions.ensureClient(projectPath, sessionId)
+    if (!(client instanceof PiHostClient)) {
+      throw new Error('Only a hosted Pi session can move to another host')
+    }
+    return this.rpcSessions.moveToNewHost(sessionId)
   }
 
   protected async buildTurnCommand(): Promise<CliTurnCommand> {
@@ -1070,6 +1335,7 @@ export class PiDriver extends PersistentCliDriver {
     this.subagentStreams.clear()
     this.uiRequests.clear()
     this.cioFiles.clear()
+    this.sessionStorages.clear()
     super.dispose()
   }
 
@@ -1081,9 +1347,20 @@ export class PiDriver extends PersistentCliDriver {
    */
   /** Whether the driver still tracks a live turn for this session. The engine's
    *  watchdog uses this to detect a turn the session settled without the
-   *  driver noticing (pi's auto-compaction / retry gap). */
+   *  driver noticing (pi's auto-compaction / retry gap).
+   *
+   * The registration alone is not the answer: it is cleared by pi's own settle
+   * hook, so a process that died (or a client that was disposed) before that
+   * hook ran would leave it set forever. That read as a turn still in flight to
+   * every caller, which is how a thread could sit "working" with nothing behind
+   * it and a queued message never deliver. With no live client there is no run
+   * that could resume, so the leftover registration is dropped here and the
+   * session answers idle. */
   hasActiveTurn(sessionId: string): boolean {
-    return this.turns.hasActiveTurn(sessionId)
+    if (!this.turns.hasActiveTurn(sessionId)) return false
+    if (this.rpcSessions.client(sessionId)) return true
+    this.turns.removeActiveTurn(sessionId)
+    return false
   }
 
   /**
@@ -1145,7 +1422,7 @@ export class PiDriver extends PersistentCliDriver {
    * A refusal with no live run behind it stays the caller's error to report.
    */
   private async promptIntoSession(
-    client: PiRpcClient,
+    client: PiSessionClient,
     projectPath: string,
     sessionId: string,
     prompt: string,
@@ -1169,10 +1446,12 @@ export class PiDriver extends PersistentCliDriver {
   /** Node uses TEMP/TMP on Windows and TMPDIR on Unix. The runtime boundary
    * translates TMPDIR for WSL and forwards it into the Linux process. Keep
    * output files available across turns under the scope's working directory.
+   * A project path that is not on this machine (an Oven checkout) answers no
+   * override, so every key stays optional.
    */
   private async workspaceTemporaryEnvironment(
     projectPath: string
-  ): Promise<{ TMPDIR: string; TEMP: string; TMP: string }> {
+  ): Promise<{ TMPDIR?: string; TEMP?: string; TMP?: string }> {
     return this.modelCatalog.workspaceTemporaryEnvironment(projectPath)
   }
 

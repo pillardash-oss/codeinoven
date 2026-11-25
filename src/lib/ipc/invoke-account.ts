@@ -1,6 +1,18 @@
 import type { Contract } from './contract-helpers'
 
 export const invokeAccountContract = {
+  'codeinovenAccount:status': {} as Contract<
+    [],
+    import('./codeinoven-account').CodeInOvenAccountStatus
+  >,
+  'codeinovenAccount:signIn': {} as Contract<
+    [input: import('./codeinoven-account').CodeInOvenSignInInput],
+    import('./codeinoven-account').CodeInOvenAccountStatus
+  >,
+  'codeinovenAccount:signOut': {} as Contract<
+    [],
+    import('./codeinoven-account').CodeInOvenAccountStatus
+  >,
   'account:getLocalUsage': {} as Contract<
     [range: import('../types').LocalProfileAnalyticsRange],
     import('../types').LocalProfileAnalytics

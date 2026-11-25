@@ -431,8 +431,17 @@ export interface ThreadSearchOptions {
   projectId?: string
   limit?: number
   family?: ThreadSearchFamily
-  /** Narrow an assistant search to one assistant. Ignored for other families. */
+  /**
+   * Narrow the search to the threads one assistant scheduled or runs. It
+   * narrows whichever family the caller asked for instead of replacing it, so a
+   * search never accepts this id and silently ignores it.
+   */
   assistantId?: string
+  /**
+   * Narrow the search to one scope bucket (a sidebar group) inside the searched
+   * project(s). Omitted, a search reads every scope of the family it covers.
+   */
+  scopeBucketId?: string
 }
 
 /** Paging/visibility controls for thread listings. */
@@ -1782,21 +1791,33 @@ function threadSearchScopeClause(
 ): { sql: string; params: unknown[] } {
   const projectId = options.projectId ?? null
   const assistantId = options.assistantId ?? null
+  const scopeBucketId = options.scopeBucketId ?? null
+  // A scope bucket is a sidebar group inside a project, so it narrows whichever
+  // family the caller asked for instead of replacing it.
+  const withScopeBucket = (sql: string, params: unknown[]): { sql: string; params: unknown[] } =>
+    scopeBucketId
+      ? { sql: `${sql} AND ${alias}.scope_bucket_id = ?`, params: [...params, scopeBucketId] }
+      : { sql, params }
+  // An assistant id narrows every family, exactly like a scope bucket does: a
+  // project thread an assistant scheduled carries the same column.
+  const narrowed = (sql: string, params: unknown[]): { sql: string; params: unknown[] } => {
+    const scoped = withScopeBucket(sql, params)
+    return assistantId
+      ? {
+          sql: `${scoped.sql} AND ${alias}.assistant_id = ?`,
+          params: [...scoped.params, assistantId]
+        }
+      : scoped
+  }
   switch (options.family) {
     case 'chats':
-      return {
-        sql: `${alias}.project_id = ? AND ${unarchivedThreadSql(alias)}`,
-        params: [INBOX_PROJECT_ID]
-      }
-    case 'assistant': {
-      const clauses = [`${alias}.project_id = ?`, unarchivedThreadSql(alias)]
-      const params: unknown[] = [ASSISTANT_SPACE_ID]
-      if (assistantId) {
-        clauses.push(`${alias}.assistant_id = ?`)
-        params.push(assistantId)
-      }
-      return { sql: clauses.join(' AND '), params }
-    }
+      return narrowed(`${alias}.project_id = ? AND ${unarchivedThreadSql(alias)}`, [
+        INBOX_PROJECT_ID
+      ])
+    case 'assistant':
+      return narrowed(`${alias}.project_id = ? AND ${unarchivedThreadSql(alias)}`, [
+        ASSISTANT_SPACE_ID
+      ])
     case 'projects': {
       // Every engineering project, never the hidden inbox/assistant/browser
       // containers that share the same table.
@@ -1811,7 +1832,7 @@ function threadSearchScopeClause(
         clauses.push(`${alias}.project_id = ?`)
         params.push(projectId)
       }
-      return { sql: clauses.join(' AND '), params }
+      return narrowed(clauses.join(' AND '), params)
     }
     default: {
       // Unscoped/global: every family except the hidden browser-chat container,
@@ -1822,7 +1843,7 @@ function threadSearchScopeClause(
         clauses.push(`${alias}.project_id = ?`)
         params.push(projectId)
       }
-      return { sql: clauses.join(' AND '), params }
+      return narrowed(clauses.join(' AND '), params)
     }
   }
 }
@@ -1830,21 +1851,20 @@ function threadSearchScopeClause(
 /**
  * Whether a thread belongs to the family a search was scoped to. This is the
  * in-memory twin of {@link threadSearchScopeClause}, used by the semantic path
- * after matches are hydrated back into `Thread` rows (which carry `projectId`
- * and `assistantId` but no SQL to filter against).
+ * after matches are hydrated back into `Thread` rows (which carry `projectId`,
+ * `assistantId` and `scopeBucketId` but no SQL to filter against).
  */
 export function threadMatchesSearchScope(
-  thread: Pick<Thread, 'projectId' | 'assistantId'>,
+  thread: Pick<Thread, 'projectId' | 'assistantId' | 'scopeBucketId'>,
   options: ThreadSearchOptions
 ): boolean {
+  if (options.scopeBucketId && thread.scopeBucketId !== options.scopeBucketId) return false
+  if (options.assistantId && thread.assistantId !== options.assistantId) return false
   switch (options.family) {
     case 'chats':
       return thread.projectId === INBOX_PROJECT_ID
     case 'assistant':
-      return (
-        thread.projectId === ASSISTANT_SPACE_ID &&
-        (!options.assistantId || thread.assistantId === options.assistantId)
-      )
+      return thread.projectId === ASSISTANT_SPACE_ID
     case 'projects':
       if (
         thread.projectId === GLOBAL_BROWSER_PROJECT_ID ||

@@ -67,20 +67,28 @@ let db: DatabaseType | null = null
 
 function connection(): DatabaseType {
   if (!db) {
-    db = new DatabaseConstructor(config.dbPath)
-    db.pragma('journal_mode = WAL')
+    const readOnly = config.readOnly === true
+    db = new DatabaseConstructor(config.dbPath, readOnly ? { readonly: true } : {})
+    // Only the writer shapes the database. Its journal mode, auto_vacuum header
+    // and journal limit are properties of the file, and a read-only connection
+    // cannot (and must not) set them: WAL is already the database's own setting,
+    // written by the connection that owns it.
+    if (!readOnly) {
+      db.pragma('journal_mode = WAL')
+      // Must match the primary connection: the auto_vacuum setting of THIS
+      // connection is what a VACUUM here bakes into the database header, and
+      // what makes `PRAGMA incremental_vacuum` actually hand pages back.
+      db.pragma('auto_vacuum = INCREMENTAL')
+      db.pragma('journal_size_limit = 67108864')
+      db.pragma('wal_autocheckpoint = 1000')
+    }
+    // Connection-local, so every connection sets its own.
     db.pragma('synchronous = NORMAL')
     db.pragma('foreign_keys = ON')
-    // Must match the primary connection: the auto_vacuum setting of THIS
-    // connection is what a VACUUM here bakes into the database header, and
-    // what makes `PRAGMA incremental_vacuum` actually hand pages back.
-    db.pragma('auto_vacuum = INCREMENTAL')
     db.pragma('busy_timeout = 5000')
     db.pragma('temp_store = MEMORY')
     db.pragma('cache_size = -32768')
     db.pragma('mmap_size = 268435456')
-    db.pragma('wal_autocheckpoint = 1000')
-    db.pragma('journal_size_limit = 67108864')
   }
   return db
 }
@@ -852,20 +860,10 @@ const MAINTENANCE_STEPS: readonly MaintenanceStep[] = [
       return { level: 'info', label: 'passive checkpoint', detail: JSON.stringify(result) }
     }
   },
-  {
-    key: 'integrity_at',
-    intervalMs: DAY_MS,
-    run: () => {
-      const result = integrity({ kind: 'integrity', quick: true })
-      const detail =
-        result.kind === 'integrity'
-          ? result.ok
-            ? result.text
-            : (result.error ?? 'failed')
-          : 'unexpected result'
-      return { level: result.ok ? 'info' : 'warn', label: 'quick_check', detail }
-    }
-  },
+  // The daily quick_check is not a step here. It reads every page of the file,
+  // which on a 1.2 GB database held this worker, and every click queued behind
+  // it, for 18 s. It runs on the read-only async lane instead
+  // (`DatabaseAsyncReads`), where a WAL reader cannot block anything.
   {
     key: 'retention_at',
     intervalMs: DAY_MS,

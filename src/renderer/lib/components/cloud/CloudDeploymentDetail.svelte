@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte'
   import CioArrowDown from '@pdslng/cio-icon/CioArrowDown.svelte'
   import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
   import CioBraces from '@pdslng/cio-icon/CioBraces.svelte'
@@ -23,11 +24,7 @@
   import { cloudDeployState, CloudDeployState } from '$lib/stores/cloud-deploy.svelte'
   import StatusPill from '../ui/StatusPill.svelte'
   import type { CloudDeploymentContainer, CloudDeploymentDeployment } from '$shared/types'
-  import {
-    parseDeploymentLog,
-    deploymentLogToText,
-    type DeploymentLogLine
-  } from '$lib/cloud/deployment-log'
+  import { deploymentLogToText, type DeploymentLogLine } from '$lib/cloud/deployment-log'
   import ContainerLinksMenu from './ContainerLinksMenu.svelte'
   import EnumSelect from '../ui/EnumSelect.svelte'
   import {
@@ -49,6 +46,9 @@
 
   let { projectId, container, onBack, onUpdated, onRemediate }: Props = $props()
 
+  /** Distance from the top of the log at which the page above is fetched. */
+  const EARLIER_LOG_TRIGGER_PX = 160
+
   let error = $state('')
   let deployments = $state<CloudDeploymentDeployment[]>([])
   let deploymentsLoading = $state(false)
@@ -68,6 +68,10 @@
   // Refreshing + tailing state for the log detail.
   let refreshing = $state(false)
   let tail = $state(false)
+  /** True while the page above the loaded log is being fetched. */
+  let loadingEarlier = $state(false)
+  /** Failure of an earlier-page read, shown where that page would appear. */
+  let earlierError = $state('')
   /** Used to auto-tail only when the log content actually grows. */
   let lastLogLength = $state(0)
 
@@ -77,23 +81,23 @@
   /** The containers inside this resource; more than one means a compose stack. */
   const logSources = $derived(container.logSources ?? [])
 
-  const logBaseKey = $derived(
-    CloudDeployState.containerKey(
+  const logKey = $derived(
+    CloudDeployState.logKey(
       projectId,
       container.providerKind,
       container.id,
-      container.accountId
+      selectedDeploymentId ?? undefined,
+      container.accountId,
+      logSourceId ?? undefined
     )
   )
-
-  const logKey = $derived(
-    logSourceId
-      ? `${logBaseKey}/service/${logSourceId}`
-      : selectedDeploymentId
-        ? `${logBaseKey}/${selectedDeploymentId}`
-        : logBaseKey
-  )
-  const log = $derived(cloudDeployState.containerLogs[logKey]?.value.log ?? '')
+  const loadedLog = $derived(cloudDeployState.containerLogs[logKey]?.value ?? null)
+  /** Every readable line loaded so far: the newest page plus any earlier pages. */
+  const logLines = $derived<DeploymentLogLine[]>(loadedLog?.lines ?? [])
+  /** True while the log holds earlier lines the reader has not scrolled back to. */
+  const hasEarlierLog = $derived(loadedLog?.hasMore === true)
+  /** Raw payload of every loaded page, for "copy raw". */
+  const log = $derived(loadedLog?.pages.join('\n') ?? '')
 
   const selectedDeployment = $derived(
     deployments.find((deployment) => deployment.id === selectedDeploymentId) ?? null
@@ -112,9 +116,6 @@
 
   /** The picker's current value: a container id, or the build log of the open deployment. */
   const logSourceValue = $derived(logSourceId ?? (selectedDeployment ? BUILD_LOG_SOURCE_ID : null))
-
-  /** Human-readable lines for the current deployment log. */
-  const logLines = $derived<DeploymentLogLine[]>(parseDeploymentLog(log))
 
   /** Readable log text (timestamp + output), used by copy and diagnose. */
   const readableLog = $derived(deploymentLogToText(logLines))
@@ -405,6 +406,57 @@
     }
   }
 
+  /**
+   * Read the log page above the oldest line on screen.
+   *
+   * A long build log is served tail-first, so the lines before the first one on
+   * screen are fetched only when the reader gets there. The scroll offset is
+   * shifted by the height the prepended lines added, so the line the reader was
+   * looking at stays exactly where it was instead of jumping down the page.
+   */
+  async function loadEarlierLog(): Promise<void> {
+    if (loadingEarlier || !hasEarlierLog) return
+    const scroller = logScrollerEl
+    const previousHeight = scroller?.scrollHeight ?? 0
+    const previousTop = scroller?.scrollTop ?? 0
+    const previousLineCount = logLines.length
+    loadingEarlier = true
+    earlierError = ''
+    try {
+      const loaded = await cloudDeployState.loadEarlierLog(
+        projectId,
+        containerProviderKind,
+        containerId,
+        selectedDeploymentId ?? undefined,
+        containerAccountId,
+        logSourceId ?? undefined
+      )
+      if (!loaded) return
+      await tick()
+      if (!scroller) return
+      // Only shift when the prepended lines actually landed: a refresh or a
+      // switched log replaces the content instead of growing it.
+      if (logLines.length > previousLineCount) {
+        scroller.scrollTop = previousTop + (scroller.scrollHeight - previousHeight)
+      }
+    } catch (reason) {
+      earlierError = message(reason)
+    } finally {
+      loadingEarlier = false
+    }
+  }
+
+  /**
+   * Load the page above as soon as the reader reaches the top of the log, so
+   * scrolling back through a long log needs no extra click.
+   */
+  function handleLogScroll(): void {
+    const scroller = logScrollerEl
+    if (!scroller || loadingEarlier || !hasEarlierLog) return
+    if (scroller.scrollTop > EARLIER_LOG_TRIGGER_PX) return
+    void loadEarlierLog()
+  }
+
   async function copyLog(): Promise<void> {
     if (!readableLog) return
     try {
@@ -552,7 +604,7 @@
   </div>
 
   <!-- Body -->
-  <div class="min-h-0 flex-1 overflow-y-auto" bind:this={logScrollerEl}>
+  <div class="min-h-0 flex-1 overflow-y-auto" bind:this={logScrollerEl} onscroll={handleLogScroll}>
     {#if selectedDeployment || logSourceId}
       <!-- One log: a deployment's build, or one container's runtime output. -->
       <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
@@ -664,8 +716,34 @@
         </div>
       {:else if logLines.length > 0}
         <div class="p-3">
+          {#if hasEarlierLog || earlierError}
+            <!-- A long build log is served tail-first: this is where the lines
+                 above the loaded ones arrive, fetched as the reader scrolls up. -->
+            <div class="mb-2 flex flex-col items-center gap-1">
+              {#if earlierError}
+                <p class="max-w-[42ch] text-center text-[0.625rem] leading-relaxed text-danger">
+                  {earlierError}
+                </p>
+              {/if}
+              <button
+                type="button"
+                class="flex h-7 cursor-pointer items-center gap-1.5 border border-border px-2.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-60"
+                title="Load the log lines above these"
+                aria-label="Load earlier log lines"
+                disabled={loadingEarlier}
+                onclick={() => void loadEarlierLog()}
+              >
+                {#if loadingEarlier}
+                  <CioSpinner size={11} class="animate-spin" />
+                  Loading earlier lines
+                {:else}
+                  Load earlier lines
+                {/if}
+              </button>
+            </div>
+          {/if}
           <div class="space-y-0.5 font-mono text-[0.625rem] leading-relaxed">
-            {#each logLines as line, index (index)}
+            {#each logLines as line, index (line)}
               {@const matchIndex = searchMatchPositions[index] ?? -1}
               {@const isActiveMatch = matchIndex !== -1 && matchIndex === activeMatch}
               <div

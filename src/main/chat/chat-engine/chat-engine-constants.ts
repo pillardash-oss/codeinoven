@@ -17,6 +17,20 @@ export const PROVIDER_CATALOG_TTL_MS = 60 * 60 * 1000
 export const TOOL_CATALOG_TTL_MS = 30 * 1000
 
 /**
+ * How often one live session may repair its persisted "working" status.
+ *
+ * `markSessionWorking` runs on every streamed delta, so an ungated session
+ * asked the thread manager for its thread tens of times a second, on the same
+ * single-flight DB worker every UI read queues behind. Two seconds still
+ * repairs a stale terminal status well inside a turn, and a turn's first delta
+ * arrives with no stamp at all, so it reconciles immediately.
+ */
+export const WORKING_STATUS_RECONCILE_INTERVAL_MS = 2_000
+
+/** Ceiling for the per-session reconcile stamps; the oldest stamp gives way. */
+export const WORKING_STATUS_RECONCILE_MAX_SESSIONS = 512
+
+/**
  * A terminal sub-agent card patch (completed / failed / stopped) reports a
  * worker that has already ended. It is bookkeeping for the card, never
  * evidence of new work: treating it as activity flips the thread's live

@@ -25,6 +25,7 @@
   import type { AgentPart } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import { formatDurationMs } from '$lib/format/duration'
+  import { traceStepExpansion } from '$lib/stores/trace-step-expansion.svelte'
   import LongTextBlock from '../markdown/LongTextBlock.svelte'
   import InlineToolDiff from './InlineToolDiff.svelte'
   import {
@@ -43,6 +44,9 @@
     threadId?: string
     checkpointId?: string | null
     checkpointPaths?: string[]
+    /** The conversation this call belongs to, so the reader's expansion follows
+     *  the call across the folds and re-mounts a live trace causes. */
+    scope: string
   }
 
   let {
@@ -51,10 +55,24 @@
     projectId,
     threadId,
     checkpointId = null,
-    checkpointPaths = []
+    checkpointPaths = [],
+    scope
   }: Props = $props()
 
-  let open = $state(false)
+  /**
+   * Open state lives in the visit-scoped store, not here.
+   *
+   * A tool call the reader expanded to read its command, its diff or its output
+   * must stay expanded while the agent keeps working. This row is destroyed and
+   * re-created whenever the trace re-mounts it   the chain folding once it
+   * reports its output, the trace closing at a step boundary, a page of older
+   * steps arriving   and local state died with the row, which is how the call
+   * being inspected snapped shut on the agent's next step.
+   */
+  const open = $derived(traceStepExpansion.isOpen(scope, part.id))
+  function toggle(): void {
+    traceStepExpansion.setOpen(scope, part.id, !open)
+  }
   const clock = new ElapsedTimer()
   let checkpointDiffs = $state<ToolFileDiff[]>([])
   let loadedCheckpointKey = $state<string | null>(null)
@@ -322,9 +340,7 @@
     class="group/tool isolate relative flex w-full items-center gap-1.5 overflow-hidden py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
     aria-expanded={open}
     title={open ? 'Hide tool details' : 'Show tool details'}
-    onclick={() => {
-      open = !open
-    }}
+    onclick={toggle}
   >
     {#if working}
       <span class="working-row-glow" aria-hidden="true"></span>

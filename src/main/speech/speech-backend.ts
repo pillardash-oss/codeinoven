@@ -41,6 +41,12 @@ export interface SpeechBackend {
   readonly runtime: SpeechRuntime
   capabilities(): Promise<SpeechCapability[]>
   /**
+   * Why `capabilities()` returned nothing, when the backend knows. A runtime
+   * whose engine is provisioned at runtime (MLX) reports the engine state here
+   * so the failure reads as a download offer instead of a broken install.
+   */
+  unavailableReason?(): string | null
+  /**
    * Whether this runtime currently holds a live native worker process, and so
    * occupies memory that only `dispose()` releases. The eviction service counts
    * these to keep the resident set inside its cap.

@@ -10,14 +10,17 @@ import type {
   UserMessageSummary
 } from '../../lib/types'
 import type {
+  DatabaseWorker,
   DatabaseWorkerFactory,
   WorkerBackupResult,
   WorkerCheckpointResult,
   WorkerFtsResult,
   WorkerHealthResult,
   WorkerIntegrityResult,
+  WorkerLane,
   WorkerRecoverResult,
   WorkerRestoreResult,
+  QueryLane,
   WorkerRetentionResult,
   WorkerSizeTelemetry,
   WorkerVacuumResult
@@ -29,6 +32,7 @@ import {
 import { runHistoryAppend } from './repositories/history-repo'
 import { applyDatabaseSchema, runLedgerMigrations, type LedgerMigrationHost } from './migrations'
 import { DatabaseConnection } from './database/database-connection'
+import { DatabaseAsyncReads } from './database/database-async-reads'
 import { DatabaseMaintenance } from './database/database-maintenance'
 import { DatabaseQueries } from './database/database-queries'
 import { DatabaseWrites } from './database/database-writes'
@@ -62,6 +66,8 @@ export { MAIN_THREAD_DATABASE_WARNING_MS } from './database/database-slow-operat
 export class Database {
   private readonly connection: DatabaseConnection
   private readonly maintenance: DatabaseMaintenance
+  /** The async lane: its own worker thread and read-only connection. */
+  private readonly asyncReads: DatabaseAsyncReads
   private readonly queries: DatabaseQueries
   private readonly writes: DatabaseWrites
   private readonly searchMirror: AgentMessageSearchMirror
@@ -75,8 +81,10 @@ export class Database {
     const file = path ?? join(getConfigRoot(), 'codeinoven.db')
     this.connection = new DatabaseConnection(file)
     this.maintenance = new DatabaseMaintenance(file, workerFactory)
+    this.asyncReads = new DatabaseAsyncReads(file, workerFactory)
     this.queries = new DatabaseQueries({
       getWorker: () => this.maintenance.getWorker(),
+      getAsyncWorker: () => this.asyncReads.getWorker(),
       all: (sql, ...params) => this.connection.all(sql, ...params),
       syncProviderDeltas: (threadId, sessionId, messages) =>
         runProviderDeltaSync(this, threadId, sessionId, messages)
@@ -104,6 +112,7 @@ export class Database {
     this.connection.open()
     const schemaUpgrade = applyDatabaseSchema(this.connection.raw())
     this.maintenance.start()
+    this.asyncReads.start()
     // The ledger rebuilds below belong to the versions this boot applied, not to
     // steady state. A database that already carries the current schema version
     // applies no version and therefore skips them, so a boot never pays a
@@ -147,6 +156,7 @@ export class Database {
     this.closing = true
     await this.contextCostRepair
     this.contextCostRepair = null
+    await this.asyncReads.stop()
     await this.maintenance.stop()
     this.connection.close()
     Logger.info('SQLite database closed')
@@ -319,6 +329,20 @@ export class Database {
     return this.maintenance.recoverTo(targetPath)
   }
 
+  /**
+   * The worker that owns the interactive and background queues. Exposed for
+   * diagnostics and for asserting lane separation: a read that must not queue
+   * behind a click belongs on the async lane instead.
+   */
+  maintenanceWorker(): DatabaseWorker | null {
+    return this.maintenance.getWorker()
+  }
+
+  /** The async lane's own worker and read-only connection, or null when absent. */
+  asyncReadWorker(): DatabaseWorker | null {
+    return this.asyncReads.getWorker()
+  }
+
   /** Explicit corruption / full-disk health check. */
   async healthCheck(): Promise<WorkerHealthResult> {
     return this.maintenance.healthCheck()
@@ -331,7 +355,7 @@ export class Database {
     sql: string,
     params: unknown[],
     maxRows: number,
-    options: { allowPrimaryFallback?: boolean; deadlineMs?: number } = {}
+    options: { allowPrimaryFallback?: boolean; deadlineMs?: number; lane?: QueryLane } = {}
   ): Promise<{
     ok: boolean
     rows: Record<string, unknown>[]
@@ -384,9 +408,21 @@ export class Database {
   async executeViaWorker(
     sql: string,
     params: unknown[],
-    options: { allowPrimaryFallback?: boolean } = {}
+    options: { allowPrimaryFallback?: boolean; lane?: WorkerLane } = {}
   ): Promise<{ ok: boolean; error?: string }> {
     return this.writes.executeViaWorker(sql, params, options)
+  }
+
+  /**
+   * Resolve once no interactive worker request has arrived or answered for
+   * `quietMs`, or after `deadlineMs` whatever the traffic.
+   *
+   * For a one-time background job that holds the worker for seconds (an index
+   * build over a large table): it starts while nothing is waiting on the worker,
+   * and the deadline makes sure it still starts on a machine that never idles.
+   */
+  async waitForInteractiveQuiet(quietMs: number, deadlineMs: number): Promise<void> {
+    await this.maintenance.getWorker()?.waitForInteractiveQuiet(quietMs, deadlineMs)
   }
 
   /** Atomic batch: all statements run in one transaction on the worker's connection. */

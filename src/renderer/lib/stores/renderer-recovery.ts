@@ -15,6 +15,7 @@ export const RENDERER_RECOVERY_STORAGE_KEY = `${APP_SLUG}.rendererRecovery.v1`
 
 /** A settings section — each is its own dedicated page in the app navigation. */
 export type SettingsSection =
+  | 'account'
   | 'profile'
   | 'general'
   | 'browser'
@@ -46,6 +47,7 @@ export type MainView =
   | 'scope'
   | 'threads'
   | 'settings'
+  | 'settings-account'
   | 'settings-profile'
   | 'settings-browser'
   | 'settings-memory'
@@ -230,6 +232,7 @@ const MAIN_VIEWS: readonly MainView[] = [
 ]
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'ovens',
+  'account',
   'profile',
   'general',
   'browser',
@@ -341,9 +344,15 @@ function isQueuedResponseReference(value: unknown): value is QueuedResponseRefer
     value.kind !== 'video' &&
     value.kind !== 'image' &&
     value.kind !== 'svg' &&
-    value.kind !== 'html'
+    value.kind !== 'html' &&
+    value.kind !== 'thread'
   )
     return false
+  // A conversation attached as context carries the thread it names, which is
+  // what its chip opens; a stored entry without a usable identity is dropped as
+  // the shape it is not.
+  if (value.threadId !== undefined && typeof value.threadId !== 'string') return false
+  if (value.projectId !== undefined && typeof value.projectId !== 'string') return false
   if (value.messageId !== undefined && typeof value.messageId !== 'string') return false
   if (value.startOffset !== undefined && typeof value.startOffset !== 'number') return false
   if (value.endOffset !== undefined && typeof value.endOffset !== 'number') return false

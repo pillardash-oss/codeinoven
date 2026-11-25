@@ -65,13 +65,17 @@ export function startDisplayStream(options: DisplayStreamOptions): DisplayStream
   let stderrTail = ''
   let settled = false
   let wasLive = false
-  const settle = (detail: string | null): void => {
+  const settle = (detail: string | null, from: 'message' | 'exit'): void => {
     if (settled) return
     settled = true
+    // A stream process that leaves without saying why is the one failure a reader
+    // cannot diagnose from the panel, so its own last words go to the log.
+    if (from === 'exit') Logger.dev(`Display stream process exited: ${detail ?? 'clean exit'}`)
     options.onEnded(detail, wasLive)
   }
   host.stderr?.on('data', (chunk: Buffer | string) => {
     stderrTail = (stderrTail + chunk.toString()).slice(-1_000)
+    Logger.dev(`Display stream process: ${chunk.toString().trim().slice(-200)}`)
   })
   host.on('message', (message: unknown) => {
     if (!isHostLifecycle(message)) return
@@ -80,12 +84,15 @@ export function startDisplayStream(options: DisplayStreamOptions): DisplayStream
       options.onLive()
       return
     }
-    settle(message.detail ?? null)
+    settle(message.detail ?? null, 'message')
   })
   let killTimer: ReturnType<typeof setTimeout> | null = null
   host.once('exit', (code) => {
     if (killTimer) clearTimeout(killTimer)
-    settle(code === 0 ? null : stderrTail.trim() || `The stream process exited with code ${code}`)
+    settle(
+      code === 0 ? null : stderrTail.trim() || `The stream process exited with code ${code}`,
+      'exit'
+    )
   })
   const start: StreamStartMessage = {
     type: 'start',

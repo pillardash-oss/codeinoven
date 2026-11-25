@@ -1,6 +1,7 @@
 import { pathIsAccessible } from '../../lib/utils'
 import { actionShellFamily, failFastActionScript } from './action-script-fail-fast'
 import { PtyOutputBuffer } from './pty-output-buffer'
+import { PtyOutputCoalescer } from './pty-output-coalescer'
 import { stopPtyProcesses } from './pty-process-stop'
 import type { WebContents } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
@@ -306,6 +307,13 @@ export class PtyService {
   private sessions = new Map<string, PtySession>()
   private idleWatchdog: ReturnType<typeof setInterval> | null = null
   private readonly commandOutput = new Map<string, PtyOutputBuffer>()
+  /** Paced output of every session that streams to a user terminal, keyed by
+   *  the session id and remembered with the process it belongs to, so a reused
+   *  id can never inherit the pacing of a shell that already ended. */
+  private readonly terminalOutput = new Map<
+    string,
+    { process: pty.IPty; output: PtyOutputCoalescer }
+  >()
   private sender: WebContents | null = null
   private projectManager: ProjectManager
   private scopeRoots
@@ -383,6 +391,37 @@ export class PtyService {
     }
     this.sessions.set(id, session)
     return { id, pid: session.process.pid }
+  }
+
+  /**
+   * The paced output channel of one session, created on its first write.
+   *
+   * A terminal in this app is a live process the user watches: a build, a test
+   * runner, a dev server. Their output arrives in whatever pieces the child
+   * writes, and one `webContents.send` per piece is what made the window
+   * sluggish exactly when the machine was busy. `PtyOutputCoalescer` gathers a
+   * frame of output into one message without dropping, reordering or truncating
+   * a byte of it.
+   */
+  private pacedOutput(id: string, process: pty.IPty): PtyOutputCoalescer {
+    const existing = this.terminalOutput.get(id)
+    if (existing && existing.process === process) return existing.output
+    existing?.output.dispose()
+    const output = new PtyOutputCoalescer(process, (data) => {
+      sendToRenderer(this.sender, `pty:data:${id}`, data)
+    })
+    this.terminalOutput.set(id, { process, output })
+    return output
+  }
+
+  /** Send a session's last waiting output, then stop pacing it. Called ahead of
+   *  `pty:exit` so the final lines a process printed still reach the terminal. */
+  private flushTerminalOutput(id: string): void {
+    const entry = this.terminalOutput.get(id)
+    if (!entry) return
+    this.terminalOutput.delete(id)
+    entry.output.flush()
+    entry.output.dispose()
   }
 
   private create(
@@ -646,12 +685,13 @@ export class PtyService {
 
     proc.onData((data) => {
       if (this.sessions.get(id)?.process !== proc) return
-      sendToRenderer(this.sender, `pty:data:${id}`, data)
+      this.pacedOutput(id, proc).push(data)
     })
 
     proc.onExit(({ exitCode }) => {
       if (this.sessions.get(id)?.process !== proc) return
       this.sessions.delete(id)
+      this.flushTerminalOutput(id)
       sendToRenderer(this.sender, `pty:exit:${id}`, exitCode)
       void this.recordEvent({
         type: 'exit',
@@ -758,12 +798,13 @@ export class PtyService {
       if (this.sessions.get(id)?.process !== proc) return
       const session = this.sessions.get(id)
       if (session) session.lastActivityAt = Date.now()
-      sendToRenderer(this.sender, `pty:data:${id}`, data)
+      this.pacedOutput(id, proc).push(data)
     })
     proc.onExit(({ exitCode }) => {
       void launch.dispose().catch(() => Logger.dev('Oven terminal credential cleanup failed'))
       if (this.sessions.get(id)?.process !== proc) return
       this.sessions.delete(id)
+      this.flushTerminalOutput(id)
       sendToRenderer(this.sender, `pty:exit:${id}`, exitCode)
       void this.recordEvent({
         type: 'exit',
@@ -1008,6 +1049,9 @@ export class PtyService {
           (now - session.lastActivityAt) / 1000
         )}s   killing hung process`
       )
+      // The notice follows the output already written; a paced session would
+      // otherwise show it above lines that are still waiting for their frame.
+      this.terminalOutput.get(session.id)?.output.flush()
       sendToRenderer(
         this.sender,
         `pty:data:${session.id}`,
@@ -1102,12 +1146,12 @@ export class PtyService {
       cwd
     })
     proc.onData((data) => {
-      if (this.sessions.get(id)?.process === proc)
-        sendToRenderer(this.sender, `pty:data:${id}`, data)
+      if (this.sessions.get(id)?.process === proc) this.pacedOutput(id, proc).push(data)
     })
     proc.onExit(({ exitCode }) => {
       if (this.sessions.get(id)?.process !== proc) return
       this.sessions.delete(id)
+      this.flushTerminalOutput(id)
       sendToRenderer(this.sender, `pty:exit:${id}`, exitCode)
       void this.recordEvent({
         type: 'exit',
@@ -1187,6 +1231,8 @@ export class PtyService {
     this.pendingStarts.delete(id)
     this.commandOutput.get(id)?.dispose()
     this.commandOutput.delete(id)
+    this.terminalOutput.get(id)?.output.dispose()
+    this.terminalOutput.delete(id)
     const session = this.sessions.get(id)
     if (!session) return
     this.sessions.delete(id)
@@ -1229,6 +1275,8 @@ export class PtyService {
     this.pendingStarts.clear()
     for (const output of this.commandOutput.values()) output.dispose()
     this.commandOutput.clear()
+    for (const entry of this.terminalOutput.values()) entry.output.dispose()
+    this.terminalOutput.clear()
     this.sender = null
     this.stopIdleWatchdog()
     await Promise.allSettled([...this.sessions.keys()].map((id) => this.destroy(id)))

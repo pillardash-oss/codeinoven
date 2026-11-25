@@ -65,6 +65,12 @@ export interface Props {
   /** Promote a controller-driven temporary chat into a regular thread. */
   onContinueInThread?: () => void | Promise<void>
   /**
+   * Make a controller-driven temporary chat durable and attach it to the
+   * conversation it was opened from, as a worker thread that conversation can
+   * read for context.
+   */
+  onAttachToParent?: () => void | Promise<void>
+  /**
    * Optional conversation controller. When provided, ThreadView delegates all
    * core conversation state (messages, busy, send/steer/abort) to the
    * controller instead of threadMessages / agentRuns. Used for conversations

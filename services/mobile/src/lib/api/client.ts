@@ -241,6 +241,22 @@ export const api = {
   exchangeOAuth: (input: { code: string }) =>
     data<AuthResult>('/v1/auth/oauth/exchange', { method: 'POST', body: input }),
 
+  /** Mail a fresh verification link. Always accepted, whether or not the address exists. */
+  resendVerification: (input: { email: string }) =>
+    data<{ sent: boolean }>('/v1/auth/email/resend', { method: 'POST', body: input }),
+
+  /** Mail a password reset link. Always accepted, whether or not the address exists. */
+  requestPasswordReset: (input: { email: string }) =>
+    data<{ sent: boolean }>('/v1/auth/email/reset/request', { method: 'POST', body: input }),
+
+  /** Set a new password; every other session of the account is signed out. */
+  changePassword: (input: { currentPassword: string; newPassword: string }) =>
+    data<{ sessionsRevoked: number }>('/v1/me/password', { method: 'POST', body: input }),
+
+  /** Delete the account and everything in its store, for good. */
+  deleteAccount: (input: { password?: string; email?: string }) =>
+    data<void>('/v1/me', { method: 'DELETE', body: input }),
+
   me: () => data<AccountUser>('/v1/me'),
 
   updateMe: (input: { name: string }) =>

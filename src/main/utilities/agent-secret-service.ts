@@ -93,6 +93,18 @@ export interface AgentSecretResolution {
   unresolved?: string[]
 }
 
+/** Which turn's project env to resolve. */
+export interface ProjectEnvironmentContext {
+  projectId: string
+  threadId: string
+  projectPath: string
+}
+
+/** Resolves the project-owned ENV values one agent turn should run with. */
+export type ProjectEnvironmentSource = (
+  context: ProjectEnvironmentContext
+) => Promise<Record<string, string>>
+
 /** One durable entry of a thread's secret registry; the value stays in the vault. */
 interface AgentThreadSecret {
   environmentVariable: string
@@ -128,6 +140,18 @@ export class AgentSecretService {
     private readonly registry: UtilityRegistryService,
     private readonly storage: StorageEngine
   ) {}
+
+  /** Resolves the project-owned ENV a launch in this thread would see. */
+  private projectEnvironmentSource: ProjectEnvironmentSource | null = null
+
+  /**
+   * Register the resolver behind project-owned ENV files. The project env service
+   * is built after this one, so it is handed in late instead of through the
+   * constructor.
+   */
+  setProjectEnvironmentSource(source: ProjectEnvironmentSource | null): void {
+    this.projectEnvironmentSource = source
+  }
 
   async store(request: AgentSecretStoreRequest): Promise<AgentStoredSecret> {
     validateTargetEnvironmentVariable(request.environmentVariable)
@@ -172,6 +196,22 @@ export class AgentSecretService {
       }
     }
     return environment
+  }
+
+  /**
+   * Everything an agent turn's shell should see: the project's ENV files resolved
+   * the way a terminal launched at the project root resolves them, then this
+   * thread's own collected secrets on top, since those were asked for here. A
+   * project env that cannot be resolved never fails the turn.
+   */
+  async turnEnvironment(context: ProjectEnvironmentContext): Promise<Record<string, string>> {
+    const project = this.projectEnvironmentSource
+      ? await this.projectEnvironmentSource(context).catch((error: unknown) => {
+          Logger.dev('Project env could not be resolved for an agent turn:', error)
+          return {}
+        })
+      : {}
+    return { ...project, ...(await this.secretEnvironment(context.threadId)) }
   }
 
   /**

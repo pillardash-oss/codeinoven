@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws:"
+    />
+    <title>Select a region</title>
+    <style>
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        cursor: crosshair;
+        user-select: none;
+        touch-action: none;
+      }
+
+      #frame {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+      #shade {
+        position: fixed;
+        inset: 0;
+        background: rgb(0 0 0 / 35%);
+      }
+
+      /* The shadow is the shade while dragging, so the region itself stays clear. */
+      #selection {
+        position: fixed;
+        outline: 1px solid #fff;
+        box-shadow: 0 0 0 100vmax rgb(0 0 0 / 35%);
+      }
+
+      #hint {
+        position: fixed;
+        top: 1.5rem;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 0.5rem 0.75rem;
+        border: 1px solid var(--color-border);
+        background: var(--color-surface);
+        color: var(--color-foreground);
+        font-family: var(--font-app);
+        font-size: 0.8125rem;
+        pointer-events: none;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+
+  <body>
+    <canvas id="frame"></canvas>
+    <div id="shade"></div>
+    <div id="selection" hidden></div>
+    <div id="hint">Drag to capture. Esc to cancel.</div>
+    <script type="module" src="./screenshot-overlay.ts"></script>
+  </body>
+</html>

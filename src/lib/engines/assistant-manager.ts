@@ -16,7 +16,7 @@ import { Logger } from '../../main/system/logger'
 import type { Database } from '../../main/database/database'
 import { AssistantRepo } from '../../main/database/repositories/assistant-repo'
 import { AssistantKnowledgeRevisionRepo } from '../../main/database/repositories/assistant-knowledge-revision-repo'
-import { ThreadRepo } from '../../main/database/repositories/thread-repo'
+import { ThreadRepo, type ThreadListOptions } from '../../main/database/repositories/thread-repo'
 import {
   assistantFirstKnowledgeSave,
   assistantIsBuiltin,
@@ -44,6 +44,9 @@ function schedulesEqual(
   if (!a || !b) return (a ?? null) === (b ?? null)
   return JSON.stringify(a) === JSON.stringify(b)
 }
+
+/** Listing options shared by the sync and worker-backed task listings. */
+const LIST_TASKS_OPTIONS: ThreadListOptions = { includeArchived: false }
 
 /**
  * AssistantManager   CRUD and task-grouping for assistants.
@@ -519,13 +522,44 @@ export class AssistantManager {
    * Every assistant task thread, newest activity first. Run threads are not
    * tasks: a run is one execution of a task, so it is never listed here, never
    * scheduled, and never counted as a task in an assistant.
+   *
+   * The knowledge thread is not a task either. "Getting started" is the host the
+   * user writes an assistant's behaviour in, not a job it performs, so listing it
+   * here made the scheduler run it on every slot of its assistant's clock and
+   * dispatch the assistant against its own name with no task to do. The panel
+   * already counts only real tasks (`assistantThreadCount`) and the run contract
+   * already refuses to run the setup thread; the scheduler now agrees with both.
    */
   listAssistantTasks(): Thread[] {
     // Archived tasks are hidden tasks: they keep their thread and their
     // history but are never listed, scheduled, or counted again.
-    return [...this.threadRepo.listByProject(ASSISTANT_SPACE_ID, { includeArchived: false })]
-      .filter((thread) => !isAssistantRunThread(thread))
+    return this.listableTaskThreads(this.assistantTaskThreads())
+  }
+
+  /**
+   * The same listing on the database worker's connection. The scheduler's
+   * 30-second tick used to run the sync listing on the Electron main thread,
+   * which held the event loop for the length of the archived-subtree query on
+   * every tick of every hour; the worker read answers the same rows without
+   * blocking anyone. Falls back to the primary connection exactly like every
+   * other ViaWorker read.
+   */
+  async listAssistantTasksViaWorker(): Promise<Thread[]> {
+    const rows = await this.threadRepo.listByProjectViaWorker(
+      ASSISTANT_SPACE_ID,
+      LIST_TASKS_OPTIONS
+    )
+    return this.listableTaskThreads(rows)
+  }
+
+  private listableTaskThreads(rows: Thread[]): Thread[] {
+    return rows
+      .filter((thread) => !isAssistantRunThread(thread) && !isAssistantSetupThread(thread))
       .sort((a, b) => b.lastActivity - a.lastActivity)
+  }
+
+  private assistantTaskThreads(): Thread[] {
+    return this.threadRepo.listByProject(ASSISTANT_SPACE_ID, LIST_TASKS_OPTIONS)
   }
 
   /**

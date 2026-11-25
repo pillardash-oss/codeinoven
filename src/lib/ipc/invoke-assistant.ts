@@ -36,11 +36,15 @@ export const invokeAssistantContract = {
    */
   'assistant:previews': {} as Contract<[], AssistantPreview[]>,
   /**
-   * Don's one thread, seeded on first launch. Read by the surfaces that talk to the
-   * orchestrator without opening the assistant view, such as the listening panel,
-   * so none of them has to search the assistant space for it.
+   * The Don conversation to open when a surface only has a "Don" door. Don holds
+   * one conversation per topic, so this answers with the one that last moved.
    */
   'assistant:donThread': {} as Contract<[], { threadId: string | null }>,
+  /**
+   * Open one more Don conversation: its own thread, its own context, its own tab.
+   * The conversation it inherits from is the newest one that already has settings.
+   */
+  'assistant:createDonConversation': {} as Contract<[], Thread>,
   /**
    * Open Don's first conversation, once. The orchestrator introduces itself with
    * a real turn the first time it is opened, exactly like every other assistant,
@@ -72,6 +76,23 @@ export const invokeAssistantContract = {
    * thread list, so the knowledge panel asks for its own assistant's thread here.
    */
   'assistant:knowledgeThread': {} as Contract<[assistantId: string], Thread | null>,
+  /**
+   * Every task an assistant owns, newest created first, read from the database
+   * rather than from whatever the workspace happens to have loaded. A task Don
+   * scheduled is owned by the assistant in charge like any other, so this is what
+   * the Schedule tab lists: the complete set the user can act on, not a slice.
+   */
+  'assistant:listTasks': {} as Contract<[assistantId: string], Thread[]>,
+  /**
+   * Turn the whole clock off (or back on) for every task an assistant owns, in one
+   * write. `false` pauses them all, `true` schedules them all even under an
+   * unscheduled assistant, and `null` returns each to the assistant's default.
+   * Returns the fresh rows so the list repaints without a reload.
+   */
+  'assistant:setTasksScheduled': {} as Contract<
+    [assistantId: string, scheduled: boolean | null],
+    Thread[]
+  >,
   /**
    * Every version of an assistant's instructions, newest first, without the
    * documents themselves. Each save replaces the knowledge whole, so the history is

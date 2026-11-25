@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { AgentEvent, RemoteAgentEventPayload } from '../../src/lib/types'
 import {
   InstanceEventBus,
+  instanceBusEndpoint,
   type InstanceEventBusOptions
 } from '../../src/main/system/instance-event-bus'
 import type { CrossInstanceThreadEvent } from '../../src/main/system/instance-registry'
@@ -260,5 +261,108 @@ describe('InstanceEventBus', () => {
     sender.publishAgentEvent(deltaEvent())
     await waitFor(() => received.length > 0)
     expect(received[0]?.event).toEqual(deltaEvent())
+  })
+
+  it('paces the filesystem probe the publish path makes while alone', async () => {
+    const directory = await busDirectory()
+    const live = membership(PEER_A)
+    let probes = 0
+    const alone = new InstanceEventBus({
+      directory,
+      localPid: PEER_A,
+      liveInstancePids: () => {
+        probes += 1
+        return live.pids
+      },
+      subscribeToMembership: (listener) => {
+        live.listeners.add(listener)
+        return () => live.listeners.delete(listener)
+      },
+      // Long enough that no paced redial can add a probe during the assertion.
+      redial: { baseDelayMs: 60_000, maxDelayMs: 60_000 }
+    })
+    directories.push(directory)
+    buses.push(alone)
+    alone.start()
+
+    // The start reconciliation probes once, the first published frame probes
+    // once more, and the gate holds the whole burst off the filesystem: before
+    // it, every streamed frame re-read the registry for nothing.
+    for (let i = 0; i < 50; i++) alone.publishAgentEvent(deltaEvent())
+    expect(probes).toBe(2)
+
+    // A membership notification clears the gate and reconciles at once, so a
+    // genuinely new sibling is still discovered immediately.
+    live.pids = [PEER_A, PEER_B]
+    live.announce()
+    expect(alone.isServing).toBe(true)
+    const discovered = probes
+
+    // With a sibling registered, dial pacing owns recovery, so publishing again
+    // never touches the filesystem either.
+    alone.publishAgentEvent(deltaEvent())
+    expect(probes).toBe(discovered)
+  })
+})
+
+/**
+ * `sun_path` is 104 bytes on macOS and 108 on Linux, and a bind to a longer path
+ * fails with no listener at all, which is how two windows end up permanently
+ * unlinked. The endpoint therefore has to reach a path that fits even when both
+ * the directory and the OS temp root are deep: a harness can set TMPDIR to a
+ * per-run scratch directory, and joining a hashed name onto that used to
+ * overflow the limit the fallback existed to avoid.
+ *
+ * Windows addresses a socket by named pipe rather than by a filesystem path, so
+ * only the pipe name is asserted there: `sun_path` and the temp root do not
+ * apply.
+ */
+describe('instanceBusEndpoint', () => {
+  // 108 bytes before the file name, so `<pid>.sock` cannot fit beside it.
+  const DEEP_DIRECTORY = join(
+    '/Users/someone/Development/in-house/very-deep-workspace-name',
+    'another-nesting-level',
+    '.cio',
+    'instances',
+    'bus'
+  )
+  const DEEP_TEMP_ROOT = join(
+    '/Users/someone/.config/pillardash/codeinoven/chats-cwd/179c81ac04f4f1fff90d59d3/.cio/tmp'
+  )
+  const SUN_PATH_BYTES = 100
+
+  it('keeps the endpoint beside the instances when it fits', () => {
+    const endpoint = instanceBusEndpoint('/tmp/cio-instances', PEER_A)
+
+    if (process.platform === 'win32') {
+      expect(endpoint.startsWith('\\\\.\\pipe\\cio-instance-bus-')).toBe(true)
+      expect(endpoint.endsWith(`-${PEER_A}`)).toBe(true)
+      return
+    }
+
+    expect(endpoint).toBe('/tmp/cio-instances/700001.sock')
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'moves a too-long endpoint into the OS temp root under a hashed name',
+    () => {
+      const endpoint = instanceBusEndpoint(DEEP_DIRECTORY, PEER_A, '/tmp')
+
+      expect(endpoint.startsWith('/tmp/')).toBe(true)
+      expect(endpoint).toContain(`-${PEER_A}.sock`)
+      expect(Buffer.byteLength(endpoint)).toBeLessThanOrEqual(SUN_PATH_BYTES)
+      // Deterministic from (directory, pid), so a peer derives the same address.
+      expect(instanceBusEndpoint(DEEP_DIRECTORY, PEER_A, '/tmp')).toBe(endpoint)
+      // A different pid is a different endpoint, or two windows would collide.
+      expect(instanceBusEndpoint(DEEP_DIRECTORY, PEER_B, '/tmp')).not.toBe(endpoint)
+    }
+  )
+
+  it.skipIf(process.platform === 'win32')('still fits when the OS temp root is itself deep', () => {
+    const endpoint = instanceBusEndpoint(DEEP_DIRECTORY, PEER_A, DEEP_TEMP_ROOT)
+
+    expect(endpoint.startsWith('/tmp/')).toBe(true)
+    expect(Buffer.byteLength(endpoint)).toBeLessThanOrEqual(SUN_PATH_BYTES)
+    expect(instanceBusEndpoint(DEEP_DIRECTORY, PEER_A, DEEP_TEMP_ROOT)).toBe(endpoint)
   })
 })

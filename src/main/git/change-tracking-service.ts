@@ -161,6 +161,35 @@ const DEFAULT_LIMITS: CheckpointLimits = {
 }
 
 /**
+ * Options for a fingerprint request. The defaults always take a fresh scan;
+ * a caller opening a change window may opt into reusing a just-completed one.
+ */
+export interface FingerprintOptions {
+  /**
+   * Reuse a fingerprint that completed within the reuse window. Only a
+   * window-open snapshot may ask for this: a stale open snapshot widens the
+   * bound (over-includes paths as "possibly touched"), while a stale close
+   * snapshot would silently lose changes a tool really made.
+   */
+  reuseRecent?: boolean
+}
+
+/** How long a completed fingerprint may be reused by a window-open request. */
+const FINGERPRINT_REUSE_MS = 500
+
+/**
+ * How long a repository root answer is trusted.
+ *
+ * Resolving it is one `git rev-parse --show-toplevel` per scan, and a scan runs
+ * around every shell command in a turn. A working tree does not move while a
+ * turn runs, so the answer is cached; the TTL only bounds how long a project
+ * that was `git init`ed or adopted mid-session keeps being treated as untracked.
+ * Failures are never cached, so a repository created a second ago is found by
+ * the next scan instead of a minute from now.
+ */
+const REPOSITORY_ROOT_TTL_MS = 60_000
+
+/**
  * Captures content-addressed local-project checkpoints. It never follows symlinks
  * and restores only paths derived from the comparison supplied by the caller.
  */
@@ -170,6 +199,12 @@ export class ChangeTrackingService {
   private cachedProjectRoot: string | undefined
   private cachedBlobRevision: string | undefined
   private snapshotCache = new Map<string, CachedCheckpointFile>()
+  /** One in-flight fingerprint per project path, so concurrent windows share one git walk. */
+  private fingerprintInFlight = new Map<string, Promise<ProjectFingerprint>>()
+  /** Fingerprints that just completed, reusable only by window-open requests. */
+  private fingerprintRecent = new Map<string, { at: number; value: ProjectFingerprint }>()
+  /** Resolved Git root per project path, so a scan does not respawn `rev-parse`. */
+  private readonly repositoryRoots = new Map<string, { root: string; at: number }>()
 
   constructor(
     private readonly blobs: CheckpointBlobStore,
@@ -200,7 +235,7 @@ export class ChangeTrackingService {
     this.cachedBlobRevision = blobRevision
     const git = options.includeGitMetadata ? await this.readGitMetadata(projectRoot) : undefined
     const gitPaths = git
-      ? await this.readGitCheckpointPaths(projectRoot, git).catch(() => undefined)
+      ? await this.readGitCheckpointPaths(projectRoot, git.repositoryRoot).catch(() => undefined)
       : undefined
     const files: Record<string, CheckpointFile> = {}
     const skippedFiles: string[] = []
@@ -325,29 +360,91 @@ export class ChangeTrackingService {
    * Records path, size, and modification time for every tracked file without
    * reading or storing content. Used to bound an unbounded tool (a shell
    * command) to the files it touched while it was running.
+   *
+   * Concurrent requests for the same working tree share one scan: several
+   * threads in one checkout each opening a change window used to each spawn
+   * their own `git status` / `git ls-files` pair and walk the tree four times
+   * over. The key is the session's resolved path, which the scope resolver
+   * answers per checkout: a scope with its own worktree gets its own key, a
+   * project thread gets the project checkout, and the assistant, inbox and
+   * browser spaces get their own per-thread directories, so a shared scan
+   * always means a literally shared tree and never crosses a worktree. A
+   * `reuseRecent` request may answer from the most recent completed
+   * fingerprint inside {@link FINGERPRINT_REUSE_MS} instead of scanning again,
+   * which only a window-open snapshot may do.
    */
-  async fingerprint(projectPath: string): Promise<ProjectFingerprint> {
+  async fingerprint(
+    projectPath: string,
+    options: FingerprintOptions = {}
+  ): Promise<ProjectFingerprint> {
+    const inFlight = this.fingerprintInFlight.get(projectPath)
+    if (inFlight) return inFlight
+    if (options.reuseRecent === true) {
+      const recent = this.fingerprintRecent.get(projectPath)
+      if (recent && Date.now() - recent.at <= FINGERPRINT_REUSE_MS) return recent.value
+    }
+    const scan = this.scanFingerprint(projectPath).finally(() => {
+      this.fingerprintInFlight.delete(projectPath)
+    })
+    this.fingerprintInFlight.set(projectPath, scan)
+    void scan.then(
+      (value) => {
+        this.fingerprintRecent.set(projectPath, { at: Date.now(), value })
+        for (const [path, entry] of this.fingerprintRecent) {
+          if (Date.now() - entry.at > FINGERPRINT_REUSE_MS) this.fingerprintRecent.delete(path)
+        }
+      },
+      () => undefined
+    )
+    return scan
+  }
+
+  private async scanFingerprint(projectPath: string): Promise<ProjectFingerprint> {
     const projectRoot = await this.resolveProjectRoot(projectPath)
-    const git = await this.readGitMetadata(projectRoot)
-    const gitPaths = git
-      ? await this.readGitCheckpointPaths(projectRoot, git).catch(() => undefined)
+    // A fingerprint answers "which files changed", which needs the repository
+    // root to list tracked paths and nothing else. It used to come through the
+    // full checkpoint metadata read, so every tool window paid for `rev-parse
+    // HEAD` and a whole `git status --porcelain` walk that the fingerprint then
+    // threw away.
+    const repositoryRoot = await this.readRepositoryRoot(projectRoot)
+    const gitPaths = repositoryRoot
+      ? await this.readGitCheckpointPaths(projectRoot, repositoryRoot).catch(() => undefined)
       : undefined
+    const candidates = await this.listCandidateFiles(projectRoot, gitPaths)
+    // The same bounded waves a snapshot uses. One `lstat` at a time spent 124 ms
+    // of a 4 000-file checkout per fingerprint (measured on this repository);
+    // 32 at a time measured 38 ms, and a fingerprint runs around every tool.
+    const observed = await mapBounded(candidates, SNAPSHOT_CONCURRENCY, (absolutePath) =>
+      this.describeFingerprintFile(projectRoot, absolutePath)
+    )
     const files: Record<string, string> = {}
-    for (const absolutePath of await this.listCandidateFiles(projectRoot, gitPaths)) {
-      let metadata
-      try {
-        metadata = await lstat(absolutePath)
-      } catch (error) {
-        if (isMissing(error)) continue
-        throw error
-      }
-      if (!metadata.isFile()) continue
-      const relativePath = relative(projectRoot, absolutePath)
-      if (!relativePath || relativePath.startsWith(`..${sep}`)) continue
-      files[relativePath] =
-        `${metadata.dev}:${metadata.ino}:${metadata.size}:${metadata.mtimeMs}:${metadata.ctimeMs}`
+    for (const entry of observed) {
+      if (entry) files[entry.path] = entry.stamp
     }
     return { projectRoot, capturedAt: Date.now(), files }
+  }
+
+  /** One stat line for a fingerprint, or null when the path is gone or is no
+   *  longer a file. `dev`/`ino` are kept so a replaced file that matches on size
+   *  and timestamp is still a change. */
+  private async describeFingerprintFile(
+    projectRoot: string,
+    absolutePath: string
+  ): Promise<{ path: string; stamp: string } | null> {
+    let metadata
+    try {
+      metadata = await lstat(absolutePath)
+    } catch (error) {
+      if (isMissing(error)) return null
+      throw error
+    }
+    if (!metadata.isFile()) return null
+    const relativePath = relative(projectRoot, absolutePath)
+    if (!relativePath || relativePath.startsWith(`..${sep}`)) return null
+    return {
+      path: toPosixPath(relativePath),
+      stamp: `${metadata.dev}:${metadata.ino}:${metadata.size}:${metadata.mtimeMs}:${metadata.ctimeMs}`
+    }
   }
 
   /**
@@ -556,12 +653,23 @@ export class ChangeTrackingService {
     await writeFile(target, content)
   }
 
+  /**
+   * A checkpoint key is always POSIX-separated, never the platform separator.
+   *
+   * Every consumer of these keys compares them against a POSIX relative path:
+   * tool write evidence (`projectRelativePath`), the excluded-path rules, the
+   * change breakdown and the file-changes card all speak `/`. Emitting native
+   * separators here made a Windows snapshot key `apps\\app\\src\\x.ts` while
+   * the evidence for that same file was `apps/app/src/x.ts`, so no path ever
+   * matched its proof, a contested diff dropped every real change, and a card
+   * that could have been repaired from its snapshots stayed empty.
+   */
   private relativePath(projectRoot: string, target: string): string {
     const relativePath = relative(projectRoot, target)
     if (!relativePath || relativePath === '..' || relativePath.startsWith(`..${sep}`)) {
       throw new CheckpointSafetyError(`Path escapes project root: ${target}`)
     }
-    return relativePath
+    return toPosixPath(relativePath)
   }
 
   private assertWithinRoot(projectRoot: string, target: string): void {
@@ -580,22 +688,40 @@ export class ChangeTrackingService {
   }
 
   private readGitMetadata(projectRoot: string): Promise<GitCheckpointMetadata | undefined> {
-    return runGit(['-C', projectRoot, 'rev-parse', '--show-toplevel'])
-      .then(async (repositoryRoot) => {
-        const [head, porcelainStatus] = await Promise.all([
-          runGit(['-C', projectRoot, 'rev-parse', 'HEAD']).catch(() => ''),
-          runGit(['-C', projectRoot, 'status', '--porcelain=v1']).catch(() => '')
-        ])
-        return { repositoryRoot: repositoryRoot.trim(), head: head.trim() || null, porcelainStatus }
-      })
-      .catch(() => undefined)
+    return this.readRepositoryRoot(projectRoot).then(async (repositoryRoot) => {
+      if (!repositoryRoot) return undefined
+      const [head, porcelainStatus] = await Promise.all([
+        runGit(['-C', projectRoot, 'rev-parse', 'HEAD']).catch(() => ''),
+        runGit(['-C', projectRoot, 'status', '--porcelain=v1']).catch(() => '')
+      ])
+      return { repositoryRoot, head: head.trim() || null, porcelainStatus }
+    })
+  }
+
+  /**
+   * The working tree's Git root, or undefined when the project is not a
+   * repository.
+   *
+   * This is the one field every Git-backed path needs, so it is resolved and
+   * cached on its own: `rev-parse HEAD` and `git status` belong to a checkpoint
+   * that records commits, and a fingerprint must not pay for either.
+   */
+  private async readRepositoryRoot(projectRoot: string): Promise<string | undefined> {
+    const cached = this.repositoryRoots.get(projectRoot)
+    if (cached && Date.now() - cached.at <= REPOSITORY_ROOT_TTL_MS) return cached.root
+    const resolved = await runGit(['-C', projectRoot, 'rev-parse', '--show-toplevel'])
+      .then((output) => output.trim())
+      .catch(() => '')
+    if (!resolved) return undefined
+    this.repositoryRoots.set(projectRoot, { root: resolved, at: Date.now() })
+    return resolved
   }
 
   private async readGitCheckpointPaths(
     projectRoot: string,
-    git: GitCheckpointMetadata
+    repositoryRoot: string
   ): Promise<string[]> {
-    const repositoryRelativeRoot = toPosixPath(relative(git.repositoryRoot, projectRoot))
+    const repositoryRelativeRoot = toPosixPath(relative(repositoryRoot, projectRoot))
     if (
       repositoryRelativeRoot === '..' ||
       repositoryRelativeRoot.startsWith('../') ||
@@ -606,7 +732,7 @@ export class ChangeTrackingService {
     const scope = repositoryRelativeRoot || '.'
     const output = await runGit([
       '-C',
-      git.repositoryRoot,
+      repositoryRoot,
       'ls-files',
       '--cached',
       '--others',

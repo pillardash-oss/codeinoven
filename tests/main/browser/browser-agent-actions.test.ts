@@ -133,7 +133,9 @@ describe('agent key input', () => {
 
   it('refuses a page that is gone rather than reporting a press that never happened', async () => {
     const contents = { isDestroyed: () => true } as unknown as WebContents
-    await expect(pressAgentKey(contents, { key: 'Enter', modifiers: [], times: 1 })).rejects.toThrow()
+    await expect(
+      pressAgentKey(contents, { key: 'Enter', modifiers: [], times: 1 })
+    ).rejects.toThrow()
     expect(agentKeyCode('Escape')).toBe('Escape')
     expect(normalizeAgentModifiers(['cmd'])).toEqual(['meta'])
     expect(agentCount('nonsense', 1, 20)).toBe(1)
@@ -186,8 +188,30 @@ describe('browser action review for the new operations', () => {
       ).approved
     ).toBe(true)
     expect(
-      reviewBrowserAction('select', {}, target({ tag: 'select', type: '', label: 'Delete account' }))
-        .approved
+      reviewBrowserAction(
+        'select',
+        {},
+        target({ tag: 'select', type: '', label: 'Delete account' })
+      ).approved
     ).toBe(false)
+  })
+})
+
+describe('agent key codes', () => {
+  it('treats a space as the character it is, so a multi-word text can be typed', () => {
+    expect(agentKeyCode(' ')).toBe(' ')
+    expect(agentKeyCode('a')).toBe('a')
+    expect(agentKeyCode('Enter')).toBe('Enter')
+    expect(agentKeyCode('Home')).toBe('Home')
+  })
+
+  it('sends the character event a space needs to reach a caret', async () => {
+    const { contents, events } = recorder()
+    await pressAgentKey(contents, { key: ' ', modifiers: [], times: 1 })
+    expect(events.map((event) => event.type)).toEqual(['keyDown', 'char', 'keyUp'])
+  })
+
+  it('refuses a key that is nothing at all', () => {
+    expect(() => agentKeyCode('')).toThrow('key must name a key to press')
   })
 })

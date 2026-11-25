@@ -1,5 +1,6 @@
 import { app } from 'electron'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import { hostname } from 'node:os'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
@@ -9,11 +10,13 @@ import {
   type OvenRunEvent,
   type StartOvenRunInput
 } from '../../lib/ovens'
+import type { OvenUtilitySecretVault } from '../../lib/oven-utility-host'
 import {
   type OvenRootPeers,
   type OvenWorkspaceRequest,
   type OvenWorkspaceResult
 } from '../../lib/ovens'
+import { OVEN_UTILITY_HOST_MODE } from '../../lib/oven-utility-host'
 import { mirrorLocalGitIdentity, OVEN_GIT_NETWORK_CHANNELS } from './oven-local-git-identity'
 import { syncLocalGitHostTrust } from './oven-local-git-trust'
 import {
@@ -44,6 +47,15 @@ const ROOT_OPERATION_TIMEOUT_MS = 120_000
 
 /** The largest request one root operation may carry. */
 const ROOT_OPERATION_LIMIT_BYTES = 8 * 1024 * 1024
+
+/**
+ * Where service maintenance reports the work it is doing for a caller's turn.
+ *
+ * A caller that has a turn on screen (an Oven turn starting its capability host)
+ * passes one so the wait is named while it happens; every other caller omits it
+ * and keeps its own reporting.
+ */
+export type OvenServiceNote = (note: string) => void
 
 /**
  * True when an Oven has no service listening at all.
@@ -102,6 +114,54 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/**
+ * A bundle from before the Oven's utility host answers that request this way.
+ *
+ * Its service knows the method list it shipped with, so anything newer is an
+ * unknown method — the same shape `staleChannelAnswer` recognises for the
+ * operations the warm channel carries.
+ */
+function unknownUtilityHostMethod(message: string): boolean {
+  return /Unknown Oven request method/iu.test(message)
+}
+
+/**
+ * The Oven's own refusal to be replaced while a run is still working.
+ *
+ * It arrives as the service's answer to the install, so this is the one failure
+ * the app can clear itself instead of reporting.
+ */
+function activeRunsBlockUpdate(message: string): boolean {
+  return /Finish active runs before updating the Oven service/iu.test(message)
+}
+
+/**
+ * One installation on one machine, as an Oven records a run's owner.
+ *
+ * The hostname makes the owner readable in the Oven's own run record, and the
+ * digest of the data root keeps two installations on one machine distinct.
+ */
+function ovenClientId(dataRoot: string): string {
+  const host =
+    hostname()
+      .replace(/[^A-Za-z0-9._-]/gu, '')
+      .slice(0, 40) || 'client'
+  const digest = createHash('sha256').update(`${host}\u0000${dataRoot}`).digest('hex').slice(0, 8)
+  return `${host}/${digest}`
+}
+
+/** How many runs a probe answer says the Oven is working on. */
+function activeRunsIn(answer: string): number {
+  try {
+    const parsed = JSON.parse(answer.replace(/^\uFEFF/u, '')) as {
+      value?: { activeRuns?: unknown }
+    }
+    return typeof parsed.value?.activeRuns === 'number' ? parsed.value.activeRuns : 0
+  } catch {
+    return 0
+  }
+}
+
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error))
 }
@@ -125,6 +185,23 @@ export class OvenService {
   /** Per-Oven guard, so a service that keeps failing cannot be reinstalled in a loop. */
   private readonly serviceRepairs = new Map<string, number>()
   private readonly repairingServices = new Map<string, Promise<boolean>>()
+  /** Why the last automatic service update on an Oven did not happen. */
+  private readonly serviceFaults = new Map<string, string>()
+  /**
+   * The runs this process started on each Oven.
+   *
+   * A service cannot be replaced under a run that is still working, and this set
+   * is what tells the difference between a run this app is driving and one it
+   * inherited from a service it can no longer talk to.
+   */
+  private readonly startedRuns = new Map<string, Set<string>>()
+  /**
+   * Which other client holds an Oven's service update back, when that is why a
+   * replacement was not attempted.
+   */
+  private readonly serviceBlockers = new Map<string, string>()
+  /** Ovens whose abandoned runs this process already cleared. */
+  private readonly reapedOvens = new Set<string>()
 
   constructor(readonly registry: OvenRegistry) {
     this.ssh = new OvenSsh(registry)
@@ -177,7 +254,18 @@ export class OvenService {
     const { source, revision } = await this.ownBundle()
     const shell = await remoteShell(this.ssh, id)
     const command = remoteInstallServiceCommand(shell, revision, randomUUID())
-    const output = await this.ssh.execute(id, command, source, 60_000)
+    let output: string
+    try {
+      output = await this.ssh.execute(id, command, source, 60_000)
+    } catch (error) {
+      // The Oven refuses to be replaced under a run that is still working. A run
+      // this process did not start belongs to a service it can no longer talk to,
+      // and it would otherwise hold the Oven on that service forever: every later
+      // send would fail the same way while nothing was actually being done.
+      if (!activeRunsBlockUpdate(messageOf(error)) || !(await this.stopAbandonedRuns(id)))
+        throw error
+      output = await this.ssh.execute(id, command, source, 60_000)
+    }
     // The channel runs the bundle that was installed when it started, so it is
     // replaced rather than left answering from the old service.
     this.channel.dispose(id)
@@ -188,6 +276,8 @@ export class OvenService {
       throw new Error(
         'The Oven kept the service it was running instead of the one just installed. Finish any active runs on it, then install the service again.'
       )
+    this.serviceFaults.delete(id)
+    this.serviceBlockers.delete(id)
     return probe
   }
 
@@ -207,6 +297,10 @@ export class OvenService {
   async probe(id: string, refresh = false): Promise<OvenProbe> {
     const input = refresh ? { method: 'probe', refresh: true } : { method: 'probe' }
     const probe = this.parseProbe(await this.request(id, input))
+    // The first answer from an Oven this process has not talked to yet is where
+    // runs a previous turn or a previous app run left behind are cleared, before
+    // a new turn is refused by the Oven's four-run limit.
+    await this.reapOwnRuns(id)
     if (probe.serviceRevision === (await this.ownBundle()).revision) return probe
     if (!(await this.refreshService(id, 'The Oven runs a different service revision.')))
       return probe
@@ -220,10 +314,95 @@ export class OvenService {
   async start(id: string, input: StartOvenRunInput): Promise<OvenRun> {
     const release = beginOvenHarnessRun(id, input.command)
     try {
-      return this.decode<OvenRun>(await this.request(id, { method: 'start', input }))
+      const run = this.decode<OvenRun>(
+        await this.request(id, { method: 'start', input: { ...input, clientId: this.clientId } })
+      )
+      const started = this.startedRuns.get(id) ?? new Set<string>()
+      started.add(input.id)
+      this.startedRuns.set(id, started)
+      return run
     } finally {
       release()
     }
+  }
+
+  /**
+   * Where this Oven's own utility host listens.
+   *
+   * A turn that runs on an Oven runs on that machine, so this app's loopback
+   * gateway is not reachable from it and the Oven hosts its own. This is how the
+   * app learns the port that host answers on before it opens a relay to it.
+   *
+   * A bundle from before the host existed answers this request as an unknown
+   * method rather than with one of the stale answers `withServiceRepair` already
+   * recognises. The Oven's service file is this app's own artifact, so that
+   * answer is treated the same way: the service is replaced once, under the same
+   * cooldown, and the same call is sent again.
+   */
+  async utilityHost(id: string, note?: OvenServiceNote): Promise<{ port: number }> {
+    const input = { method: OVEN_UTILITY_HOST_MODE }
+    const first = await attempt(() => this.request(id, input, note))
+    if (first.ok) return this.utilityHostPort(first.value)
+    if (!unknownUtilityHostMethod(messageOf(first.error))) throw first.error
+    if (!(await this.refreshService(id, messageOf(first.error), note)))
+      throw this.serviceUpdateFailure(
+        id,
+        'This Oven runs an older service. Install the service again from its settings.',
+        first.error
+      )
+    // The replacement restarted the daemon, and its host is started on the next
+    // request. Say so, because that request is the wait the reader is in.
+    note?.("Starting the Oven's capability host…")
+    return this.utilityHostPort(await this.request(id, input, note))
+  }
+
+  /** The port an Oven's utility host answered with, once it is known to be usable. */
+  private utilityHostPort(answer: string): { port: number } {
+    const host = this.decode<{ port: number }>(answer)
+    if (!Number.isInteger(host.port) || host.port < 1 || host.port > 65535)
+      throw new Error('The Oven utility host answered an invalid port.')
+    return { port: host.port }
+  }
+
+  /**
+   * What this Oven can keep at rest, and which utilities it already holds.
+   *
+   * The host listens on that machine's loopback, which this app cannot reach, so
+   * the question goes through the Oven's daemon. An unavailable vault is an
+   * answer, not a failure: that machine simply runs on the per-turn push.
+   */
+  async utilitySecrets(id: string): Promise<OvenUtilitySecretVault> {
+    const vault = this.decode<OvenUtilitySecretVault>(
+      await this.request(id, { method: 'utility-secrets' })
+    )
+    if (!Array.isArray(vault.stored))
+      throw new Error('The Oven answered an invalid credential store.')
+    return vault
+  }
+
+  /**
+   * Allow, or stop allowing, this Oven to keep utility credentials at rest.
+   *
+   * Turning it on writes nothing by itself: a credential arrives with the turn
+   * that uses it, and is kept from then on. Turning it off forgets everything
+   * that Oven held.
+   */
+  async setUtilitySecretStore(id: string, enabled: boolean): Promise<{ enabled: boolean }> {
+    const answer = this.decode<{ enabled: boolean }>(
+      await this.request(id, { method: 'utility-secrets-enabled', input: { enabled } })
+    )
+    return { enabled: answer.enabled === true }
+  }
+
+  /** Forget one utility's stored credentials on this Oven, or every one of them. */
+  async forgetUtilitySecrets(id: string, utilityId?: string): Promise<{ forgotten: number }> {
+    const forgotten = this.decode<{ forgotten: number }>(
+      await this.request(id, {
+        method: 'utility-secret-forget',
+        input: utilityId === undefined ? {} : { utilityId }
+      })
+    )
+    return { forgotten: Number.isInteger(forgotten.forgotten) ? forgotten.forgotten : 0 }
   }
 
   async events(
@@ -240,6 +419,155 @@ export class OvenService {
 
   async stop(id: string, runId: string): Promise<void> {
     this.decode(await this.control(id, { method: 'stop', runId }))
+    this.startedRuns.get(id)?.delete(runId)
+  }
+
+  /**
+   * Free this client's own runs that no turn here is watching any more.
+   *
+   * A pi RPC session leaves its process on the Oven, and the Oven counts every
+   * live child against its four-run limit. When a turn ends without stopping its
+   * run, or the app restarts mid-turn, those runs stay `running` for good and the
+   * next thread is refused with "This Oven already has four active runs": the
+   * machine looks unable to run more than one conversation while nothing is
+   * actually being done. Runs are stopped only when this same client started
+   * them and this process is not driving them; another client's run is left
+   * alone, exactly as it is during a service update.
+   */
+  private async reapOwnRuns(id: string): Promise<void> {
+    if (this.reapedOvens.has(id)) return
+    this.reapedOvens.add(id)
+    const runs = await attempt(() => this.runs(id))
+    if (!runs.ok || !Array.isArray(runs.value)) {
+      this.reapedOvens.delete(id)
+      return
+    }
+    const started = this.startedRuns.get(id) ?? new Set<string>()
+    const abandoned = runs.value.filter(
+      (run) => run.status === 'running' && run.clientId === this.clientId && !started.has(run.id)
+    )
+    if (abandoned.length === 0) return
+    Logger.info('Stopping runs this client left on the Oven', {
+      ovenId: id,
+      runIds: abandoned.map((run) => run.id)
+    })
+    await this.recordServiceUpdate(
+      id,
+      abandoned,
+      'The turn these runs belonged to is no longer running.'
+    )
+    for (const run of abandoned) await attempt(() => this.stop(id, run.id))
+  }
+
+  /**
+   * Stop the runs holding an Oven on a service this app is replacing.
+   *
+   * Returns false when there is nothing to clear, so the caller reports the
+   * refusal it already has instead of an update that was never attempted.
+   */
+  private async stopAbandonedRuns(id: string): Promise<boolean> {
+    const runs = await attempt(() => this.runs(id))
+    if (!runs.ok || !Array.isArray(runs.value)) return false
+    const started = this.startedRuns.get(id) ?? new Set<string>()
+    for (const run of runs.value) if (run.status !== 'running') started.delete(run.id)
+    const running = runs.value.filter((run) => run.status === 'running')
+    // Another client's run is never stopped. The Oven records the owner beside
+    // every run it starts, and its owner is watching it; the update waits.
+    const foreign = running.filter(
+      (run) => !started.has(run.id) && run.clientId !== undefined && run.clientId !== this.clientId
+    )
+    if (foreign.length > 0) {
+      const owners = [...new Set(foreign.map((run) => run.clientId))].join(', ')
+      this.serviceBlockers.set(
+        id,
+        `This Oven is still working for another CodeInOven client (${owners}), so its service cannot be replaced until those runs finish.`
+      )
+      Logger.info('Left the Oven service update to the client that still owns runs', {
+        ovenId: id,
+        owners,
+        runIds: foreign.map((run) => run.id)
+      })
+    }
+    const abandoned = running.filter((run) => !started.has(run.id) && !foreign.includes(run))
+    if (abandoned.length === 0) return false
+    Logger.info('Stopping runs that block the Oven service update', {
+      ovenId: id,
+      runIds: abandoned.map((run) => run.id)
+    })
+    await this.recordServiceUpdate(id, abandoned)
+    for (const run of abandoned) await attempt(() => this.stop(id, run.id))
+    // A stopped run is given a moment to exit before the update is attempted
+    // again, because the Oven counts it until its own process is gone.
+    for (let poll = 0; poll < 20; poll++) {
+      const answer = await attempt(() => this.control(id, { method: 'probe' }))
+      if (!answer.ok) break
+      if (activeRunsIn(answer.value) === 0) return true
+      await new Promise((resolve) => setTimeout(resolve, 500))
+    }
+    return true
+  }
+
+  /**
+   * The durable record of an update that stopped runs holding the old service.
+   *
+   * A run is stopped only when this client cannot be the one watching it, and the
+   * entry says which runs, which commands and which owner, so the decision can be
+   * read afterwards instead of inferred from a log line that has already rotated.
+   */
+  private async recordServiceUpdate(
+    id: string,
+    stopped: OvenRun[],
+    reason = 'The Oven service was replaced while these runs held it on the previous one.'
+  ): Promise<void> {
+    const entry = {
+      at: new Date().toISOString(),
+      ovenId: id,
+      clientId: this.clientId,
+      reason,
+      stopped: stopped.map((run) => ({
+        id: run.id,
+        command: run.command,
+        cwd: run.cwd,
+        createdAt: run.createdAt,
+        owner: run.clientId ?? null
+      }))
+    }
+    try {
+      await this.registry.storage.appendRaw(
+        'ovens/service-updates.jsonl',
+        `${JSON.stringify(entry)}\n`
+      )
+    } catch (error) {
+      Logger.dev('The Oven service update record could not be written', {
+        ovenId: id,
+        error: messageOf(error)
+      })
+    }
+  }
+
+  /**
+   * This client's identity on any Oven.
+   *
+   * One Oven can serve several CodeInOven clients, so every run carries the client
+   * that started it. The identity is this machine plus this app's data root: it
+   * survives restarts and upgrades, and two installations never share it.
+   */
+  private get clientId(): string {
+    this.clientIdentity ??= ovenClientId(this.registry.storage.resolve('.'))
+    return this.clientIdentity
+  }
+  private clientIdentity: string | undefined
+
+  /**
+   * Forget a finished run's journal and record.
+   *
+   * The Oven keeps runs in memory under a fixed cap and refuses to remove one
+   * whose process is still alive, so a caller that starts a run of its own
+   * (an account-quota probe) removes it once it is done rather than spending
+   * one of that cap on work nobody will read again.
+   */
+  async remove(id: string, runId: string): Promise<void> {
+    this.decode(await this.control(id, { method: 'remove', runId }))
   }
 
   /**
@@ -380,10 +708,14 @@ export class OvenService {
     await this.workspace(id, { operation: 'replace', root, path, staged, mode })
   }
 
-  private async request(id: string, input: Record<string, unknown>): Promise<string> {
+  private async request(
+    id: string,
+    input: Record<string, unknown>,
+    note?: OvenServiceNote
+  ): Promise<string> {
     const data = JSON.stringify({ ...input, protocolVersion: OVEN_PROTOCOL_VERSION })
     if (Buffer.byteLength(data) > 1024 * 1024) throw new Error('The Oven request exceeds 1 MiB.')
-    return await this.withServiceRepair(id, () => this.send(id, data))
+    return await this.withServiceRepair(id, () => this.send(id, data), note)
   }
 
   /**
@@ -421,7 +753,11 @@ export class OvenService {
    * it owns. Every call now goes through the same repair: a stale answer is
    * replaced once, then the same call runs again.
    */
-  private async withServiceRepair(id: string, run: () => Promise<string>): Promise<string> {
+  private async withServiceRepair(
+    id: string,
+    run: () => Promise<string>,
+    note?: OvenServiceNote
+  ): Promise<string> {
     const first = await attempt(run)
     const fault = this.serviceFaultOf(first)
     if (!fault) {
@@ -430,12 +766,13 @@ export class OvenService {
     }
     // A stopped daemon can answer through the SSH process as { ok: false } too.
     // Recover before decode() throws that payload outside this repair boundary.
-    if (!(await this.refreshService(id, fault.message)))
-      throw new Error(
+    if (!(await this.refreshService(id, fault.message, note)))
+      throw this.serviceUpdateFailure(
+        id,
         serviceNotRunning(fault.message)
           ? 'The Oven service is not running and automatic recovery could not start it. Check its service settings.'
-          : 'This Oven runs an older service than this app. Finish its active runs, then install the service again from its settings.',
-        { cause: fault }
+          : 'This Oven runs an older service than this app. Install the service again from its settings.',
+        fault
       )
     const second = await attempt(run)
     if (!second.ok) throw second.error
@@ -450,23 +787,60 @@ export class OvenService {
   }
 
   /**
+   * The error a caller raises when the service could not be updated.
+   *
+   * The reason the update itself gave is carried through. It used to be dropped
+   * for "finish its active runs", which sent the reader to stop runs that were
+   * not running while the real cause (a full disk, a service that would not
+   * start, a refused install) went unsaid.
+   */
+  private serviceUpdateFailure(id: string, fallback: string, cause: unknown): Error {
+    const fault = this.serviceFaults.get(id)
+    const detail = this.serviceBlockers.get(id) ?? fallback
+    return new Error(fault ? `${detail} The update failed: ${fault}` : detail, { cause })
+  }
+
+  /**
    * Replace one Oven's service, at most once per cooldown.
    *
    * Returns false when it must not run now, so the caller reports what it
    * already has instead of an install failure the user did not ask for.
    */
-  private async refreshService(id: string, reason: string): Promise<boolean> {
+  private async refreshService(
+    id: string,
+    reason: string,
+    note?: OvenServiceNote
+  ): Promise<boolean> {
     const pending = this.repairingServices.get(id)
     if (pending) return pending
     const last = this.serviceRepairs.get(id) ?? 0
     if (Date.now() - last < SERVICE_REPAIR_COOLDOWN_MS) return false
     this.serviceRepairs.set(id, Date.now())
     const repair = (async () => {
+      // The install is a whole bundle push and a daemon restart, so it is named
+      // before it starts rather than after: this is exactly the wait a send
+      // that showed nothing used to hide.
+      note?.('Reinstalling the Oven service…')
       Logger.info('Installing the current Oven service', { ovenId: id, reason })
+      const startedAt = Date.now()
       try {
         await this.install(id)
+        // A successful install used to log nothing, so a log that ended here
+        // read exactly like a hang. One line closes that gap.
+        this.serviceFaults.delete(id)
+        Logger.info('Installed the current Oven service', {
+          ovenId: id,
+          durationMs: Date.now() - startedAt
+        })
         return true
       } catch (error) {
+        // A live run refusing the swap is the Oven working as intended: the
+        // update waits for the run, so it is a note, not an error.
+        if (activeRunsBlockUpdate(messageOf(error))) {
+          Logger.info('Oven service update waits for its active runs', { ovenId: id })
+          return false
+        }
+        this.serviceFaults.set(id, messageOf(error))
         Logger.error('The Oven service could not be installed', {
           ovenId: id,
           error: messageOf(error)
@@ -510,9 +884,10 @@ export class OvenService {
     } catch (error) {
       if (error instanceof OvenServiceOutdated) {
         if (!(await this.refreshService(id, error.message)))
-          throw new Error(
-            'This Oven runs an older service. Finish its active runs, then install the service again from its settings.',
-            { cause: error }
+          throw this.serviceUpdateFailure(
+            id,
+            'This Oven runs an older service. Install the service again from its settings.',
+            error
           )
         return await this.channel.request(id, data, options.timeoutMs)
       }

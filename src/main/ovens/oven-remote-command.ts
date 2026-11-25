@@ -35,12 +35,13 @@ const WINDOWS_ROOT_SEGMENT = OVEN_DATA_DIRECTORY.split('/').join('\\')
 const WINDOWS_SERVICE = `"%USERPROFILE%\\${WINDOWS_ROOT_SEGMENT}\\service.mjs"`
 
 /**
- * The Node runtime check every POSIX runtime command starts from.
+ * The runtime check every POSIX runtime command starts from.
  *
- * The managed npm prefix is on PATH first, so a harness-bootstrapped Node is
- * found; a missing or too-old runtime fails before the service is touched. Each
- * failure writes a reason that names the version it found, so a failed request
- * reports the real cause instead of an unclassified exit code.
+ * `OVEN_HARNESS_PATH` puts the managed npm prefix first and adds any Node a
+ * version manager installed, so a runtime that only a login shell can see is
+ * found too; a missing or too-old runtime fails before the service is touched.
+ * Each failure writes a reason that names the version it found, so a failed
+ * request reports the real cause instead of an unclassified exit code.
  */
 export const POSIX_NODE_CHECK =
   `${OVEN_HARNESS_PATH} ` +

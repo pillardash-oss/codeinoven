@@ -125,6 +125,7 @@ answers `401` with code `unauthorized` and no detail about which device it belon
 | `POST`   | `/v1/auth/email/resend`        | `{email}`                       | always `202`, never reveals whether the address exists               |
 | `POST`   | `/v1/auth/email/reset/request` | `{email}`                       | always `202`                                                         |
 | `POST`   | `/v1/auth/email/reset/confirm` | `{token,password}`              | revokes every session on use                                         |
+| `GET`    | `/v1/auth/email/reset`         | `?token=`                       | the HTML form a reset mail opens; it posts back to the same path     |
 | `GET`    | `/v1/auth/{provider}/start`    | none                            | `302` to the provider, or `501` when that provider is not configured |
 | `GET`    | `/v1/auth/{provider}/callback` | none                            | sets the session, then `302` to `mobile` or `desktop` handoff        |
 | `POST`   | `/v1/auth/sign-out`            | none                            | revokes the current session, `204`                                   |
@@ -140,6 +141,8 @@ records it and returns the device row, which the client keeps for later revocati
 | -------- | --------------------- | ----------------------------------------------------------- |
 | `GET`    | `/v1/me`              | `{id,email,name,avatarUrl,emailVerifiedAt,createdAt,store}` |
 | `PATCH`  | `/v1/me`              | `{name}`                                                    |
+| `DELETE` | `/v1/me`              | `{password}` or, without a password, `{email}`; drops the store, `204` |
+| `POST`   | `/v1/me/password`     | `{currentPassword,newPassword}`; revokes other sessions     |
 | `GET`    | `/v1/me/devices`      | every device, current one marked                            |
 | `DELETE` | `/v1/me/devices/{id}` | revokes that device's sessions, `204`                       |
 

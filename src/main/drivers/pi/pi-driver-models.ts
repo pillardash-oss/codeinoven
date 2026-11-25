@@ -17,6 +17,7 @@ import type { BaseUrlProviderService } from '../../providers/base-url-provider-s
 import { apiKeyEnvVarFor } from '../../providers/base-url-provider-service'
 import type { SecretsService } from '../../secrets/secrets-service'
 import type { StorageEngine } from '../../storage/storage-engine'
+import type { PiHandoffStorage } from './pi-driver-cio-files'
 import { Logger } from '../../system/logger'
 import {
   prepareHarnessInvocation,
@@ -27,6 +28,22 @@ import { PiRpcClient } from '../pi-rpc-client'
 import { piCustomProvidersExtension } from '../pi-providers-extension'
 import type { TitleModelCandidate } from '../persistent-cli-driver'
 import { numberValue, record, stringValue } from './pi-values'
+
+/** A drive-letter or UNC path, which only Windows can address. */
+const WINDOWS_ABSOLUTE_PATH = /^(?:[A-Za-z]:[\\/]|\\\\[^\\/])/u
+/**
+ * Whether a workspace path belongs to the other platform.
+ *
+ * An Oven thread's working directory is written by the Oven, so a POSIX host
+ * receives `/home/azureuser/scope/checkout` while a Windows host receives
+ * `C:\\Users\\...`. Windows treats a leading `/` as drive-rooted, so a POSIX path
+ * looked local there and every filesystem call succeeded in the wrong place.
+ */
+function isForeignWorkspacePath(path: string): boolean {
+  const windowsAbsolute = WINDOWS_ABSOLUTE_PATH.test(path)
+  if (process.platform === 'win32') return !windowsAbsolute && path.startsWith('/')
+  return windowsAbsolute
+}
 
 const THINKING_PRESETS = PI_THINKING_PRESETS
 const PI_CHEAP_MODEL_DISCOVERY_TIMEOUT_MS = 10_000
@@ -39,7 +56,7 @@ const PI_MODEL_CATALOG_REFRESH_TIMEOUT_MS = 20_000
 const PI_FALLBACK_CATALOG: ProviderCatalog[] = [
   {
     id: 'pi',
-    name: 'Pi',
+    name: 'CIO Pi',
     harnessId: 'pi',
     models: [
       {
@@ -74,6 +91,14 @@ export interface PiModelCatalogHost {
   readonly baseUrlProviders: BaseUrlProviderService | undefined
   readonly secretVault: SecretsService | undefined
   readonly storage: StorageEngine
+  /**
+   * The file surface for one session's provider module.
+   *
+   * A session routed to an Oven writes its providers extension there, so pi on
+   * that machine loads the same custom providers this app offers; every other
+   * session keeps using this machine's engine.
+   */
+  storageFor?(sessionId: string): PiHandoffStorage
   readonly authConfig: PiAuthConfigService
   /** Last project a live session belonged to, for a caller that omits one. */
   lastSessionProject(): string | undefined
@@ -342,15 +367,35 @@ export class PiModelCatalog {
   /** Node uses TEMP/TMP on Windows and TMPDIR on Unix. The runtime boundary
    * translates TMPDIR for WSL and forwards it into the Linux process. Keep
    * output files available across turns under the scope's working directory.
+   *
+   * A path this machine cannot create is not an error: an Oven thread's working
+   * directory lives on the Oven (`/home/azureuser/...`), and the pi process that
+   * needs TMPDIR runs over there with the Oven's own environment. Creating it
+   * here failed with ENOENT on the Oven's home and took the whole send down, so
+   * an unusable path now means no override at all instead of a failed turn.
    */
   async workspaceTemporaryEnvironment(
     projectPath: string
-  ): Promise<{ TMPDIR: string; TEMP: string; TMP: string }> {
+  ): Promise<{ TMPDIR?: string; TEMP?: string; TMP?: string }> {
+    // A path written for the other platform is not a path on this machine, and
+    // Windows resolves a POSIX path against the current drive, so asking `mkdir`
+    // created `\home\azureuser\...` here instead of failing.
+    if (isForeignWorkspacePath(projectPath)) {
+      Logger.dev('Pi workspace temp directory belongs to another machine:', { projectPath })
+      return {}
+    }
     const directory = join(projectPath, '.cio', 'tmp', 'pi')
-    await mkdir(directory, { recursive: true })
+    try {
+      await mkdir(directory, { recursive: true })
+    } catch (error) {
+      Logger.dev('Pi workspace temp directory is not on this machine:', {
+        projectPath,
+        error: error instanceof Error ? error.message : String(error)
+      })
+      return {}
+    }
     return { TMPDIR: directory, TEMP: directory, TMP: directory }
   }
-
   private async buildProviderOverlay(projectPath: string): Promise<ProviderOverlay> {
     const args: string[] = []
     const env: Record<string, string> = {}
@@ -358,7 +403,11 @@ export class PiModelCatalog {
     const resolved = await this.resolveOverlayProviders()
     if (resolved) {
       const temporaryEnvironment = await this.workspaceTemporaryEnvironment(projectPath)
-      directory = await mkdtemp(join(temporaryEnvironment['TMPDIR'], 'providers-'))
+      // No local temp directory means this path belongs to another machine, so
+      // there is nowhere here to write an overlay either: the turn runs with the
+      // Oven's own extensions, published by the Oven layer.
+      if (!temporaryEnvironment.TMPDIR) return { args, env, cleanup: async () => undefined }
+      directory = await mkdtemp(join(temporaryEnvironment.TMPDIR, 'providers-'))
       const extensionPath = join(directory, 'codeinoven-providers.ts')
       await writeFile(extensionPath, piCustomProvidersExtension(resolved.providers), 'utf8')
       args.push('--extension', extensionPath)
@@ -429,12 +478,10 @@ export class PiModelCatalog {
       const resolved = await this.resolveOverlayProviders()
       if (!resolved) return null
       const extensionRelative = join('runtime', 'cio-providers', sessionId, 'providers.ts')
-      await this.host.storage.writeRaw(
-        extensionRelative,
-        piCustomProvidersExtension(resolved.providers)
-      )
+      const storage = this.host.storageFor?.(sessionId) ?? this.host.storage
+      await storage.writeRaw(extensionRelative, piCustomProvidersExtension(resolved.providers))
       this.host.setProvidersExtensionEnv(sessionId, resolved.env)
-      return this.host.storage.resolve(extensionRelative)
+      return storage.resolve(extensionRelative)
     } catch (error) {
       Logger.dev('Pi providers extension materialization failed:', error)
       return null

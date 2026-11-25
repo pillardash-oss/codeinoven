@@ -10,13 +10,8 @@ import {
   motionTargetId,
   validateAuthoredMotion
 } from '../../lib/design/motion-policy'
-import { authoredWorkRoot } from './authored-work-root'
-import {
-  isInsideProject,
-  resolveServedFolder,
-  resolveServedEntry,
-  servedFileUrl
-} from '../preview/served-folder'
+import { findAuthoredWork } from './authored-work'
+import { isInsideProject, resolveServedEntry, servedFileUrl } from '../preview/served-folder'
 import { openDesignPreview } from './design-preview-session'
 import { currentWorkRoot } from './work-roots-state'
 import type { DesignPreviewExecutorOptions } from '../preview/design-preview-executor'
@@ -30,13 +25,12 @@ export async function executeDesignMotion(
   input: Record<string, unknown>,
   context: { projectId: string; threadId: string }
 ): Promise<unknown> {
-  const scope = await authoredWorkRoot(options.database, context.projectId, context.threadId)
-  const folder = resolveServedFolder(
-    scope.path,
-    input.directory,
-    currentWorkRoot('design', context.projectId)
+  const folder = await findAuthoredWork(
+    options.database,
+    { projectId: context.projectId, threadId: context.threadId, kind: 'design' },
+    input.directory
   )
-  const root = await realpath(scope.path)
+  const root = await realpath(folder.root.path)
   const absolute = await realpath(folder.absolute)
   if (!isInsideProject(root, absolute)) throw new Error('Motion folder escapes the project')
   const entry = await resolveServedEntry(absolute, input.entry)
@@ -153,7 +147,7 @@ export async function executeDesignMotion(
     : await openDesignPreview(
         { previews: options.previews, browser: options.browser },
         {
-          projectPath: scope.path,
+          projectPath: folder.root.path,
           ...context,
           directory: folder.display,
           entry: entry.requested,

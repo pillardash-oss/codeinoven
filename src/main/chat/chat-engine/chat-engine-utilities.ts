@@ -1,6 +1,7 @@
 import type { AssistantReportingPatch } from '../../../lib/assistant-authoring'
 import { randomUUID } from 'crypto'
 import { Logger } from '../../system/logger'
+import { isUnrestrictedLevel } from '../../../lib/permission-level'
 import type { HarnessDriver, PreparedUtilityRuntime } from '../../drivers/driver.interface'
 import {
   CIO_UTILITY_REUSE_PROMPT,
@@ -34,8 +35,10 @@ import type {
   UtilitySuggestionContext,
   UtilityResultAttribution,
   UtilityTurnBudgetContext,
-  UtilityTurnGateway
+  UtilityTurnGateway,
+  UtilityTurnRequest
 } from '../../utilities/utility-orchestration-service'
+import { ovenPiRuntime } from '../../ovens/oven-pi-runtime'
 import {
   utilitySuggestionQuestion,
   type UtilitySuggestionResolution
@@ -279,6 +282,7 @@ export class ChatEngineUtilities {
      */
     dispatchTimer?: TurnStepTimer
   ): Promise<string> {
+    Logger.dev('Turn utilities preparing', { sessionId, threadId, driverId: driver.id })
     // A new turn begins, so a report declared by an earlier turn that never settled
     // must not be filed under this one, and neither may the work it cited.
     this.host.state.declaredAssistantReports.delete(threadId)
@@ -318,6 +322,17 @@ export class ChatEngineUtilities {
     // write the thread's secret files for a turn that can never read them.
     const carriesGateway =
       Boolean(publishUtilityEndpoint) || typeof driver.prepareUtilityRuntime === 'function'
+    // A turn that leaves the Oven's gateway unpublished is invisible until a
+    // cio_util_* call fails, so name the transport decision that was taken.
+    Logger.dev('Turn utility transport decided', {
+      sessionId,
+      driverId: driver.id,
+      hasDirectGateway: Boolean(publishUtilityEndpoint),
+      hasPreparedRuntime: typeof driver.prepareUtilityRuntime === 'function',
+      hasApplyRuntime: Boolean(applyRuntime),
+      carriesGateway,
+      skipRuntime
+    })
     if (!applyRuntime || !carriesGateway) return ''
     // Re-expose this thread's stored secrets for the turn that is starting: the
     // hook lands before the transport split so a direct-gateway harness (Pi,
@@ -356,6 +371,9 @@ export class ChatEngineUtilities {
           sessionId,
           threadTitle,
           projectPath,
+          ...(this.ovenGatewayEndpoint(sessionId, threadId)
+            ? { resolveGatewayEndpoint: this.ovenGatewayEndpoint(sessionId, threadId) }
+            : {}),
           ...(scopeBucketId === undefined ? {} : { scopeBucketId }),
           nativeCapabilities,
           permissionLevel: settings.permissionLevel,
@@ -474,14 +492,15 @@ export class ChatEngineUtilities {
       // The orchestration contract is the gate for the workstation tools: it is
       // what tells the agent the tools exist and how to resolve a request to a
       // machine, a model and an account before dispatching real work. A thread
-      // running in full access reaches the tools with no tag, so it carries the
-      // full-access contract on every turn the tag did not open.
+      // running in full access (or Oven Mode, which is above it) reaches the
+      // tools with no tag, so it carries the full-access contract on every turn
+      // the tag did not open.
       const orchestrationContract =
         orchestrationSession === 'start'
           ? CIO_ORCHESTRATE_START_PROMPT
           : orchestrationSession === 'continue'
             ? CIO_ORCHESTRATE_CONTINUE_PROMPT
-            : settings.permissionLevel === 'full_access'
+            : isUnrestrictedLevel(settings.permissionLevel)
               ? CIO_ORCHESTRATE_FULL_ACCESS_PROMPT
               : delegationReach
                 ? CIO_ORCHESTRATE_DELEGATION_PROMPT
@@ -558,14 +577,15 @@ export class ChatEngineUtilities {
       }
       const environment = {
         ...(overlay.env ?? {}),
-        // Free-standing secrets the app launchers must expose for this thread.
-        // Pi and codex never reach this branch: Pi applies the same values to
-        // its own session environment through the gateway extension instead.
+        // The project's ENV files and this thread's free-standing secrets, which
+        // the app launchers must expose for this thread. Pi and codex never reach
+        // this branch: Pi applies the same values to its own session environment
+        // through the gateway extension instead.
         ...(await this.host.units['misc'].timedStep(
           dispatchTimer,
           'secretEnvironment',
           this.host.state.agentSecrets
-            .secretEnvironment(threadId)
+            .turnEnvironment({ projectId, threadId, projectPath })
             .catch(() => ({}) as Record<string, string>)
         ))
       }
@@ -623,6 +643,29 @@ export class ChatEngineUtilities {
       await Promise.allSettled(cleanups)
       throw error
     }
+  }
+
+  /**
+   * The gateway endpoint a turn must publish for the machine it runs on.
+   *
+   * A turn whose pi process runs on an Oven cannot reach this app's loopback,
+   * so the Oven's own utility host is what gets published; a turn that runs
+   * here has no such endpoint and keeps the app's, which is why this returns
+   * undefined rather than an empty resolver.
+   */
+  private ovenGatewayEndpoint(
+    sessionId: string,
+    threadId: string
+  ): UtilityTurnRequest['resolveGatewayEndpoint'] | undefined {
+    const runtime = ovenPiRuntime()
+    if (!runtime?.hasGatewayEndpoint(sessionId)) return undefined
+    return async (turn) =>
+      runtime.gatewayEndpoint(sessionId, threadId, turn, (note) =>
+        // The Oven's host is started, and its service bundle replaced, before
+        // this turn's process exists. Both are round trips the trace would
+        // otherwise spend showing the preparation note that already finished.
+        this.host.units['turns-sessions'].publishWorkingNote(sessionId, note)
+      )
   }
 
   async cleanupTurnUtilities(sessionId: string, expectedGatewayId?: string): Promise<void> {
@@ -718,6 +761,9 @@ export class ChatEngineUtilities {
         threadId,
         sessionId,
         threadTitle: steeringThread?.title,
+        ...(this.ovenGatewayEndpoint(sessionId, threadId)
+          ? { resolveGatewayEndpoint: this.ovenGatewayEndpoint(sessionId, threadId) }
+          : {}),
         ...(steeringThread?.scopeBucketId === undefined
           ? {}
           : { scopeBucketId: steeringThread.scopeBucketId }),

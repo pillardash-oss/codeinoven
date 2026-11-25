@@ -16,6 +16,7 @@ import { assistantPrimaryModel, settingsWithAssistantModel } from '$shared/assis
 import type { AgentModelSelection, Project, Assistant, Thread } from '$shared/types'
 import {
   ASSISTANT_SPACE_ID,
+  DON_ASSISTANT_ID,
   INBOX_PROJECT_ID,
   isBrowserAssistantThread,
   isOrchestrationChildThread
@@ -504,6 +505,13 @@ export class WorkspaceMergeThreadsInList extends BoardUnit<Workspace> {
 
   /** Create a task inside an assistant and open the assistant's knowledge panel. */
   async createTaskInAssistant(assistant: Assistant): Promise<void> {
+    // Don's unit of work is the conversation itself: there is no scheduled job to
+    // create for the orchestrator, so the same button and shortcut open another
+    // conversation instead of a task.
+    if (assistant.id === DON_ASSISTANT_ID) {
+      await this.createDonConversation(assistant)
+      return
+    }
     if (!this.root.markThreadReadAndApply.assistantProject) return
     await this.root.createThreadInProject.createThreadInProject(
       this.root.markThreadReadAndApply.assistantProject,
@@ -525,6 +533,24 @@ export class WorkspaceMergeThreadsInList extends BoardUnit<Workspace> {
       )
     } else {
       await this.root.markThreadReadAndApply.openAssistantKnowledgeFor(assistant)
+    }
+  }
+
+  /**
+   * Open one more Don conversation: its own thread, its own context, its own tab.
+   *
+   * Main creates the row, because the shape belongs to Don (assistant space, group
+   * membership, inherited model, pinned), and the renderer only has to list it and
+   * open it. Nothing is created optimistically here: this is a deliberate click on
+   * a door, not a keystroke in a composer, so waiting for the row is invisible.
+   */
+  async createDonConversation(_assistant: Assistant): Promise<void> {
+    try {
+      const thread = await invoke('assistant:createDonConversation')
+      this.root.createThreadInProject.upsertThreadInList(thread)
+      this.root.markThreadReadAndApply.openAssistantTask(thread)
+    } catch (error) {
+      reportError(error, 'The new conversation could not be opened.')
     }
   }
 

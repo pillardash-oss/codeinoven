@@ -86,7 +86,9 @@ describe('native Sonner stack bridge', () => {
   it('routes native action and dismissal back to the source toast', async () => {
     await apply(stack)
     const options = bridge.draw.mock.calls[0][1]
-    const event = new MouseEvent('click', { cancelable: true }) as MouseEvent & {
+    // A press carries a click count; a keyboard activation arrives with detail
+    // 0 and must not reach the app as an action.
+    const event = new MouseEvent('click', { cancelable: true, detail: 1 }) as MouseEvent & {
       currentTarget: HTMLButtonElement
     }
     Object.defineProperty(event, 'currentTarget', { value: document.createElement('button') })
@@ -102,5 +104,19 @@ describe('native Sonner stack bridge', () => {
       id: 'toast-1',
       interaction: 'dismiss'
     })
+  })
+  it('ignores a card action activated from the keyboard', async () => {
+    await apply(stack)
+    const options = bridge.draw.mock.calls[0][1]
+    const keystroke = new MouseEvent('click', { cancelable: true }) as MouseEvent & {
+      currentTarget: HTMLButtonElement
+    }
+    if (options.action && typeof options.action === 'object' && 'onClick' in options.action)
+      options.action.onClick(keystroke)
+    expect(keystroke.defaultPrevented).toBe(true)
+    expect(bridge.invoke).not.toHaveBeenCalledWith(
+      'browser:overlayInteract',
+      expect.objectContaining({ interaction: 'action' })
+    )
   })
 })

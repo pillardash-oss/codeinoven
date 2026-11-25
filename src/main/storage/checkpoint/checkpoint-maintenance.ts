@@ -13,8 +13,10 @@ import { EXCLUDED_DIRECTORY_NAMES, isExcludedRelativePath } from '../../git/chan
 import { snapshotChangeBreakdown } from './checkpoint-breakdown'
 import { calculateLineStats, type CheckpointLineStats } from './checkpoint-diff'
 import { diffCheckpointFiles } from './checkpoint-summary'
+import type { FileChangeSource } from '../../../lib/types'
 import {
   TRANSCRIPT_EVIDENCE_MESSAGE_LIMIT,
+  alignEvidencePaths,
   transcriptWriteEvidence
 } from './checkpoint-transcript-evidence'
 import type { TurnCheckpoint } from '../checkpoint-manager'
@@ -261,13 +263,21 @@ export async function repairEvidenceDroppedCheckpoints(
     try {
       const checkpoint = await host.get(projectId, threadId, turnId)
       if (!checkpoint || checkpoint.status !== 'completed' || !checkpoint.after) continue
-      const projectRows = await host.queryRows(
-        'SELECT path FROM projects WHERE id = ?',
-        [projectId],
-        1
-      )
-      const projectPath = projectRows[0]?.['path']
-      if (typeof projectPath !== 'string' || projectPath.length === 0) continue
+      // Evidence must be resolved against the root the snapshots were taken
+      // from, not the project's main checkout: a scoped thread works in its own
+      // managed worktree, where every absolute write target lives outside the
+      // repository path and resolved to nothing.
+      let evidenceRoot = checkpoint.before.projectRoot
+      if (typeof evidenceRoot !== 'string' || evidenceRoot.length === 0) {
+        const projectRows = await host.queryRows(
+          'SELECT path FROM projects WHERE id = ?',
+          [projectId],
+          1
+        )
+        const projectPath = projectRows[0]?.['path']
+        if (typeof projectPath !== 'string' || projectPath.length === 0) continue
+        evidenceRoot = projectPath
+      }
       const diff = diffCheckpointFiles(checkpoint.before, checkpoint.after)
       if (diff.length === 0 || diff.length > EVIDENCE_REPAIR_MAX_PATHS) continue
       const transcript = await host.queryRows(
@@ -278,10 +288,23 @@ export async function repairEvidenceDroppedCheckpoints(
         TRANSCRIPT_EVIDENCE_MESSAGE_LIMIT
       )
       const evidence = transcriptWriteEvidence(
-        projectPath,
+        evidenceRoot,
         transcript.map((row) => ({ parts: row['parts'] }))
       )
-      const kept = diff.filter((change) => (evidence.get(change.path)?.length ?? 0) > 0)
+      // The evidence paths were parsed from commands that start at the project
+      // root, while the harness shell sat wherever its last `cd` left it. Line
+      // each one up with the change path it ends before deciding what it proves.
+      const aligned = alignEvidencePaths(
+        evidence.keys(),
+        new Set(diff.map((change) => change.path))
+      )
+      const alignedEvidence = new Map<string, FileChangeSource[]>()
+      for (const [path, sources] of evidence) {
+        const target = aligned.get(path)
+        if (!target) continue
+        alignedEvidence.set(target, [...(alignedEvidence.get(target) ?? []), ...sources])
+      }
+      const kept = diff.filter((change) => (alignedEvidence.get(change.path)?.length ?? 0) > 0)
       if (kept.length === 0) continue
       const lineStats = await calculateLineStats(host.tracker(projectId), kept)
       const breakdown = await snapshotChangeBreakdown(
@@ -296,13 +319,13 @@ export async function repairEvidenceDroppedCheckpoints(
         changes: kept,
         toolSources: Object.fromEntries(
           kept.flatMap((change) =>
-            (evidence.get(change.path) ?? []).map((source) => [source.toolPartId, source])
+            (alignedEvidence.get(change.path) ?? []).map((source) => [source.toolPartId, source])
           )
         ),
         changeSourceRefs: Object.fromEntries(
           kept.map((change) => [
             change.path,
-            (evidence.get(change.path) ?? []).map((source) => ({
+            (alignedEvidence.get(change.path) ?? []).map((source) => ({
               toolPartId: source.toolPartId,
               verification: source.verification,
               window: source.window
@@ -471,6 +494,18 @@ export async function dropUnprovenOverlappingChanges(
 }
 
 /** Remove project checkpoint blobs that no remaining thread references. */
+/** Checkpoints one window of the blob scan reads. The scan reads a project in
+ *  windows so the database worker can answer a click between them. */
+const BLOB_PRUNE_WINDOW = 20
+
+/** Hashes one window may return, so a project with huge file maps still yields. */
+const BLOB_PRUNE_WINDOW_ROWS = 20_000
+
+/** Hashes one prune collects in total, matching the single-statement bound this
+ *  replaced. Past it the remaining blobs are kept rather than risk deleting one
+ *  that is still referenced. */
+const BLOB_PRUNE_MAX_ROWS = 200_000
+
 export async function pruneUnusedBlobs(
   host: CheckpointMaintenanceHost,
   projectId: string
@@ -486,6 +521,20 @@ export async function pruneUnusedBlobs(
       encoding: 'utf-8',
       mode: 0o600
     })
+    // Anything to prune at all? Reading the directory first turns the common
+    // "nothing to do" case into one `readdir` instead of a scan over every
+    // checkpoint of the project, which on a large project is seconds of the one
+    // database worker that every click and every page load is queued behind.
+    const directory = join(getConfigRoot(), `projects/${projectId}/blobs`)
+    let entries
+    try {
+      entries = await readdir(directory, { withFileTypes: true })
+    } catch (error) {
+      if (isMissing(error)) return 0
+      throw error
+    }
+    if (entries.length === 0) return 0
+
     // Collect referenced hashes in SQL   a full scan used to ship every
     // checkpoint JSON blob across the worker port, which crashed the process
     // on large projects. The change list is unioned in as well: a change
@@ -502,45 +551,70 @@ export async function pruneUnusedBlobs(
     // The read is strict: this scan covers every checkpoint of a project, so it
     // must never be answered by the primary connection on the main thread. A
     // failure throws and the catch below keeps the blobs.
-    let rows: Record<string, unknown>[]
-    try {
-      rows = await host.queryRowsStrict(
-        `SELECT json_extract(je.value, '$.hash') AS hash
-           FROM turn_checkpoints tc, json_each(tc.data, '$.before.files') je
-           WHERE tc.project_id = ?
+    // Every checkpoint of the project, a window at a time.
+    //
+    // This was one statement over the whole project, measured at 3-4.5 s. The
+    // worker's background lane only decides ORDER: a statement already running
+    // cannot be preempted, so a scan that began while the app looked idle made the
+    // very next click wait for the whole of it. Read in windows instead, the scan
+    // returns to the queue between windows, and an interactive read that arrived
+    // meanwhile is drained first — which is what the lanes were built to do.
+    const referenced = new Set<string>()
+    let cursor = 0
+    let collected = 0
+    let more = true
+    while (more) {
+      let rows: Record<string, unknown>[]
+      let windowEnd: number
+      try {
+        const bounds = await host.queryRowsStrict(
+          `SELECT rowid AS rid FROM turn_checkpoints
+            WHERE project_id = ? AND rowid > ?
+            ORDER BY rowid
+            LIMIT ?`,
+          [projectId, cursor, BLOB_PRUNE_WINDOW + 1],
+          BLOB_PRUNE_WINDOW + 1
+        )
+        if (bounds.length === 0) break
+        more = bounds.length > BLOB_PRUNE_WINDOW
+        const lastInWindow = bounds[Math.min(bounds.length, BLOB_PRUNE_WINDOW) - 1]
+        windowEnd = Number(lastInWindow?.['rid'] ?? 0)
+        if (!Number.isFinite(windowEnd) || windowEnd <= cursor) break
+        rows = await host.queryRowsStrict(
+          `WITH window AS (
+             SELECT rowid AS rid, data FROM turn_checkpoints
+              WHERE project_id = ? AND rowid > ? AND rowid <= ?
+           )
+           SELECT json_extract(je.value, '$.hash') AS hash
+             FROM window w, json_each(w.data, '$.before.files') je
            UNION
            SELECT json_extract(je.value, '$.hash') AS hash
-           FROM turn_checkpoints tc, json_each(tc.data, '$.after.files') je
-           WHERE tc.project_id = ?
+             FROM window w, json_each(w.data, '$.after.files') je
            UNION
            SELECT json_extract(side.value, '$.hash') AS hash
-           FROM turn_checkpoints tc, json_each(tc.data, '$.changes') je,
-                json_each(je.value) side
-           WHERE tc.project_id = ?
-             AND side.key IN ('before', 'after')
-             AND json_extract(side.value, '$.hash') IS NOT NULL`,
-        [projectId, projectId, projectId],
-        200_000
-      )
-    } catch {
-      // A malformed checkpoint row fails the whole extraction; preserving
-      // the project blob directory is safer than risking data loss.
-      return 0
-    }
-    const referenced = new Set<string>()
-    for (const row of rows) {
-      const hash = row['hash']
-      if (typeof hash === 'string') referenced.add(hash)
+             FROM window w, json_each(w.data, '$.changes') je,
+                  json_each(je.value) side
+            WHERE side.key IN ('before', 'after')
+              AND json_extract(side.value, '$.hash') IS NOT NULL`,
+          [projectId, cursor, windowEnd],
+          BLOB_PRUNE_WINDOW_ROWS
+        )
+      } catch {
+        // A malformed checkpoint row fails the whole extraction; preserving
+        // the project blob directory is safer than risking data loss.
+        return 0
+      }
+      for (const row of rows) {
+        const hash = row['hash']
+        if (typeof hash === 'string') referenced.add(hash)
+      }
+      collected += rows.length
+      cursor = windowEnd
+      // Bounded total, exactly as the single-statement version was: past it the
+      // remaining blobs are kept rather than risk deleting a referenced one.
+      if (collected >= BLOB_PRUNE_MAX_ROWS) more = false
     }
 
-    const directory = join(getConfigRoot(), `projects/${projectId}/blobs`)
-    let entries
-    try {
-      entries = await readdir(directory, { withFileTypes: true })
-    } catch (error) {
-      if (isMissing(error)) return 0
-      throw error
-    }
     let deleted = 0
     for (const entry of entries) {
       if (!entry.isFile() || referenced.has(entry.name)) continue
@@ -657,4 +731,116 @@ export async function trimHistoricalCheckpointMaps(
     }
   }
   return trimmed
+}
+
+/** Cards one provenance pass reads, so a launch or a half-hour tick stays cheap. */
+const PROVENANCE_MAX_CHECKPOINTS = 40
+/** How long a card is left alone after a pass has read its transcript. */
+const PROVENANCE_RECHECK_MS = 6 * 60 * 60 * 1000
+
+/**
+ * Record which tool wrote each file on cards that only hold a detected diff.
+ *
+ * A card says `Edited` only when every file it lists was proven by a tool, so a
+ * turn whose tool calls arrive after its checkpoint settled read as `Detected` on
+ * every file: the live parts never reached the session, and the durable
+ * transcript was read before the mirror had written the turn. Nothing about the
+ * change list is decided here, and no path is added or removed; the pass only
+ * re-reads the turn's own transcript, bounded to the turn's window, and fills in
+ * the sources the row is missing. A file the transcript never proves stays
+ * unsourced, so a generated or hand-edited file still leaves the card honest.
+ *
+ * Returns how many cards it read, so a caller can pass until the backlog is
+ * drained. A card it read is not re-read for a few hours either way.
+ */
+export async function backfillChangeProvenance(host: CheckpointMaintenanceHost): Promise<number> {
+  let rows: Record<string, unknown>[]
+  try {
+    rows = await host.queryRows(
+      `SELECT tc.turn_id AS turn_id, tc.project_id AS project_id, tc.thread_id AS thread_id
+         FROM turn_checkpoints tc
+        WHERE json_extract(tc.data, '$.status') = 'completed'
+          AND json_array_length(json_extract(tc.data, '$.changes')) > 0
+          AND (SELECT COUNT(*) FROM json_each(json_extract(tc.data, '$.changeSourceRefs')) je
+                WHERE json_array_length(je.value) > 0)
+              < json_array_length(json_extract(tc.data, '$.changes'))
+          AND (json_extract(tc.data, '$.provenanceCheckedAt') IS NULL
+               OR json_extract(tc.data, '$.provenanceCheckedAt') < ?)
+        ORDER BY tc.created_at DESC
+        LIMIT ?`,
+      [Date.now() - PROVENANCE_RECHECK_MS, PROVENANCE_MAX_CHECKPOINTS],
+      PROVENANCE_MAX_CHECKPOINTS
+    )
+  } catch (error) {
+    Logger.info('Change provenance could not be listed (non-fatal):', error)
+    return 0
+  }
+  let scanned = 0
+  for (const row of rows) {
+    const turnId = row['turn_id']
+    const projectId = row['project_id']
+    const threadId = row['thread_id']
+    if (typeof turnId !== 'string' || typeof projectId !== 'string' || typeof threadId !== 'string')
+      continue
+    try {
+      const checkpoint = await host.get(projectId, threadId, turnId)
+      if (!checkpoint || checkpoint.changes.length === 0) continue
+      const missing = checkpoint.changes.filter(
+        (change) => (checkpoint.changeSourceRefs?.[change.path]?.length ?? 0) === 0
+      )
+      if (missing.length === 0) continue
+      const transcript = await host.queryRows(
+        `SELECT parts FROM agent_messages
+          WHERE thread_id = ? AND role = 'assistant' AND created_at >= ? AND created_at <= ?
+          ORDER BY created_at DESC, id DESC`,
+        [
+          threadId,
+          checkpoint.before.createdAt,
+          checkpoint.completedAt ?? checkpoint.before.createdAt
+        ],
+        TRANSCRIPT_EVIDENCE_MESSAGE_LIMIT
+      )
+      const evidence = transcriptWriteEvidence(
+        checkpoint.before.projectRoot,
+        transcript.map((entry) => ({ parts: entry['parts'] }))
+      )
+      const aligned = alignEvidencePaths(
+        evidence.keys(),
+        new Set(checkpoint.changes.map((change) => change.path))
+      )
+      const found = new Map<string, FileChangeSource[]>()
+      for (const [path, sources] of evidence) {
+        const target = aligned.get(path)
+        if (!target) continue
+        found.set(target, [...(found.get(target) ?? []), ...sources])
+      }
+      const changeSourceRefs = { ...checkpoint.changeSourceRefs }
+      const toolSources = { ...checkpoint.toolSources }
+      for (const change of missing) {
+        const sources = found.get(change.path)
+        if (!sources || sources.length === 0) continue
+        changeSourceRefs[change.path] = sources.map((source) => ({
+          toolPartId: source.toolPartId,
+          verification: source.verification,
+          ...(source.window ? { window: source.window } : {})
+        }))
+        for (const source of sources) toolSources[source.toolPartId] = source
+      }
+      await host.save({
+        ...checkpoint,
+        changeSourceRefs,
+        toolSources,
+        provenanceCheckedAt: Date.now()
+      })
+      scanned += 1
+      // Yield between rows so one pass never holds the database worker.
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    } catch (error) {
+      Logger.info('Change provenance could not be filled in (non-fatal):', {
+        turnId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+  return scanned
 }

@@ -1,9 +1,11 @@
 import { BrowserWindow } from 'electron'
+import { createHash } from 'node:crypto'
 import {
   DISPLAY_CONTROLS_BY_KIND,
   type DisplayCapturePhase,
   type DisplayCaptureState,
   type DisplayControlAction,
+  type DisplayControlOutcome,
   type DisplayFrame,
   type DisplayFrameDemand,
   type DisplayInputGesture,
@@ -12,11 +14,14 @@ import {
   type DisplaySourceListing
 } from '../../lib/ipc/display'
 import { sendToRenderer } from '../ipc/renderer-delivery'
+import { resourcePressure } from '../system/resource-pressure'
 import { appServiceRegistry } from '../system/app-service-registry'
 import { Logger } from '../system/logger'
-import { listAndroidSources, AndroidDisplayCapture } from './display-adb'
+import { AndroidDisplayCapture, ANDROID_CREDENTIAL_NOTICE, listAndroidSources } from './display-adb'
 import { resolveAdb } from './display-adb-paths'
 import { quantizeDemand, type DisplayCapture } from './display-capture'
+import { nextCaptureDelayMs } from './display-cadence'
+import { fitFrameToDemand } from './display-frame-fit'
 import { DesktopDisplayCapture, listDesktopSources } from './display-desktop'
 import { IosDisplayCapture, listIosSources } from './display-ios'
 import { startDisplayStream, type DisplayStreamHandle } from './stream/display-stream-process'
@@ -49,10 +54,8 @@ const TARGET_INTERVAL_MS: Record<DisplaySourceKind, number> = {
 }
 /** How often an on-screen-but-paused session looks again. Pausing is not stopping. */
 const IDLE_POLL_MS = 600
-/** Floor between two captures of one session. A source slower than its target
- *  interval (a simulator screenshot costs about a second) would otherwise be
- *  captured back to back for as long as the tab is open. */
-const MIN_CAPTURE_GAP_MS = 250
+/** How long one device reading is reused before another is asked for. */
+const PRESSURE_READING_TTL_MS = 15_000
 /** First wait after a failure, doubled per consecutive failure. */
 const RETRY_BASE_MS = 500
 /** A frame whose capture took longer than this is reported, so the source's cost
@@ -65,9 +68,28 @@ const FAILED_AFTER = 8
 /** How long a hidden stage keeps its device stream before it is shut down. */
 const STREAM_HIDE_GRACE_MS = 5_000
 /** How long a changed stage size settles before the stream is rebuilt at it. */
-const STREAM_RESIZE_DEBOUNCE_MS = 300
+const STREAM_RESIZE_DEBOUNCE_MS = 1_000
+/** A rebuild costs about a second of live picture, so the stage has to outgrow the
+ *  encode, or shrink well below it, before one is worth it. The canvas scales the rest. */
+const STREAM_GROW_RATIO = 1.2
+const STREAM_SHRINK_RATIO = 0.6
 /** Let the stage's first size arrive so the stream starts at it, not at the default. */
 const STREAM_START_DELAY_MS = 80
+/** A stream that never went live is retried this many times before the session polls. */
+const STREAM_START_ATTEMPTS = 3
+/** A stream that went live and then died is re-armed this many times, so a device
+ * that comes back (an emulator rebooting, a cable replugged) restores the mirror by
+ * itself instead of leaving the tab on the polled capture for the rest of its life. */
+const STREAM_REARM_ATTEMPTS = 20
+/** How long to wait before retrying a stream that could not start. */
+const STREAM_RETRY_MS = 400
+/** The first re-arm gap, and its ceiling: a device that takes a minute to come back
+ * is still picked up, while a stream that keeps dying settles at one try per 8s. */
+const STREAM_REARM_MS = 2_000
+const STREAM_REARM_MAX_MS = 8_000
+/** How often a screen the panel is explaining is looked at again. A person who types
+ *  their PIN takes seconds, and one adb query costs less than the frame beside it. */
+const HINT_RECHECK_MS = 1_500
 
 interface DisplaySession {
   id: string
@@ -83,8 +105,27 @@ interface DisplaySession {
   phase: DisplayCapturePhase
   /** Detail shown for the last failure, cleared by the next good frame. */
   detail: string | null
+  /**
+   * A sentence about the device's screen that is true only for a while.
+   *
+   * The lock screen of a phone with a PIN exists on the device and in no mirror, so
+   * the panel can only say it is there. This process owns when it stops being true.
+   */
+  hint: string | null
+  /** The pending re-check of `hint`, when one is armed. */
+  hintTimer: ReturnType<typeof setTimeout> | null
   /** Frames delivered by this session, so the first one's cost is reported once. */
   frames: number
+  /**
+   * Digest of the last frame the stage was sent.
+   *
+   * A device screenshot costs the device's own capture (measured: 422-1027 ms
+   * for one iOS simulator frame) and arrives as a multi-megapixel PNG that the
+   * renderer then decodes and paints. When the screen has not changed, every
+   * one of those paints was the same picture again, so an unchanged frame is
+   * not sent and the stage keeps the pixels it already has.
+   */
+  lastFrameDigest: string | null
   disposed: boolean
   /** True while one `grab` is in flight, so a tick can never stack frames. */
   busy: boolean
@@ -94,12 +135,22 @@ interface DisplaySession {
   inputProblem: string | null
   /** The live video stream, while one is running. It replaces the capture tick. */
   stream: DisplayStreamHandle | null
+  /** True while that stream is delivering video, false while it is still starting. */
+  streamLive: boolean
   /** The size the running stream was asked to encode at. */
   streamSize: number
   /** True once a stream failed for this session: it stays on the polled capture. */
   streamBroken: boolean
-  /** Pending stream start, hide or resize timers. */
+  /** Stream starts since one last went live, so a flaky start is retried then given up. */
+  streamStarts: number
+  /** True once any stream of this session went live, so a dropped one keeps re-arming. */
+  streamWasLive: boolean
+  /** A pending stream start or retry. */
   streamTimer: ReturnType<typeof setTimeout> | null
+  /** The grace period of a hidden stage. */
+  hideTimer: ReturnType<typeof setTimeout> | null
+  /** A size change waiting to settle. */
+  resizeTimer: ReturnType<typeof setTimeout> | null
 }
 
 export class DisplayService {
@@ -108,6 +159,9 @@ export class DisplayService {
 
   /** True once the window's reload watch is attached. */
   private watchingWindow = false
+
+  /** The last device reading, reused for {@link PRESSURE_READING_TTL_MS}. */
+  private pressureReading = { short: false, until: 0 }
 
   constructor(private readonly deps: DisplayServiceDeps) {}
 
@@ -140,20 +194,28 @@ export class DisplayService {
       sourceId: request.sourceId,
       label: capture.label,
       capture,
-      demand: { maxDimension: 640, visible: true },
+      demand: { maxDimension: 640, streamMaxDimension: 640, visible: true },
       timer: null,
       failures: 0,
       phase: 'starting',
       detail: null,
+      hint: null,
+      hintTimer: null,
       frames: 0,
+      lastFrameDigest: null,
       disposed: false,
       busy: false,
       input: Boolean(capture.input),
       inputProblem: capture.input ? null : (capture.inputProblem ?? null),
       stream: null,
+      streamLive: false,
       streamSize: 0,
       streamBroken: false,
-      streamTimer: null
+      streamStarts: 0,
+      streamWasLive: false,
+      streamTimer: null,
+      hideTimer: null,
+      resizeTimer: null
     }
     this.sessions.set(session.id, session)
     this.watchWindowReload()
@@ -166,6 +228,9 @@ export class DisplayService {
       stop: () => this.stop(session.id)
     })
     this.broadcastState(session)
+    // A target that starts in a state the mirror cannot show (a phone behind its
+    // lock screen, a simulator with no window) says so before the first tap.
+    if (capture.hint) void this.refreshHint(session)
     if (this.canStream(session)) {
       session.streamTimer = setTimeout(() => {
         session.streamTimer = null
@@ -181,11 +246,13 @@ export class DisplayService {
     const session = this.sessions.get(sessionId)
     if (!session) return
     const maxDimension = quantizeDemand(demand.maxDimension)
+    const streamMaxDimension = quantizeDemand(demand.streamMaxDimension)
     const wasPaused = !session.demand.visible
-    const resized = maxDimension !== session.demand.maxDimension
-    session.demand = { maxDimension, visible: demand.visible }
+    session.demand = { maxDimension, streamMaxDimension, visible: demand.visible }
+    // A tab that comes back on screen resumes watching a screen it was explaining.
+    if (demand.visible) this.watchHint(session)
     if (this.canStream(session)) {
-      this.followStreamDemand(session, wasPaused, resized)
+      this.followStreamDemand(session, wasPaused)
       return
     }
     // Coming back from a pause is the one case that should not wait for the idle
@@ -203,32 +270,38 @@ export class DisplayService {
    * been hidden for a while, bring it back when the stage returns, and rebuild it
    * when the stage settles at a different size (an encoder cannot be resized).
    */
-  private followStreamDemand(session: DisplaySession, wasPaused: boolean, resized: boolean): void {
+  private followStreamDemand(session: DisplaySession, wasPaused: boolean): void {
+    // Whatever was settling is judged again against the size just reported, so a
+    // size that bounced back never costs a rebuild.
+    if (session.resizeTimer) clearTimeout(session.resizeTimer)
+    session.resizeTimer = null
     if (!session.demand.visible) {
-      if (session.stream && !session.streamTimer) {
-        session.streamTimer = setTimeout(() => {
-          session.streamTimer = null
-          this.endStream(session)
+      if (session.stream && !session.hideTimer) {
+        session.hideTimer = setTimeout(() => {
+          session.hideTimer = null
+          this.endStream(session, 'hidden')
         }, STREAM_HIDE_GRACE_MS)
       }
       return
     }
-    if (session.streamTimer && wasPaused) {
-      clearTimeout(session.streamTimer)
+    if (session.hideTimer) clearTimeout(session.hideTimer)
+    session.hideTimer = null
+    if (!session.stream) {
+      if (session.streamTimer && !wasPaused) return
+      if (session.streamTimer) clearTimeout(session.streamTimer)
       session.streamTimer = null
-    }
-    if (!session.stream && !session.streamTimer) {
       this.beginStream(session)
       return
     }
-    if (session.stream && resized && session.demand.maxDimension !== session.streamSize) {
-      if (session.streamTimer) clearTimeout(session.streamTimer)
-      session.streamTimer = setTimeout(() => {
-        session.streamTimer = null
-        this.endStream(session)
-        this.beginStream(session)
-      }, STREAM_RESIZE_DEBOUNCE_MS)
-    }
+    const wanted = session.demand.streamMaxDimension
+    const outgrown = wanted > session.streamSize * STREAM_GROW_RATIO
+    const oversized = wanted < session.streamSize * STREAM_SHRINK_RATIO
+    if (!outgrown && !oversized) return
+    session.resizeTimer = setTimeout(() => {
+      session.resizeTimer = null
+      this.endStream(session, 'resized')
+      this.beginStream(session)
+    }, STREAM_RESIZE_DEBOUNCE_MS)
   }
 
   /** Start the live video stream for a session, or fall back to the capture tick. */
@@ -240,7 +313,8 @@ export class DisplayService {
       this.schedule(session, 0)
       return
     }
-    session.streamSize = session.demand.maxDimension
+    session.streamSize = session.demand.streamMaxDimension
+    session.streamLive = false
     session.stream = startDisplayStream({
       window,
       sessionId: session.id,
@@ -249,6 +323,9 @@ export class DisplayService {
       maxSize: session.streamSize,
       onLive: () => {
         if (session.disposed) return
+        session.streamLive = true
+        session.streamWasLive = true
+        session.streamStarts = 0
         session.failures = 0
         session.detail = null
         this.setPhase(session, 'live')
@@ -256,17 +333,40 @@ export class DisplayService {
       onEnded: (detail) => {
         if (session.disposed || !session.stream) return
         session.stream = null
-        session.streamBroken = true
-        Logger.dev(`Display stream for ${session.sourceId} ended, polling instead: ${detail ?? ''}`)
+        // A stream that never painted is usually a start that lost a race on the
+        // device, not a target that cannot stream, and one that painted and then
+        // died is a device that went away. Either way the panel retries before it
+        // settles for the much slower polled capture.
+        session.streamStarts += 1
+        const attempts = session.streamWasLive ? STREAM_REARM_ATTEMPTS : STREAM_START_ATTEMPTS
+        const retry = session.streamStarts < attempts
+        if (!retry) session.streamBroken = true
+        Logger.dev(
+          retry
+            ? `Display stream for ${session.sourceId} ended, retrying: ${detail ?? ''}`
+            : `Display stream for ${session.sourceId} ended, polling instead: ${detail ?? ''}`
+        )
+        if (retry) {
+          const wait = session.streamWasLive
+            ? Math.min(STREAM_REARM_MAX_MS, STREAM_REARM_MS * session.streamStarts)
+            : STREAM_RETRY_MS
+          session.streamTimer = setTimeout(() => {
+            session.streamTimer = null
+            if (!session.disposed && session.demand.visible) this.beginStream(session)
+          }, wait)
+        }
         this.schedule(session, 0)
       }
     })
+    // A device can take ten seconds to start its encoder; one screenshot fills that.
+    if (session.frames === 0 && !session.streamWasLive) this.schedule(session, 0)
   }
 
   /** Stop the running stream without ending the session. */
-  private endStream(session: DisplaySession): void {
+  private endStream(session: DisplaySession, reason: 'hidden' | 'resized' | 'stopped'): void {
     const stream = session.stream
     session.stream = null
+    if (stream) Logger.dev(`Display stream for ${session.sourceId} stopping: ${reason}`)
     stream?.stop()
   }
 
@@ -276,17 +376,86 @@ export class DisplayService {
    * Refused for an action the target's kind does not advertise, so the rail and
    * this boundary read the same list instead of two copies that can drift.
    */
-  async control(sessionId: string, action: DisplayControlAction): Promise<void> {
+  async control(sessionId: string, action: DisplayControlAction): Promise<DisplayControlOutcome> {
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error('That display session is no longer open')
     if (!DISPLAY_CONTROLS_BY_KIND[session.kind].includes(action)) {
       throw new Error(`A ${session.kind} target has no "${action}" control`)
     }
     if (!session.capture.control) throw new Error('This target cannot be controlled')
-    await session.capture.control(action)
+    let outcome: DisplayControlOutcome | void
+    try {
+      outcome = await session.capture.control(action)
+    } catch (error) {
+      // A button with nothing to press it into is a state of the target, not a
+      // failed press, so it is said under the picture like any other hint.
+      const sentence = await this.readHint(session).catch(() => null)
+      if (!sentence) throw error
+      if (!session.disposed) this.setHint(session, sentence)
+      return {}
+    }
     // A button press changes the device, so its frame is asked for now instead of
     // at the next tick: the person pressed it to see what it did.
-    if (!session.disposed) this.schedule(session, 0)
+    if (!session.disposed) {
+      // A press is the one moment the device's screen state is known, so the sentence
+      // about it starts and ends here instead of on a timer nobody can stop.
+      this.setHint(session, outcome?.credentialPrompt ? ANDROID_CREDENTIAL_NOTICE : null)
+      this.schedule(session, 0)
+    }
+    return outcome ?? {}
+  }
+
+  /**
+   * Say what the target cannot do right now, and watch until it can.
+   *
+   * Such a sentence is true of a moment: a lock screen unlocks, a simulator window
+   * opens, a tab is shown again. Re-asking the target is what takes the sentence
+   * down, so it never outlives the state it describes.
+   */
+  private setHint(session: DisplaySession, hint: string | null): void {
+    const changed = session.hint !== hint
+    session.hint = hint
+    if (changed) this.broadcastState(session)
+    this.watchHint(session)
+  }
+
+  /**
+   * What the target says about itself right now.
+   *
+   * Throws when the target cannot answer at all, so a flaky channel is never read
+   * as "the state ended": a sentence is withdrawn by an answer, not by silence.
+   */
+  private async readHint(session: DisplaySession): Promise<string | null> {
+    const probe = session.capture.hint
+    if (!probe || session.disposed) return null
+    return await probe.call(session.capture)
+  }
+
+  /** Ask again, and keep the last answer when the target cannot be asked. */
+  private async refreshHint(session: DisplaySession): Promise<void> {
+    let sentence: string | null
+    try {
+      sentence = await this.readHint(session)
+    } catch {
+      return
+    }
+    if (session.disposed) return
+    this.setHint(session, sentence)
+  }
+
+  /** Arm the next look at a target the panel is explaining. */
+  private watchHint(session: DisplaySession): void {
+    if (session.hintTimer) clearTimeout(session.hintTimer)
+    session.hintTimer = null
+    // Nothing to watch, nothing to ask, or nobody looking: a hidden tab stops
+    // querying the target and picks the watch up again when it is shown.
+    if (!session.hint || session.disposed) return
+    if (!session.capture.hint) return
+    if (!session.demand.visible) return
+    session.hintTimer = setTimeout(() => {
+      session.hintTimer = null
+      void this.refreshHint(session)
+    }, HINT_RECHECK_MS)
   }
 
   /**
@@ -302,7 +471,17 @@ export class DisplayService {
     if (!session.capture.input) {
       throw new Error(session.inputProblem ?? 'This target cannot be controlled')
     }
-    await session.capture.input(gesture)
+    try {
+      await session.capture.input(gesture)
+    } catch (error) {
+      // A gesture a target refuses for a reason it can name is said under the
+      // picture, where the sentence withdraws itself; only a failure nothing can
+      // explain is an error the stage has to show.
+      const sentence = await this.readHint(session).catch(() => null)
+      if (!sentence) throw error
+      if (!session.disposed) this.setHint(session, sentence)
+      return
+    }
     // A tap that lands while the stage is paused still deserves its frame: the
     // user is looking at the tab, and the demand tick only re-arms on focus.
     if (!session.disposed) this.schedule(session, 0)
@@ -315,9 +494,19 @@ export class DisplayService {
     session.disposed = true
     if (session.timer) clearTimeout(session.timer)
     session.timer = null
-    if (session.streamTimer) clearTimeout(session.streamTimer)
+    for (const timer of [
+      session.streamTimer,
+      session.hideTimer,
+      session.resizeTimer,
+      session.hintTimer
+    ]) {
+      if (timer) clearTimeout(timer)
+    }
     session.streamTimer = null
-    this.endStream(session)
+    session.hideTimer = null
+    session.resizeTimer = null
+    session.hintTimer = null
+    this.endStream(session, 'stopped')
     try {
       session.capture.dispose()
     } catch (error) {
@@ -344,8 +533,10 @@ export class DisplayService {
     const window = this.deps.window()
     const contents = window?.webContents
     if (!contents || contents.isDestroyed()) return
-    contents.on('did-start-loading', () => {
-      this.dispose()
+    // Not `did-start-loading`: that also fires for every iframe the page mounts (an
+    // agent's artifact) and for in-page navigation, neither of which loses a stage.
+    contents.on('did-start-navigation', (details) => {
+      if (details.isMainFrame && !details.isSameDocument) this.dispose()
     })
   }
 
@@ -383,8 +574,9 @@ export class DisplayService {
 
   private async tick(session: DisplaySession): Promise<void> {
     if (session.disposed) return
-    // A running stream is the picture; the capture loop only covers for it.
-    if (session.stream) return
+    // A running stream is the picture; the capture loop only covers for it, with one
+    // screenshot while a first stream starts.
+    if (session.stream && (session.streamLive || session.frames > 0)) return
     const window = this.deps.window()
     if (!window || window.isDestroyed()) {
       // No window means no stage: let go rather than capture for nobody.
@@ -401,10 +593,9 @@ export class DisplayService {
     try {
       const grabStartedAt = Date.now()
       const image = await session.capture.grab(session.demand.maxDimension)
-      if (session.disposed) return
-      // A frame costs a capture and nothing else: the bytes the target produced are
-      // the bytes the renderer paints, so there is no decode, resize, encode or
-      // base64 conversion in this process to report on.
+      // A screenshot that lands after the stream came back is older than the video,
+      // and the renderer reads any screenshot as "the stream is gone".
+      if (session.disposed || (session.stream && session.streamLive)) return
       const captureMs = Date.now() - grabStartedAt
       session.frames += 1
       if (captureMs > SLOW_CAPTURE_MS || session.frames === 1) {
@@ -413,26 +604,86 @@ export class DisplayService {
         )
       }
       if (!image) throw new Error('the target returned nothing to paint')
+      // The device adapters cannot capture small (neither `simctl` nor `screencap`
+      // has a scale flag), so the demand is applied here: a three-megapixel phone
+      // screenshot shipped whole to a 1280px stage paid for its own decode and
+      // paint twice over.
+      const fitStartedAt = Date.now()
+      const fitted = fitFrameToDemand(image, session.demand.maxDimension)
+      const fitMs = Date.now() - fitStartedAt
+      if (fitted !== image && fitMs > SLOW_CAPTURE_MS) {
+        Logger.dev(
+          `Display frame fit for ${session.kind} took ${fitMs} ms (${image.width}x${image.height} ${image.mime} -> ${fitted.width}x${fitted.height} ${fitted.mime})`
+        )
+      }
       session.failures = 0
       session.detail = null
       this.setPhase(session, 'live')
-      const frame: DisplayFrame = {
-        sessionId: session.id,
-        tabId: session.tabId,
-        bytes: image.bytes,
-        mime: image.mime,
-        width: image.width,
-        height: image.height,
-        timestamp: Date.now()
+      // An unchanged screen is not worth a multi-megapixel decode and paint: the
+      // stage already holds those exact pixels. The capture itself cannot be
+      // avoided (asking the device is how its screen is read), but the second
+      // half of the cost is.
+      const digest = createHash('sha1').update(fitted.bytes).digest('base64')
+      const unchanged = session.lastFrameDigest === digest
+      session.lastFrameDigest = digest
+      if (!unchanged) {
+        const frame: DisplayFrame = {
+          sessionId: session.id,
+          tabId: session.tabId,
+          bytes: fitted.bytes,
+          mime: fitted.mime,
+          width: fitted.width,
+          height: fitted.height,
+          timestamp: Date.now()
+        }
+        this.send('display:frame', frame, window)
       }
-      this.send('display:frame', frame, window)
-      this.schedule(
-        session,
-        Math.max(MIN_CAPTURE_GAP_MS, TARGET_INTERVAL_MS[session.kind] - (Date.now() - startedAt))
-      )
+      this.schedule(session, await this.nextDelayMs(session, startedAt, captureMs))
     } catch (error) {
-      if (session.disposed) return
+      if (session.disposed || session.stream) return
       this.fail(session, error)
+    }
+  }
+
+  /**
+   * How long to wait before the next capture of this session.
+   *
+   * Normally the source's target interval, minus the time the capture itself
+   * already took, so a slow source does not add its own cost on top. While the
+   * machine is short the interval stretches to the pressure interval: the
+   * picture still follows the device, but it stops paying a child process and a
+   * multi-megapixel encode several times a second out of the same CPU budget the
+   * rest of the app is fighting for.
+   */
+  private async nextDelayMs(
+    session: DisplaySession,
+    startedAt: number,
+    captureMs: number
+  ): Promise<number> {
+    return nextCaptureDelayMs({
+      targetIntervalMs: TARGET_INTERVAL_MS[session.kind],
+      captureMs,
+      elapsedMs: Date.now() - startedAt,
+      deviceShort: await this.deviceIsShort()
+    })
+  }
+
+  /** Whether this machine is short on CPU or memory, asked at most once per
+   *  {@link PRESSURE_READING_TTL_MS} so a mirror does not arm the sampler for the
+   *  whole of its life. */
+  private async deviceIsShort(): Promise<boolean> {
+    const now = Date.now()
+    if (now < this.pressureReading.until) return this.pressureReading.short
+    try {
+      const decision = await resourcePressure.read()
+      this.pressureReading = {
+        short: decision.action !== 'proceed',
+        until: now + PRESSURE_READING_TTL_MS
+      }
+      return this.pressureReading.short
+    } catch {
+      this.pressureReading = { short: false, until: now + PRESSURE_READING_TTL_MS }
+      return false
     }
   }
 
@@ -458,7 +709,8 @@ export class DisplayService {
       phase: session.phase,
       input: session.input,
       ...(session.inputProblem ? { inputProblem: session.inputProblem } : {}),
-      ...(session.detail ? { detail: session.detail } : {})
+      ...(session.detail ? { detail: session.detail } : {}),
+      ...(session.hint ? { hint: session.hint } : {})
     }
     this.send('display:captureState', state, null)
   }

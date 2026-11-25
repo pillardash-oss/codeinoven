@@ -1,5 +1,6 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import type { AgentMessage, AgentProviderIssue } from '$shared/types'
+import { isTurnTransparentUserMessage } from '../components/threads/thread-turn-parts'
 import {
   EMPTY_MESSAGES,
   mergePageMessages,
@@ -10,6 +11,23 @@ import {
 /** Frame-aligned stream notification cadence: deltas paint within one frame
  *  of arrival so the reveal trail stays fed and the stream never looks stalled. */
 const STREAM_NOTIFICATION_DELAY_MS = 16
+
+/**
+ * One thread's last "which prompt does this run belong to" answer.
+ *
+ * Held with the message it was read from, so a single identity check proves the
+ * transcript still answers the same way (see `latestUserMessageId`).
+ */
+interface LatestUserMessageMemo {
+  length: number
+  heldSteers: number
+  index: number
+  message: AgentMessage | undefined
+  value: string | undefined
+}
+/** Publish interval for a thread with no mounted view. Keeps a background run's
+ *  cache current without paying the on-screen cadence for it. */
+const UNOBSERVED_STREAM_NOTIFICATION_DELAY_MS = 250
 /** How many messages to reveal per frame when a large conversation first loads,
  *  so the heavy markdown render spreads across frames instead of mounting
  *  dozens of blocks in one synchronous flush (which blocks the composer). */
@@ -46,6 +64,21 @@ export class ThreadMessagesCache {
   /** Keys whose pending stream batch must also republish the structure map. */
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   #streamStructuralKeys = new Set<string>()
+  /**
+   * Threads a mounted view is reading right now, by key.
+   *
+   * A thread nobody is watching still streams, and it used to publish at the
+   * same frame cadence as the one on screen: with seventeen runs going that is
+   * seventeen transcripts copied and seventeen map slots rewritten sixty times a
+   * second, on the renderer's only thread, for one conversation the reader can
+   * actually see. Assembly stays exact either way   only the publish rate of an
+   * unobserved thread drops, and mounting its view publishes it immediately.
+   */
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  #observedKeys = new Map<string, number>()
+  /** When each thread last published a content change, for the interval above. */
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  #streamPublishedAt = new Map<string, number>()
 
   /** Reactive cache keyed by `projectId:threadId`. */
   threads = new SvelteMap<string, ThreadMessagesEntry>()
@@ -182,6 +215,21 @@ export class ThreadMessagesCache {
    *  (the steer-undo window). */
   isSteerHeld(projectId: string, threadId: string, messageId: string): boolean {
     return this.threads.get(threadKey(projectId, threadId))?.heldSteerIds.has(messageId) ?? false
+  }
+
+  /**
+   * Remove one message the agent never received.
+   *
+   * Used by recall: the words go back to the composer, so the row that carried
+   * the failure must not stay behind as a message the harness has no record of.
+   */
+  removeUnsentMessage(projectId: string, threadId: string, messageId: string): void {
+    const entry = this.threads.get(threadKey(projectId, threadId))
+    if (!entry) return
+    if (!entry.messages.some((message) => message.id === messageId)) return
+    entry.messages = entry.messages.filter((message) => message.id !== messageId)
+    entry.heldSteerIds.delete(messageId)
+    this.notify(projectId, threadId)
   }
 
   clearLoadError(projectId: string, threadId: string): void {
@@ -356,16 +404,58 @@ export class ThreadMessagesCache {
     this.#notifyByKey(key)
   }
 
-  /** Replace the cached messages of a conversation after a removal. */
-  applyRemoval(projectId: string, threadId: string, kept: AgentMessage[]): void {
+  /**
+   * Replace the cached messages of a conversation after a removal.
+   *
+   * `keep` is the message an edit is rewriting: it belongs at the end of the
+   * kept prefix because an edit replaces the history *below* it, never the
+   * message itself. Dropping it here is what made the message the user was
+   * editing vanish from the conversation until its replacement was persisted.
+   */
+  applyRemoval(
+    projectId: string,
+    threadId: string,
+    kept: AgentMessage[],
+    keep?: AgentMessage
+  ): void {
     const key = threadKey(projectId, threadId)
     this.#cancelReveal(key)
     const entry = this.entry(projectId, threadId)
-    entry.messages = kept
+    entry.messages = keep ? [...kept.filter((message) => message.id !== keep.id), keep] : kept
     entry.loaded = true
     entry.error = ''
     this.#sessionIds.delete(key)
     this.notify(projectId, threadId)
+  }
+
+  /**
+   * Rewrite one message in place and drop everything after it, in a single
+   * publish.
+   *
+   * The edited message keeps its id and its position, so the bubble the reader
+   * is looking at is never unmounted: they see their own words take the new
+   * text at the instant they submit the edit, not after the mirror has been
+   * truncated and the turn has been re-persisted.
+   */
+  applyEdit(
+    projectId: string,
+    threadId: string,
+    messageId: string,
+    rewrite: (message: AgentMessage) => AgentMessage
+  ): AgentMessage | null {
+    const key = threadKey(projectId, threadId)
+    this.#cancelReveal(key)
+    const entry = this.entry(projectId, threadId)
+    const index = entry.messages.findIndex((message) => message.id === messageId)
+    if (index < 0) return null
+    const current = entry.messages[index]
+    if (!current) return null
+    const edited = rewrite(current)
+    entry.messages = [...entry.messages.slice(0, index), edited]
+    entry.loaded = true
+    entry.error = ''
+    this.notify(projectId, threadId)
+    return edited
   }
 
   /** Clear the cache for a thread (e.g. on deletion). */
@@ -377,6 +467,10 @@ export class ThreadMessagesCache {
     this.#threads.delete(key)
     this.#sessionIds.delete(key)
     this.#streamDirtyKeys.delete(key)
+    this.#streamStructuralKeys.delete(key)
+    this.#streamPublishedAt.delete(key)
+    this.#observedKeys.delete(key)
+    this.#latestUserMessageMemo.delete(key)
     this.threads.delete(key)
     this.structureMessages.delete(key)
   }
@@ -385,8 +479,48 @@ export class ThreadMessagesCache {
     return this.#sessionIds.get(threadKey(projectId, threadId)) === sessionId
   }
 
+  /** The reverse scan's last answer, per thread. A live turn publishes its
+   *  transcript up to sixty times a second and every one of those publishes
+   *  needs the id of the prompt the run is anchored to, which used to mean
+   *  walking back from the tail to the previous user message on every event. The
+   *  answer only moves when a message is added, removed, or replaced, and one
+   *  identity check on the message it was read from proves none of those
+   *  happened. */
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  #latestUserMessageMemo = new Map<string, LatestUserMessageMemo>()
+
   latestUserMessageId(projectId: string, threadId: string): string | undefined {
     const entry = this.entry(projectId, threadId)
+    const { messages } = entry
+    const key = threadKey(projectId, threadId)
+    const memo = this.#latestUserMessageMemo.get(key)
+    // A reload replaces the message objects, a new prompt changes the length, a
+    // held steer changes whether the newest user row counts: the identity check
+    // and the two counters catch all three without rescanning.
+    if (
+      memo &&
+      memo.length === messages.length &&
+      memo.heldSteers === entry.heldSteerIds.size &&
+      messages[memo.index] === memo.message
+    ) {
+      return memo.value
+    }
+    const found = this.#scanLatestUserMessageId(entry)
+    this.#latestUserMessageMemo.set(key, {
+      length: messages.length,
+      heldSteers: entry.heldSteerIds.size,
+      index: found.index,
+      message: found.message,
+      value: found.value
+    })
+    return found.value
+  }
+
+  #scanLatestUserMessageId(entry: ThreadMessagesEntry): {
+    index: number
+    message: AgentMessage | undefined
+    value: string | undefined
+  } {
     const { messages } = entry
     for (let index = messages.length - 1; index >= 0; index--) {
       const message = messages[index]
@@ -395,9 +529,17 @@ export class ThreadMessagesCache {
       // turn: the run stays anchored to the prompt it is steering, and the
       // held message renders under that turn's live working trace.
       if (entry.heldSteerIds.has(message.id)) continue
-      return message.id
+      // A row written into the running turn   a compaction notice, a sub-agent
+      // envelope, an app continuation, the record of an answered question
+      // rides the turn it arrived under instead of opening one. Anchoring the
+      // run to it made every later streamed part look like a brand-new turn,
+      // and opening a new turn resets the working trace's fold: the trace the
+      // reader had just opened closed itself again while the work they were
+      // reading kept arriving.
+      if (isTurnTransparentUserMessage(message)) continue
+      return { index, message, value: message.id }
     }
-    return undefined
+    return { index: -1, message: undefined, value: undefined }
   }
 
   /**
@@ -412,25 +554,75 @@ export class ThreadMessagesCache {
     const key = threadKey(projectId, threadId)
     this.#streamDirtyKeys.add(key)
     if (structural) this.#streamStructuralKeys.add(key)
+    this.#scheduleStreamFlush()
+  }
+
+  /**
+   * Count one mounted reader of this thread's transcript.
+   *
+   * Returns the release, so a view can hold it for exactly its own lifetime.
+   * Mounting publishes right away: the reader asked for this thread, so it must
+   * not wait out the slower unobserved interval.
+   */
+  retain(projectId: string, threadId: string): () => void {
+    const key = threadKey(projectId, threadId)
+    const count = this.#observedKeys.get(key) ?? 0
+    this.#observedKeys.set(key, count + 1)
+    this.#publish(key, false)
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const remaining = (this.#observedKeys.get(key) ?? 1) - 1
+      if (remaining > 0) this.#observedKeys.set(key, remaining)
+      else this.#observedKeys.delete(key)
+    }
+  }
+
+  /** How long a thread may go between content publishes. */
+  #publishInterval(key: string): number {
+    return this.#observedKeys.has(key)
+      ? STREAM_NOTIFICATION_DELAY_MS
+      : UNOBSERVED_STREAM_NOTIFICATION_DELAY_MS
+  }
+
+  /**
+   * Run the next publish that is actually due.
+   *
+   * The dirty set is shared by every streaming thread, and each thread's due
+   * time differs by its interval, so the tick publishes what is due and leaves
+   * the rest dirty instead of publishing everything at the fastest cadence.
+   */
+  #scheduleStreamFlush(): void {
     if (this.#streamNotifyTimer !== undefined) return
     this.#streamNotifyTimer = setTimeout(() => {
       this.#streamNotifyTimer = undefined
       const dirtyKeys = [...this.#streamDirtyKeys]
-      const structuralKeys = this.#streamStructuralKeys
-      this.#streamDirtyKeys.clear()
-      this.#streamStructuralKeys.clear()
-      for (const key of dirtyKeys) this.#publish(key, structuralKeys.has(key))
+      const now = Date.now()
+      for (const key of dirtyKeys) {
+        const dueAt = (this.#streamPublishedAt.get(key) ?? 0) + this.#publishInterval(key)
+        if (dueAt > now) continue
+        this.#streamDirtyKeys.delete(key)
+        this.#streamPublishedAt.set(key, now)
+        const structural = this.#streamStructuralKeys.has(key)
+        this.#streamStructuralKeys.delete(key)
+        this.#publish(key, structural)
+      }
+      // Anything left was not due yet: keep the tick alive so it lands on time.
+      if (this.#streamDirtyKeys.size > 0) this.#scheduleStreamFlush()
     }, STREAM_NOTIFICATION_DELAY_MS)
   }
 
   notify(projectId: string, threadId: string, structural = true): void {
     const key = threadKey(projectId, threadId)
     this.#streamDirtyKeys.delete(key)
+    this.#streamStructuralKeys.delete(key)
     this.#publish(key, structural)
   }
 
   #notifyByKey(key: string, structural = true): void {
     this.#streamDirtyKeys.delete(key)
+    this.#streamStructuralKeys.delete(key)
     this.#publish(key, structural)
   }
 

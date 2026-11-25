@@ -378,8 +378,13 @@ export class ChatEngineTurnsDispatch {
       this.host.sessionRegistry.get(thread.sessionId)?.accountId ?? thread.sessionAccountId
     )
     // Workers run in their own sessions and must stop with the thread they
-    // were spawned from   see stopThreadChildSessions.
-    await this.host.units['assignment-workers'].stopThreadChildSessions(projectId, threadId)
+    // were spawned from   see stopThreadChildSessions. A move is the
+    // exception: its release stops the pawn threads itself, with the transfer
+    // reason, so they stay resumable on the adopting instance instead of being
+    // stamped as a user stop here.
+    if (options.reason !== 'transfer') {
+      await this.host.units['assignment-workers'].stopThreadChildSessions(projectId, threadId)
+    }
     // Everything past this call is the teardown that makes the stop real: the
     // parked question and permission are cleared, the watchdog is disarmed, and
     // the thread is written back as `interrupted`. A driver that throws must not
@@ -395,7 +400,14 @@ export class ChatEngineTurnsDispatch {
     // its inactivity deadline, long after the thread reported itself idle.
     await this.host.units['media-visual'].abortImageDescriptorWork(thread.sessionId, threadId)
     try {
-      await driver.abort(projectPath, thread.sessionId)
+      // A move uses the harness's transfer stop when it has one: the work is
+      // continuing on the adopting instance, so it must not be torn down the
+      // way a user stop tears it down.
+      if (options.reason === 'transfer' && driver.abortForTransfer) {
+        await driver.abortForTransfer(projectPath, thread.sessionId)
+      } else {
+        await driver.abort(projectPath, thread.sessionId)
+      }
     } catch (error) {
       abortFailure = error
     }

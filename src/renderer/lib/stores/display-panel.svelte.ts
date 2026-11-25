@@ -2,6 +2,7 @@ import type {
   DisplayCapturePhase,
   DisplayCaptureState,
   DisplayControlAction,
+  DisplayControlOutcome,
   DisplayFrame,
   DisplayInputGesture,
   DisplayInputPermission,
@@ -15,7 +16,7 @@ import {
 } from '$shared/display-stream-protocol'
 import { DisplayStream } from '$lib/components/display/display-stream.svelte'
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import { logRendererError } from '$lib/system/renderer-logger'
+import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'
 
 /**
  * State for the display panel: one capture session per open mirror tab, and what
@@ -47,15 +48,23 @@ export interface DisplaySession {
   phase: DisplayCapturePhase
   /** Sentence shown while retrying or failed; cleared by the next good frame. */
   detail: string | null
+  /**
+   * What the device's screen is waiting on, while it is. Written and withdrawn by
+   * the main process, which can see the device; never by the stage.
+   */
+  hint: string | null
   /** True when the target accepts taps and typing from the panel. */
   input: boolean
   /** Why it does not, when it does not. */
   inputProblem: string | null
   /**
-   * The live video stream, while the target has one. The stage paints it instead
-   * of `url`, and a stream that ends leaves the polled frames to take over.
+   * The video stream on screen. It is only replaced by something with a picture: a
+   * newer stream's first frame, or a polled frame. Until then its last frame stays
+   * up, so a reconnect never blanks the stage.
    */
   stream: DisplayStream | null
+  /** A stream that is connecting and has not produced a frame yet. */
+  incoming: DisplayStream | null
 }
 
 export interface DisplaySourceSection {
@@ -92,7 +101,8 @@ class DisplayPanelState {
   visibleTabId = $state<string | null>(null)
 
   private cleanups: Array<() => void> = []
-  private started = false
+  /** Mounted panels. The dock's and fullscreen's overlap while one replaces the other. */
+  private users = 0
   /**
    * Last demand each tab reported, so an unchanged size costs no IPC.
    *
@@ -100,7 +110,10 @@ class DisplayPanelState {
    * and a reactive field written by an effect that also reads state is a loop
    * with a nicer name.
    */
-  private readonly demands = new Map<string, { maxDimension: number; visible: boolean }>()
+  private readonly demands = new Map<
+    string,
+    { maxDimension: number; streamMaxDimension: number; visible: boolean }
+  >()
 
   /** Every kind, in picker order, with whatever has been discovered so far. */
   sections = $derived(
@@ -112,9 +125,19 @@ class DisplayPanelState {
     }))
   )
 
-  init(): void {
-    if (this.started) return
-    this.started = true
+  /** Listen for as long as any panel is mounted. Returns that panel's release. */
+  init(): () => void {
+    this.users += 1
+    if (this.users === 1) this.listen()
+    return () => {
+      this.users -= 1
+      if (this.users > 0) return
+      for (const cleanup of this.cleanups) cleanup()
+      this.cleanups = []
+    }
+  }
+
+  private listen(): void {
     this.cleanups.push(
       subscribe('display:frame', (frame: DisplayFrame) => {
         const session = this.sessions[frame.tabId]
@@ -124,6 +147,9 @@ class DisplayPanelState {
         session.frame = frame
         session.url = url
         if (previous) URL.revokeObjectURL(previous)
+        // Main only polls without a stream, so a screenshot means the video is gone.
+        session.stream?.dispose()
+        session.stream = null
       })
     )
     const onPort = (event: MessageEvent<unknown>): void => this.acceptStreamPort(event)
@@ -135,6 +161,7 @@ class DisplayPanelState {
           if (session.sessionId !== state.sessionId) continue
           session.phase = state.phase
           session.detail = state.detail ?? null
+          session.hint = state.hint ?? null
           session.input = state.input
           session.inputProblem = state.inputProblem ?? null
           return
@@ -156,17 +183,24 @@ class DisplayPanelState {
       port.close()
       return
     }
-    session.stream?.dispose()
-    const stream = new DisplayStream(port, () => {
-      if (session.stream === stream) session.stream = null
-    })
-    session.stream = stream
-  }
-
-  destroy(): void {
-    for (const cleanup of this.cleanups) cleanup()
-    this.cleanups = []
-    this.started = false
+    session.incoming?.dispose()
+    const stream = new DisplayStream(
+      port,
+      () => {
+        if (session.incoming !== stream) return
+        session.stream?.dispose()
+        session.stream = stream
+        session.incoming = null
+        if (session.url) URL.revokeObjectURL(session.url)
+        session.url = null
+        session.frame = null
+      },
+      (detail) => {
+        if (session.incoming === stream) session.incoming = null
+        if (detail) logRendererDev(`The device stream ended: ${detail}`)
+      }
+    )
+    session.incoming = stream
   }
 
   sessionFor(tabId: string | null): DisplaySession | null {
@@ -189,9 +223,11 @@ class DisplayPanelState {
       url: null,
       phase: 'starting',
       detail: null,
+      hint: null,
       input: false,
       inputProblem: null,
-      stream: null
+      stream: null,
+      incoming: null
     }
     this.demands.delete(tabId)
     this.sessions = { ...this.sessions, [tabId]: session }
@@ -222,6 +258,7 @@ class DisplayPanelState {
     if (sessionId !== undefined && session.sessionId !== sessionId) return
     if (session.url) URL.revokeObjectURL(session.url)
     session.stream?.dispose()
+    session.incoming?.dispose()
     const next = { ...this.sessions }
     delete next[tabId]
     this.sessions = next
@@ -249,9 +286,13 @@ class DisplayPanelState {
   /**
    * Report the size the stage paints at. Deduped against the last value sent, so
    * dragging the dock's edge sends a handful of updates rather than one per pixel.
+   *
+   * `streamMaxDimension` is the same area in layout pixels: the live video is encoded
+   * on the device, so asking it for the device-pixel size only buys frames the panel
+   * cannot show and spends the ones it can.
    */
-  reportStageSize(tabId: string, maxDimension: number): void {
-    this.pushDemand(tabId, this.visibleTabId === tabId, maxDimension)
+  reportStageSize(tabId: string, maxDimension: number, streamMaxDimension: number): void {
+    this.pushDemand(tabId, this.visibleTabId === tabId, maxDimension, streamMaxDimension)
   }
 
   /**
@@ -296,12 +337,14 @@ class DisplayPanelState {
   }
 
   /** Press one of the target's own buttons. Rejects with the target's reason when
-   *  it refuses, so the panel can say it instead of leaving a dead button. */
-  async control(tabId: string, action: DisplayControlAction): Promise<void> {
+   *  it refuses, so the panel can say it instead of leaving a dead button. The
+   *  answer is what the press revealed about the screen, so the rail can label the
+   *  next press. */
+  async control(tabId: string, action: DisplayControlAction): Promise<DisplayControlOutcome> {
     const session = this.sessions[tabId]
     if (!session) throw new Error('This display tab is not mirroring anything')
     try {
-      await invoke('display:control', session.sessionId, action)
+      return await invoke('display:control', session.sessionId, action)
     } catch (error: unknown) {
       logRendererError(`The display control "${action}" failed`, error)
       throw error
@@ -354,17 +397,32 @@ class DisplayPanelState {
     for (const kind of DISPLAY_SOURCE_KINDS) void this.refresh(kind)
   }
 
-  private pushDemand(tabId: string, visible: boolean, reported?: number): void {
+  private pushDemand(
+    tabId: string,
+    visible: boolean,
+    reported?: number,
+    reportedStream?: number
+  ): void {
     const session = this.sessions[tabId]
     if (!session) return
+    const round = (value: number): number =>
+      Math.max(DEMAND_STEP, Math.round(value / DEMAND_STEP) * DEMAND_STEP)
     const previous = this.demands.get(tabId)
-    const requested = reported ?? previous?.maxDimension ?? DEMAND_STEP
-    const maxDimension = Math.max(DEMAND_STEP, Math.round(requested / DEMAND_STEP) * DEMAND_STEP)
-    if (previous?.maxDimension === maxDimension && previous.visible === visible) return
-    this.demands.set(tabId, { maxDimension, visible })
-    void invoke('display:demand', session.sessionId, { maxDimension, visible }).catch(
-      (error: unknown) => logRendererError('A display demand could not be reported', error)
-    )
+    const maxDimension = round(reported ?? previous?.maxDimension ?? DEMAND_STEP)
+    const streamMaxDimension = round(reportedStream ?? previous?.streamMaxDimension ?? maxDimension)
+    if (
+      previous?.maxDimension === maxDimension &&
+      previous.streamMaxDimension === streamMaxDimension &&
+      previous.visible === visible
+    ) {
+      return
+    }
+    this.demands.set(tabId, { maxDimension, streamMaxDimension, visible })
+    void invoke('display:demand', session.sessionId, {
+      maxDimension,
+      streamMaxDimension,
+      visible
+    }).catch((error: unknown) => logRendererError('A display demand could not be reported', error))
   }
 }
 

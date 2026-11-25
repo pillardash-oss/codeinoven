@@ -51,6 +51,38 @@ export interface AgentTarget {
   entry: AgentFrameEntry
 }
 
+/**
+ * The fields of a reviewed control that must still describe the same control.
+ *
+ * Ordered as the review reads them, so a sentence naming what changed reads in the
+ * order a person would say it.
+ */
+const ACTION_TARGET_FIELDS = [
+  'tag',
+  'type',
+  'role',
+  'name',
+  'href',
+  'download',
+  'expanded',
+  'formMethod',
+  'formAction',
+  'label'
+] as const
+
+/**
+ * How long a page is given to react before a cover is looked for again.
+ *
+ * Moving the pointer away from a covered element usually dismisses the layer over it
+ * (a hover card, a tooltip), and the dismissal is animated, so the point is
+ * re-measured after a moment rather than in the same turn.
+ */
+const SCREEN_SETTLE_MS = 120
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 /** A point an action addresses, in the page's viewport and inside its document. */
 export interface AgentPoint {
   x: number
@@ -330,17 +362,50 @@ export class BrowserServiceAgentScript {
     }
   }
 
-  /** Whether the element an approval was granted for has changed since. */
-  async agentTargetChanged(
+  /**
+   * Whether the control an approval was granted for is still the control an action
+   * would act on, and why not when it is not.
+   *
+   * This guard exists to make a review binding: a person approved *this* control, so
+   * the action must not land on a different one because the page moved underneath.
+   * It used to answer with a boolean, which turned three unrelated situations into
+   * one useless sentence ("target changed"): the element was redrawn, the element was
+   * removed, and the reviewer and the action read different things. Each of those is
+   * an answer the agent can act on, so each is named now, and a reference that only
+   * had to survive a redraw is healed by the toolkit instead of failing here.
+   */
+  async agentTargetChange(
     target: AgentTarget,
     reviewedTarget: BrowserActionTarget | null
-  ): Promise<boolean> {
-    if (!reviewedTarget) return false
-    const current = await this.runAgentScriptIn(
-      target.entry,
-      browserActionTargetScript(target.selector)
+  ): Promise<string | null> {
+    if (!reviewedTarget) return null
+    const current = asObject(
+      await this.runAgentScriptIn(target.entry, browserActionTargetScript(target.selector))
     )
-    return JSON.stringify(current) !== JSON.stringify(reviewedTarget)
+    if (!current) {
+      return 'The control this action was reviewed for is no longer on the page: it was removed or replaced after the review. Read the page again and act on the control that is there now.'
+    }
+    const changed: string[] = []
+    for (const field of ACTION_TARGET_FIELDS) {
+      if (field === 'label') continue
+      if (current[field] !== reviewedTarget[field]) changed.push(field)
+    }
+    // A label is the one field a live page legitimately rewrites: a search box whose
+    // suggestions appear, a counter in a button. The review is still about the same
+    // control when one label grew out of the other, so only a label that became a
+    // different statement blocks the action.
+    const reviewedLabel = reviewedTarget.label
+    const currentLabel = typeof current['label'] === 'string' ? current['label'] : ''
+    if (
+      reviewedLabel.length > 0 &&
+      currentLabel !== reviewedLabel &&
+      !currentLabel.includes(reviewedLabel) &&
+      !reviewedLabel.includes(currentLabel)
+    ) {
+      changed.push('label')
+    }
+    if (changed.length === 0) return null
+    return `The control this action was reviewed for changed after the review (${changed.join(', ')}), so nothing was done. Read the page again and retry on the control that is there now.`
   }
 
   /**
@@ -348,8 +413,12 @@ export class BrowserServiceAgentScript {
    *
    * The pointer path is the real one: a move, a press and a release at the centre
    * of the element, which is the sequence Chromium turns into a trusted click. An
-   * element a pointer cannot reach (hidden, or covered by an overlay) falls back to
-   * its own `click()`, reported as `via: "dom"` so a caller knows the difference.
+   * element covered by another layer gets one chance to become reachable, because a
+   * leftover tooltip, a hover card or a dismissable banner is the usual cause and
+   * moving the pointer away is usually what clears it; an element a pointer still
+   * cannot reach (hidden, or under a real modal) falls back to its own click,
+   * reported as `via: "dom"` so a caller knows the difference and is told what was
+   * in the way.
    */
   async clickAgentTarget(
     tab: BrowserTab,
@@ -359,9 +428,22 @@ export class BrowserServiceAgentScript {
     const contents = tab.view.webContents
     const clickCount = agentCount(input['clickCount'], 1, 3)
     const modifiers = normalizeAgentModifiers(input['modifiers'])
-    const reachable = asObject(
-      await this.runAgentScriptIn(target.entry, agentElementPointScript(target.selector))
-    )
+    const probe = async (): Promise<Record<string, unknown> | null> =>
+      asObject(await this.runAgentScriptIn(target.entry, agentElementPointScript(target.selector)))
+    let reachable = await probe()
+    if (reachable?.['found'] === true && reachable['coveredBy'] !== null) {
+      // A pointer cannot reach a covered element, but the layer over it usually is
+      // not meant to stay: moving the pointer off it is what a person would do, and
+      // it clears a hover card, a tooltip and most stray menus.
+      await sendAgentMouse(contents, {
+        action: 'move',
+        x: 2,
+        y: 2,
+        modifiers: []
+      }).catch(() => undefined)
+      await delay(SCREEN_SETTLE_MS)
+      reachable = await probe()
+    }
     if (reachable?.['found'] === true && reachable['coveredBy'] === null) {
       const point = await this.pointFor(tab, target).catch(() => null)
       if (point) {
@@ -389,10 +471,17 @@ export class BrowserServiceAgentScript {
     const fallback =
       asObject(await this.runAgentScriptIn(target.entry, agentDomClickScript(target.selector))) ??
       {}
+    const cover = asObject(reachable?.['coveredBy'])
     return {
       ...fallback,
       via: 'dom',
       ...(target.entry.index === 0 ? {} : { frame: target.entry.index }),
+      ...(cover
+        ? {
+            coveredBy: cover,
+            detail: `A real pointer could not reach this element because ${String(cover['tag'] || 'another element')} is over it, so it was clicked through its own handler. Close or dismiss what is over it and click again when the page needs a real pointer click.`
+          }
+        : {}),
       ...(reachable?.['reason'] === undefined ? {} : { pointer: reachable['reason'] })
     }
   }

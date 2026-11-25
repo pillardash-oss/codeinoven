@@ -321,6 +321,14 @@ export interface AgentAccountUsageOverrides {
    *  only the session bound to this thread may report it   another session's
    *  reading is a different conversation's context. */
   threadId?: string
+  /**
+   * Oven this surface belongs to, used only when this machine has no such
+   * harness installed: the reading then comes from the Oven that does. A
+   * thread names its own Oven, and naming this device means no other machine
+   * is asked; a surface without a thread (the Accounts settings page) omits it
+   * and the registry's default Oven answers.
+   */
+  ovenId?: string
 }
 
 /** On-demand account quota snapshot for one harness used on a thread. */

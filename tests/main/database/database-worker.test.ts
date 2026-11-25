@@ -187,6 +187,7 @@ describe('DatabaseWorker production wrapper', () => {
       })
     )
     usage.recordEvent(usageEvent(thread.id, 'auxiliary-only', 'memory'))
+    await usage.flushPendingWrites()
 
     const kpis = await usage.efficiencyKpisForThread(thread.id)
     expect(kpis.successfulTurns).toBe(2)
@@ -240,6 +241,139 @@ describe('DatabaseWorker production wrapper', () => {
     await expect(worker.ping()).resolves.toMatchObject({ kind: 'ping', ok: true })
     await worker.shutdown()
   })
+
+  it('runs an interactive read ahead of a queued background scan', async () => {
+    const dir = makeDir()
+    const worker = new DatabaseWorker(
+      {
+        dbPath: join(dir, 'app.db'),
+        backupDir: join(dir, 'backups'),
+        maintenanceEnabled: false,
+        ...DATABASE_WORKER_DEFAULTS
+      },
+      Logger,
+      realWorkerFactory
+    )
+    worker.start()
+    await expect(worker.ping()).resolves.toMatchObject({ kind: 'ping', ok: true })
+
+    // A deliberately expensive statement stands in for the whole-project
+    // maintenance scans: a recursive count that holds the worker for a while.
+    const slowCount = `WITH RECURSIVE c(x) AS (
+      SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 4_000_000
+    ) SELECT count(*) AS n FROM c`
+    const order: string[] = []
+    // The blocker occupies the worker, so the next two requests are genuinely
+    // queued and the lane is what decides between them.
+    const blocker = worker.query(slowCount, [], 1).then((result) => {
+      order.push('blocker')
+      return result
+    })
+    const scan = worker.query(slowCount, [], 1, 'background').then((result) => {
+      order.push('background')
+      return result
+    })
+    const read = worker.query('SELECT 1 AS n', [], 1).then((result) => {
+      order.push('interactive')
+      return result
+    })
+
+    const [first, second, third] = await Promise.all([blocker, scan, read])
+    expect(first).toMatchObject({ kind: 'query', ok: true })
+    expect(second).toMatchObject({ kind: 'query', ok: true })
+    expect(third).toMatchObject({ kind: 'query', ok: true })
+    // The click's read answers before the scan that was queued ahead of it:
+    // that inversion is the whole point of the lane.
+    expect(order).toEqual(['blocker', 'interactive', 'background'])
+
+    await worker.shutdown()
+  }, 60_000)
+
+  it('runs an interactive read ahead of a queued background write', async () => {
+    // A one-time index build is a write, and it holds the worker for as long as
+    // it takes. It must therefore be able to take the background lane too, or a
+    // launch that needs one would still answer a click's read last.
+    const dir = makeDir()
+    const worker = new DatabaseWorker(
+      {
+        dbPath: join(dir, 'app.db'),
+        backupDir: join(dir, 'backups'),
+        maintenanceEnabled: false,
+        ...DATABASE_WORKER_DEFAULTS
+      },
+      Logger,
+      realWorkerFactory
+    )
+    worker.start()
+    await expect(worker.ping()).resolves.toMatchObject({ kind: 'ping', ok: true })
+
+    const order: string[] = []
+    const blocker = worker
+      .query(
+        `WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 4_000_000)
+         SELECT count(*) AS n FROM c`,
+        [],
+        1
+      )
+      .then((result) => {
+        order.push('blocker')
+        return result
+      })
+    const build = worker
+      .execute('CREATE TABLE IF NOT EXISTS probe_table(x INTEGER)', [], 'background')
+      .then((result) => {
+        order.push('background-write')
+        return result
+      })
+    const read = worker.query('SELECT 1 AS n', [], 1).then((result) => {
+      order.push('interactive')
+      return result
+    })
+
+    const [first, second, third] = await Promise.all([blocker, build, read])
+    expect(first).toMatchObject({ kind: 'query', ok: true })
+    expect(second).toMatchObject({ kind: 'execute', ok: true })
+    expect(third).toMatchObject({ kind: 'query', ok: true })
+    expect(order).toEqual(['blocker', 'interactive', 'background-write'])
+
+    await worker.shutdown()
+  }, 60_000)
+
+  it('waits for a quiet queue before background work, and gives up waiting at the deadline', async () => {
+    const dir = makeDir()
+    const worker = new DatabaseWorker(
+      {
+        dbPath: join(dir, 'app.db'),
+        backupDir: join(dir, 'backups'),
+        maintenanceEnabled: false,
+        ...DATABASE_WORKER_DEFAULTS
+      },
+      Logger,
+      realWorkerFactory
+    )
+    worker.start()
+    await expect(worker.ping()).resolves.toMatchObject({ kind: 'ping', ok: true })
+
+    // A start counts as activity, so the quiet window is served, not skipped.
+    const quietStartedAt = Date.now()
+    await worker.waitForInteractiveQuiet(200, 5_000)
+    expect(Date.now() - quietStartedAt).toBeGreaterThanOrEqual(150)
+
+    // A machine that is never quiet must still get the work: the deadline, not
+    // the quiet window, is what ends the wait.
+    const ticker = setInterval(() => void worker.ping(), 20)
+    try {
+      const deadlineStartedAt = Date.now()
+      await worker.waitForInteractiveQuiet(10_000, 300)
+      const waited = Date.now() - deadlineStartedAt
+      expect(waited).toBeGreaterThanOrEqual(250)
+      expect(waited).toBeLessThan(2_000)
+    } finally {
+      clearInterval(ticker)
+    }
+
+    await worker.shutdown()
+  }, 60_000)
 
   it('syncs transcript deltas on the worker and detects in-place edits', async () => {
     const dir = makeDir()
@@ -666,7 +800,59 @@ describe('DatabaseWorker production wrapper', () => {
     await db.close()
   })
 
-  it('returns the full history beyond one page without omission (bounded worker reads)', async () => {
+  it(
+    'returns the full history beyond one page without omission (bounded worker reads)',
+    async () => {
+      const dir = makeDir()
+      const db = await openDatabase(dir)
+      new ProjectRepo(db).upsert({
+        id: 'p1',
+        name: 'P',
+        path: '/p',
+        source: 'local',
+        providerId: 'openai',
+        workflowId: 'default',
+        threadLimit: 70,
+        changeTrackingMode: 'manual',
+        createdAt: 1,
+        updatedAt: 1
+      })
+      const manager = new ThreadManager(db)
+      const thread = await manager.createThread({
+        projectId: 'p1',
+        providerId: 'openai',
+        title: 'Large history'
+      })
+      const history = new HistoryEngine(db)
+
+      const total = 1250
+      const appends: Promise<unknown>[] = []
+      for (let i = 0; i < total; i++) {
+        appends.push(history.append('p1', thread.id, 'user', `large entry ${i}`))
+      }
+      // Chunked concurrency so the client still serializes but the load is exercised.
+      for (let i = 0; i < appends.length; i += 50) {
+        await Promise.all(appends.slice(i, i + 50))
+      }
+
+      expect(await history.count('p1', thread.id)).toBe(total)
+
+      // Full-load API returns every row   no silent 1000-row truncation   while
+      // each worker query stays bounded (cursor-paged in chunks).
+      const loaded = await history.load('p1', thread.id)
+      expect(loaded).toHaveLength(total)
+      const contents = new Set(loaded.map((entry) => entry.content))
+      expect(contents.size).toBe(total)
+      expect(loaded[0].content).toBe('large entry 0')
+      expect(loaded[total - 1].content).toBe(`large entry ${total - 1}`)
+
+      await db.close()
+    }, // 1250 chunked appends + full cursor-paged load exceed the 5s default on
+    // slow Windows runners, and the hosted runner's disk can push it past 20s.
+    60000
+  )
+
+  it('gives the async lane its own worker, its own connection, and no write access', async () => {
     const dir = makeDir()
     const db = await openDatabase(dir)
     new ProjectRepo(db).upsert({
@@ -685,33 +871,32 @@ describe('DatabaseWorker production wrapper', () => {
     const thread = await manager.createThread({
       projectId: 'p1',
       providerId: 'openai',
-      title: 'Large history'
+      title: 'Async lane'
     })
-    const history = new HistoryEngine(db)
 
-    const total = 1250
-    const appends: Promise<unknown>[] = []
-    for (let i = 0; i < total; i++) {
-      appends.push(history.append('p1', thread.id, 'user', `large entry ${i}`))
-    }
-    // Chunked concurrency so the client still serializes but the load is exercised.
-    for (let i = 0; i < appends.length; i += 50) {
-      await Promise.all(appends.slice(i, i + 50))
-    }
+    // The lane is a second thread with a connection of its own: routing a read
+    // to it must not be routing it to the maintenance worker.
+    const maintenanceWorker = db.maintenanceWorker()
+    const asyncWorker = db.asyncReadWorker()
+    expect(asyncWorker).not.toBeNull()
+    expect(asyncWorker?.isRunning()).toBe(true)
+    expect(asyncWorker).not.toBe(maintenanceWorker)
 
-    expect(await history.count('p1', thread.id)).toBe(total)
+    // A read on that connection sees everything the writer has committed, which
+    // is what makes the lane usable for search and rollups.
+    const seen = await db.queryViaWorker('SELECT id FROM threads WHERE id = ?', [thread.id], 1, {
+      lane: 'async'
+    })
+    expect(seen.ok).toBe(true)
+    expect(seen.rows).toHaveLength(1)
 
-    // Full-load API returns every row   no silent 1000-row truncation   while
-    // each worker query stays bounded (cursor-paged in chunks).
-    const loaded = await history.load('p1', thread.id)
-    expect(loaded).toHaveLength(total)
-    const contents = new Set(loaded.map((entry) => entry.content))
-    expect(contents.size).toBe(total)
-    expect(loaded[0].content).toBe('large entry 0')
-    expect(loaded[total - 1].content).toBe(`large entry ${total - 1}`)
+    // And it is read-only, so this lane can never become a second writer.
+    const write = await asyncWorker?.execute('DELETE FROM threads WHERE id = ?', [thread.id])
+    expect(write?.ok).toBe(false)
+    expect(write?.error ?? '').toMatch(/readonly|read-only/i)
+    const stillThere = db.all<{ id: string }>('SELECT id FROM threads WHERE id = ?', thread.id)
+    expect(stillThere).toHaveLength(1)
 
     await db.close()
-  }, // 1250 chunked appends + full cursor-paged load exceed the 5s default on
-  // slow Windows runners, and the hosted runner's disk can push it past 20s.
-  60000)
+  })
 })

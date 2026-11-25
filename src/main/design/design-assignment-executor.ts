@@ -8,7 +8,7 @@ import {
   usableDesignAssignments
 } from '../../lib/design-assignments'
 import type { EffectiveExperts } from '../../lib/experts'
-import { authoredWorkRoot } from './authored-work-root'
+import { authoredWorkRoot } from './authored-work'
 import { requiredString } from '../utilities/utility-orchestration/utility-input'
 import type {
   AgentModelSelection,
