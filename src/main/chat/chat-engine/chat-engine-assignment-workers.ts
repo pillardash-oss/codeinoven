@@ -1723,10 +1723,6 @@ export class ChatEngineAssignmentWorkers {
     }
     if (claimed.length === 0) return
     if (session.activeTurnId) {
-      // A sub-agent's edit is this turn's progress too, so the work-stall clock
-      // restarts instead of nudging a parent that is producing files through its
-      // children.
-      this.host.units['work-stall'].noteFileProgress(session.sessionId)
       session.changedPaths ??= new Set()
       session.preciseChangedPaths ??= new Map()
       const claimedAt = Date.now()

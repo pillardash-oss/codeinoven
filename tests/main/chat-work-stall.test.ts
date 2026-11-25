@@ -4,7 +4,8 @@ import {
   stalledWorkSteerPrompt
 } from '../../src/main/chat/chat-engine/chat-engine-work-stall'
 import type { ChatEngine } from '../../src/main/chat/chat-engine'
-import type { AppConfig } from '../../src/lib/types'
+import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID, type AppConfig } from '../../src/lib/types'
+import { GLOBAL_BROWSER_PROJECT_ID } from '../../src/lib/ipc/browser'
 
 /**
  * A host with the only surfaces the work-stall unit reads: the per-session
@@ -14,12 +15,12 @@ import type { AppConfig } from '../../src/lib/types'
  */
 interface StallHost {
   state: {
-    workStallTimers: Map<string, ReturnType<typeof setTimeout>>
-    workStallNudgedTurns: Map<string, string>
+    workStallChecks: Map<string, { timer: ReturnType<typeof setTimeout>; turnKey: string }>
+    workStallSettledTurns: Map<string, string>
     childSessionOwners: Map<string, { parentSessionId?: string }>
     childSessionActivityStatuses: Map<string, string>
   }
-  sessionRegistry: Map<string, { activeTurnId?: string; ephemeral?: boolean }>
+  sessionRegistry: Map<string, Record<string, unknown>>
   sessionStatuses: Map<string, { state: string }>
   storage: { getConfig: () => Promise<AppConfig> }
   units: Record<string, Record<string, unknown>>
@@ -34,18 +35,31 @@ interface HostFixture {
 }
 
 const SESSION = 'session-1'
+const PROJECT = 'project-1'
 const THREAD_SETTINGS = { harnessId: 'pi' }
+
+function sessionInfo(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    sessionId: SESSION,
+    projectId: PROJECT,
+    threadId: 'thread-1',
+    projectPath: '/project',
+    driverId: 'pi',
+    activeTurnId: 'turn-1',
+    ...overrides
+  }
+}
 
 function makeHost(minutes = 10): HostFixture {
   const sendPrompt = vi.fn(async () => undefined)
   const host: StallHost = {
     state: {
-      workStallTimers: new Map(),
-      workStallNudgedTurns: new Map(),
+      workStallChecks: new Map(),
+      workStallSettledTurns: new Map(),
       childSessionOwners: new Map(),
       childSessionActivityStatuses: new Map()
     },
-    sessionRegistry: new Map([[SESSION, { activeTurnId: 'turn-1' }]]),
+    sessionRegistry: new Map([[SESSION, sessionInfo()]]),
     sessionStatuses: new Map([[SESSION, { state: 'working' }]]),
     storage: {
       getConfig: async () => ({ steerToStartWorkMinutes: minutes }) as AppConfig
@@ -74,7 +88,6 @@ describe('stalledWorkSteerPrompt', () => {
   it('names the window and forbids discussing the nudge', () => {
     const prompt = stalledWorkSteerPrompt(10)
     expect(prompt).toContain('10 minutes')
-    expect(prompt).not.toContain('10 minute.')
     expect(prompt.toLowerCase()).toContain('stop stalling')
     expect(prompt.toLowerCase()).toContain('not one file has changed')
     expect(prompt).toContain('do not mention that you were nudged')
@@ -95,72 +108,88 @@ describe('ChatEngineWorkStall', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     expect(sendPrompt).toHaveBeenCalledTimes(1)
     const call = sendPrompt.mock.calls[0] as unknown[]
-    expect(call[5]).toBeUndefined()
-    expect(call[10]).toBe('internal')
+    expect(call[0]).toBe(PROJECT)
     expect(call[3]).toBe(stalledWorkSteerPrompt(10))
-    expect(host.state.workStallNudgedTurns.get(SESSION)).toBe('turn-1')
+    expect(call[10]).toBe('internal')
+    expect(host.state.workStallSettledTurns.get(SESSION)).toBe('turn-1')
   })
 
-  it('never steers the same turn twice, however much traffic it emits', async () => {
-    const { host, unit, sendPrompt } = makeHost(10)
-    unit.noteTurnStarted(SESSION)
-    await vi.advanceTimersByTimeAsync(10 * 60_000)
-    expect(sendPrompt).toHaveBeenCalledTimes(1)
-
-    // Streamed events re-announce the working state and a late file change
-    // restarts nothing while the turn's one nudge is already spent.
-    unit.noteTurnStarted(SESSION)
-    unit.noteFileProgress(SESSION)
-    await vi.advanceTimersByTimeAsync(60 * 60_000)
-    expect(sendPrompt).toHaveBeenCalledTimes(1)
-    expect(host.state.workStallTimers.size).toBe(0)
-  })
-
-  it('restarts the window on a real file change', async () => {
+  it('measures the window from the start of the turn, not from streamed events', async () => {
     const { unit, sendPrompt } = makeHost(10)
     unit.noteTurnStarted(SESSION)
-    await vi.advanceTimersByTimeAsync(9 * 60_000)
-    unit.noteFileProgress(SESSION)
-    await vi.advanceTimersByTimeAsync(9 * 60_000)
+    // Every streamed part re-announces the working state.
+    for (let minute = 1; minute <= 9; minute += 1) {
+      await vi.advanceTimersByTimeAsync(60_000)
+      unit.noteTurnStarted(SESSION)
+    }
     expect(sendPrompt).not.toHaveBeenCalled()
 
     await vi.advanceTimersByTimeAsync(60_000)
     expect(sendPrompt).toHaveBeenCalledTimes(1)
   })
 
-  it('does not arm a second clock for an unchanged turn', async () => {
-    const { host, unit } = makeHost(10)
+  it('never steers a turn that changed a file at any point', async () => {
+    const { host, unit, sendPrompt } = makeHost(10)
     unit.noteTurnStarted(SESSION)
-    const first = host.state.workStallTimers.get(SESSION)
+    await vi.advanceTimersByTimeAsync(2 * 60_000)
+    const info = host.sessionRegistry.get(SESSION)
+    if (!info) throw new Error('missing fixture session')
+    info.changedPaths = new Set(['src/app.ts'])
+
+    await vi.advanceTimersByTimeAsync(60 * 60_000)
     unit.noteTurnStarted(SESSION)
-    expect(host.state.workStallTimers.get(SESSION)).toBe(first)
+    await vi.advanceTimersByTimeAsync(60 * 60_000)
+    expect(sendPrompt).not.toHaveBeenCalled()
   })
 
-  it('drops the clock and the budget when the turn ends', async () => {
+  it('spends the turn check when a later steer re-announces the working state', async () => {
+    const { unit, sendPrompt } = makeHost(10)
+    unit.noteTurnStarted(SESSION)
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    expect(sendPrompt).toHaveBeenCalledTimes(1)
+
+    // The steer dispatch marks the session working again; that is not a new turn.
+    unit.noteTurnStarted(SESSION)
+    await vi.advanceTimersByTimeAsync(60 * 60_000)
+    expect(sendPrompt).toHaveBeenCalledTimes(1)
+  })
+
+  it('gives a genuinely new turn its own full window', async () => {
     const { host, unit, sendPrompt } = makeHost(10)
     unit.noteTurnStarted(SESSION)
     await vi.advanceTimersByTimeAsync(10 * 60_000)
     expect(sendPrompt).toHaveBeenCalledTimes(1)
 
     unit.endTurn(SESSION)
-    expect(host.state.workStallTimers.size).toBe(0)
-    expect(host.state.workStallNudgedTurns.size).toBe(0)
-
-    // A genuinely new turn gets its own window and its own single nudge.
-    host.sessionRegistry.set(SESSION, { activeTurnId: 'turn-2' })
+    host.sessionRegistry.set(SESSION, sessionInfo({ activeTurnId: 'turn-2' }))
     unit.noteTurnStarted(SESSION)
-    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    await vi.advanceTimersByTimeAsync(9 * 60_000)
+    expect(sendPrompt).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(60_000)
     expect(sendPrompt).toHaveBeenCalledTimes(2)
-    expect(host.state.workStallNudgedTurns.get(SESSION)).toBe('turn-2')
   })
 
-  it('says nothing when the turn ended while the clock ran', async () => {
+  it('does not let a new turn inherit the previous turn’s remaining window', async () => {
+    const { host, unit, sendPrompt } = makeHost(10)
+    unit.noteTurnStarted(SESSION)
+    await vi.advanceTimersByTimeAsync(9 * 60_000)
+    // A new turn starts without the previous one settling.
+    host.sessionRegistry.set(SESSION, sessionInfo({ activeTurnId: 'turn-2' }))
+    unit.noteTurnStarted(SESSION)
+
+    await vi.advanceTimersByTimeAsync(2 * 60_000)
+    expect(sendPrompt).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(8 * 60_000)
+    expect(sendPrompt).toHaveBeenCalledTimes(1)
+  })
+
+  it('says nothing when the turn ended before the check landed', async () => {
     const { host, unit, sendPrompt } = makeHost(10)
     unit.noteTurnStarted(SESSION)
     host.sessionStatuses.set(SESSION, { state: 'idle' })
     await vi.advanceTimersByTimeAsync(10 * 60_000)
     expect(sendPrompt).not.toHaveBeenCalled()
-    expect(host.state.workStallNudgedTurns.size).toBe(0)
+    expect(host.state.workStallSettledTurns.size).toBe(0)
   })
 
   it('holds off when the driver already released the turn', async () => {
@@ -184,10 +213,25 @@ describe('ChatEngineWorkStall', () => {
     // The child keeps working, so the parent keeps waiting instead of stalling.
     await vi.advanceTimersByTimeAsync(5 * 60_000)
     expect(sendPrompt).not.toHaveBeenCalled()
-    expect(host.state.workStallNudgedTurns.size).toBe(0)
+    expect(host.state.workStallSettledTurns.size).toBe(0)
 
-    // Once the child settles with no file change behind it, the parent that
-    // produced nothing is nudged on the next check.
+    // A child whose files were claimed on the parent means the turn did work.
+    const info = host.sessionRegistry.get(SESSION)
+    if (!info) throw new Error('missing fixture session')
+    info.changedPaths = new Set(['src/from-child.ts'])
+    host.state.childSessionActivityStatuses.set('child-1', 'completed')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sendPrompt).not.toHaveBeenCalled()
+  })
+
+  it('steers after a child settles if the turn still changed nothing', async () => {
+    const { host, unit, sendPrompt } = makeHost(10)
+    host.state.childSessionOwners.set('child-1', { parentSessionId: SESSION })
+    host.state.childSessionActivityStatuses.set('child-1', 'running')
+    unit.noteTurnStarted(SESSION)
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    expect(sendPrompt).not.toHaveBeenCalled()
+
     host.state.childSessionActivityStatuses.set('child-1', 'completed')
     await vi.advanceTimersByTimeAsync(60_000)
     expect(sendPrompt).toHaveBeenCalledTimes(1)
@@ -234,25 +278,37 @@ describe('ChatEngineWorkStall', () => {
     expect(sendPrompt).toHaveBeenCalledTimes(1)
   })
 
+  it.each([INBOX_PROJECT_ID, ASSISTANT_SPACE_ID, GLOBAL_BROWSER_PROJECT_ID])(
+    'never watches a conversation container (%s)',
+    async (projectId) => {
+      const { host, unit, sendPrompt } = makeHost(10)
+      host.sessionRegistry.set(SESSION, sessionInfo({ projectId }))
+      unit.noteTurnStarted(SESSION)
+      await vi.advanceTimersByTimeAsync(60 * 60_000)
+      expect(sendPrompt).not.toHaveBeenCalled()
+      expect(host.state.workStallChecks.size).toBe(0)
+    }
+  )
+
   it('never arms for a child session or a temporary chat', async () => {
     const { host, unit } = makeHost(10)
     host.state.childSessionOwners.set('child-1', { parentSessionId: SESSION })
-    host.sessionRegistry.set('child-1', { activeTurnId: 'child-turn' })
+    host.sessionRegistry.set('child-1', sessionInfo({ sessionId: 'child-1', activeTurnId: 'c' }))
     host.sessionStatuses.set('child-1', { state: 'working' })
     unit.noteTurnStarted('child-1')
 
-    host.sessionRegistry.set('chat-1', { activeTurnId: 'chat-turn' })
+    host.sessionRegistry.set('chat-1', sessionInfo({ sessionId: 'chat-1', activeTurnId: 't' }))
     host.units['temporary-chats'] = { temporaryChatForSession: () => ({ sessionId: 'chat-1' }) }
     unit.noteTurnStarted('chat-1')
 
     await vi.advanceTimersByTimeAsync(0)
-    expect(host.state.workStallTimers.size).toBe(0)
+    expect(host.state.workStallChecks.size).toBe(0)
   })
 
   it('does nothing when the configured window is not positive', async () => {
     const { host, unit } = makeHost(0)
     unit.noteTurnStarted(SESSION)
     await vi.advanceTimersByTimeAsync(0)
-    expect(host.state.workStallTimers.size).toBe(0)
+    expect(host.state.workStallChecks.size).toBe(0)
   })
 })

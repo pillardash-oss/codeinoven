@@ -869,9 +869,9 @@ export class ChatEngineTurnsSessions {
     // process. Nothing here kills a live turn: the watchdog's own grace window
     // and its silence ceiling decide, exactly as they do for a reported one.
     this.host.units['lifecycle'].startSessionWatchdog(sessionId)
-    // The turn's own work-stall clock starts here too, and survives every
-    // streamed event until a real file change restarts it. An agent that only
-    // reads emits plenty of events, so harness traffic is not the clock.
+    // The turn's one work-stall check is armed here, from the start of the
+    // turn. Streaming events and later steers re-announce the working state
+    // without moving it, and any real file change ends it for this turn.
     this.host.units['work-stall'].noteTurnStarted(sessionId)
     if (changed) {
       this.host.sessionStatuses.set(sessionId, { state: 'working' })
@@ -1095,7 +1095,7 @@ export class ChatEngineTurnsSessions {
   handleSessionIdleSignal(sessionId: string): void {
     if (this.host.handledIdleSessions.has(sessionId)) return
     this.host.handledIdleSessions.add(sessionId)
-    // The turn is over: its work-stall clock and one-nudge budget go with it.
+    // The turn is over: its work-stall check and outcome go with it.
     this.host.units['work-stall'].endTurn(sessionId)
     // Some idle paths record the status without broadcasting it, so the turn's
     // end is announced here as well as on the status stream.
