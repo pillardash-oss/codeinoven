@@ -261,31 +261,31 @@
         </div>
       {/if}
     </div>
-    {#if threadReferences.length > 0 || forkParentReference !== null}
-      <div class="flex flex-wrap items-center gap-1.5" role="group" aria-label="Context threads">
-        {#if forkParentReference}
-          <!-- First, because it is the context this conversation already carries:
-               the agent was told to read the thread the fork was copied from. -->
-          <ThreadContextPill
-            reference={forkParentReference}
-            onOpen={() =>
-              void openThreadById(forkParentReference.projectId, forkParentReference.threadId)}
-            forkedFrom
-          />
-        {/if}
-        {#each threadReferences as reference (reference.threadId)}
-          <ThreadContextPill
-            {reference}
-            onOpen={() => void openThreadById(reference.projectId, reference.threadId)}
-            onRemove={() => onRemoveThreadContext(reference.threadId)}
-          />
-        {/each}
-      </div>
-    {/if}
-    <!-- Everything the next message carries shares one wrapping row: the
-         attached reference chip and every file sit beside each other and wrap
-         together, instead of each group taking a line of its own. -->
-    <div class="flex flex-wrap items-center gap-1.5">
+    <!-- Everything the next message carries shares one wrapping row: attached
+         conversations, the reference chip and every file sit beside each other
+         and wrap together, instead of each group taking a line of its own. -->
+    <div
+      class="flex flex-wrap items-center gap-1.5"
+      role="group"
+      aria-label="Attached to this message"
+    >
+      {#if forkParentReference}
+        <!-- First, because it is the context this conversation already carries:
+             the agent was told to read the thread the fork was copied from. -->
+        <ThreadContextPill
+          reference={forkParentReference}
+          onOpen={() =>
+            void openThreadById(forkParentReference.projectId, forkParentReference.threadId)}
+          forkedFrom
+        />
+      {/if}
+      {#each threadReferences as reference (reference.threadId)}
+        <ThreadContextPill
+          {reference}
+          onOpen={() => void openThreadById(reference.projectId, reference.threadId)}
+          onRemove={() => onRemoveThreadContext(reference.threadId)}
+        />
+      {/each}
       {#if references.length > 0}
         <div
           role="group"
