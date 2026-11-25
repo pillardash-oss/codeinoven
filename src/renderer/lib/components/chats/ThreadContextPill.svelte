@@ -1,7 +1,6 @@
 <script lang="ts">
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
-  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
-  import { scopeState } from '$lib/stores/scope.svelte'
+  import ThreadContainerMark from '$lib/components/threads/ThreadContainerMark.svelte'
   import type { ThreadContextReference } from '$lib/thread-context'
 
   interface Props {
@@ -27,12 +26,6 @@
       ? `Open ${reference.title}   this thread was forked from it, so the agent can read it for context`
       : `Open ${reference.title}   attached to this message as context`
   )
-
-  /** The icon of the project the attached thread lives in. A project this window
-   *  never loaded falls back to a conversation mark rather than to a blank. */
-  const projectIconUrl = $derived(
-    scopeState.projects.find((project) => project.id === reference.projectId)?.iconUrl ?? null
-  )
 </script>
 
 <!-- One conversation attached to the message as context: the project it lives in,
@@ -50,11 +43,10 @@
     aria-label={`Open ${reference.title}`}
     onclick={onOpen}
   >
-    {#if projectIconUrl}
-      <img src={projectIconUrl} alt="" class="h-3 w-3 shrink-0 object-contain" draggable="false" />
-    {:else}
-      <CioMessage size={11} class="shrink-0 text-info" />
-    {/if}
+    <!-- The mark of the container the attached thread lives in, which is the
+         same mark the delivered message keeps: attaching and sending never
+         changes which project, chat or assistant the thread belongs to. -->
+    <ThreadContainerMark projectId={reference.projectId} size={11} class="text-info" />
     <span class="max-w-40 truncate">{reference.title}</span>
   </button>
   {#if onRemove}

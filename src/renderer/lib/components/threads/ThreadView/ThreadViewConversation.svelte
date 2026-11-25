@@ -62,7 +62,8 @@
   import ThreadMessageSpeaker from '../ThreadMessageSpeaker.svelte'
   import DelegatedAttentionStack from '../DelegatedAttentionStack.svelte'
   import CioReplyMark from '$lib/components/icons/cio/CioReplyMark.svelte'
-  import { isGroupThread } from '$shared/types'
+  import ThreadContainerMark from '../ThreadContainerMark.svelte'
+  import { ASSISTANT_SPACE_ID, isGroupThread } from '$shared/types'
   import { openThreadById } from '$lib/threads/open-thread-by-id'
   import {
     conversationAnswerText,
@@ -787,19 +788,31 @@
                         {:else}
                           <!-- A whole conversation attached as context: the chip
                                names it and opens it in its own thread page, which
-                               is where the reader checks what the turn was given. -->
+                               is where the reader checks what the turn was given.
+                               It wears its container's mark, the same one the
+                               composer drew for it before the send. -->
+                          {@const attachedThreadId = reference.threadId ?? reference.id}
+                          {@const attachedProjectId =
+                            reference.projectId ?? board.handleAgentEvent.thread.projectId}
+                          {@const attachedAssistantId =
+                            attachedProjectId === ASSISTANT_SPACE_ID
+                              ? (board.props.assistantSpaceThreads?.find(
+                                  (thread) => thread.id === attachedThreadId
+                                )?.assistantId ?? null)
+                              : null}
                           <button
                             type="button"
                             class="inline-flex max-w-full cursor-pointer items-center gap-1.5 border border-info/30 bg-info/10 px-2 py-1 text-left text-[0.75rem] transition-colors hover:bg-info/20"
                             title={`Open ${reference.label}`}
                             aria-label={`Open ${reference.label}`}
-                            onclick={() =>
-                              void openThreadById(
-                                reference.projectId ?? board.handleAgentEvent.thread.projectId,
-                                reference.threadId ?? reference.id
-                              )}
+                            onclick={() => void openThreadById(attachedProjectId, attachedThreadId)}
                           >
-                            <CioMessage size={11} class="shrink-0 text-info" />
+                            <ThreadContainerMark
+                              projectId={attachedProjectId}
+                              assistantId={attachedAssistantId}
+                              size={11}
+                              class="text-info"
+                            />
                             <span class="max-w-56 truncate font-medium text-foreground">
                               {reference.label}
                             </span>
