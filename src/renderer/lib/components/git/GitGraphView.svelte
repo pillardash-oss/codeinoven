@@ -265,7 +265,10 @@
               rewritten
             </span>
           {/if}
-          {#each row.commit.refs as ref (ref.head ? `head:${ref.name}` : `${ref.kind}:${ref.name}`)}
+          <!-- The index is part of the key so two decorations that normalize to
+               the same name can never collide: a repeated key throws during the
+               flush and takes the whole panel with it. -->
+          {#each row.commit.refs as ref, refIndex (`${String(refIndex)}:${ref.kind}:${ref.name}`)}
             <span
               class={[
                 'shrink-0 px-1 py-px text-[0.5rem] font-medium',

@@ -76,6 +76,13 @@ describe('assignGraphLanes', () => {
     expect(mergeEdges[1]?.path).toContain('Q')
   })
 
+  it('places one row per commit when the list repeats a hash', () => {
+    // A keyed list cannot hold the same commit twice, so the walk drops the
+    // repeat instead of handing the view a key that would freeze it.
+    const rows = assignGraphLanes([commit('a', ['b']), commit('b', []), commit('a', ['b'])])
+    expect(rows.map((row) => row.commit.hash)).toEqual(['a', 'b'])
+  })
+
   it('never reuses a lane for two commits that are both still open', () => {
     const rows = assignGraphLanes([
       commit('a', ['b', 'c']),

@@ -47,6 +47,13 @@ describe('mergeHistoryPage', () => {
     expect(merged.hasMore).toBe(false)
   })
 
+  it('drops a hash the page itself repeats', () => {
+    // One page is one `git log` call, so this should not happen, but a keyed
+    // list dies on it and the dedupe costs nothing.
+    const merged = mergeHistoryPage([], [commit('a'), commit('b'), commit('a')], PAGE_SIZE)
+    expect(merged.commits.map((entry) => entry.hash)).toEqual(['a', 'b'])
+  })
+
   it('reports the end of history on a short page', () => {
     const merged = mergeHistoryPage([commit('a')], [commit('b')], PAGE_SIZE)
     expect(merged.hasMore).toBe(false)

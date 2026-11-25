@@ -30,7 +30,14 @@ export function mergeHistoryPage(
   pageSize: number
 ): HistoryPageMerge {
   const known = new Set(loaded.map((commit) => commit.hash))
-  const added = page.filter((commit) => !known.has(commit.hash))
+  const added: GitCommitInfo[] = []
+  for (const commit of page) {
+    // Adding as we walk also drops a hash the page itself repeats, which a keyed
+    // list cannot survive either.
+    if (known.has(commit.hash)) continue
+    known.add(commit.hash)
+    added.push(commit)
+  }
   return {
     commits: added.length > 0 ? [...loaded, ...added] : [...loaded],
     hasMore: page.length === pageSize && added.length > 0

@@ -112,8 +112,16 @@ export function assignGraphLanes(commits: readonly GitCommitInfo[]): GitGraphRow
   // Lane index -> the commit hash that lane is currently waiting for.
   const active: Array<string | null> = []
   const rows: GitGraphRow[] = []
+  // A commit is one row, whatever the list says. The list is keyed by hash, and
+  // a repeated key throws while the keyed each renders, which aborts the flush
+  // and freezes the whole panel until it is remounted. Paging already merges
+  // without duplicates; this is the last line of defence, so a duplicate can
+  // never cost the reader an entire panel.
+  const placed = new Set<string>()
 
   for (const commit of commits) {
+    if (placed.has(commit.hash)) continue
+    placed.add(commit.hash)
     const mergingLanes: number[] = []
     let lane = -1
     for (let index = 0; index < active.length; index += 1) {
