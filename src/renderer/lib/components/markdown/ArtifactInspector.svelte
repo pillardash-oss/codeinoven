@@ -714,6 +714,46 @@ ${appInteractiveElementRules()}`
     flushSvgViewBox(svg)
   })
 
+  /**
+   * Place the pins a reopened artifact already carries, and keep them placed.
+   *
+   * A pin is resolved from a CSS path inside the shadow document, so it can only
+   * be placed after that document has been built. The document is built in an
+   * effect, after the render pass that already asked for the pins, so a surface
+   * that only measured when the store changed would answer with the empty stage
+   * it saw on the way in and never ask again: every comment a reopened artifact
+   * carried would be missing until some unrelated scroll or resize happened to
+   * re-measure it. The build is what invalidates the measurement, which is why
+   * this effect re-places them on the very frame the artifact becomes readable.
+   *
+   * The artifact is also a living document: a picture decodes, a font lands, a
+   * disclosure inside it opens, and each of those moves the element a pin points
+   * at without the app being told. Watching the stage and the artifact's own root
+   * children is what keeps a pin on its element through those moves instead of
+   * leaving it where the element used to be. Only positions are re-measured, and
+   * the pins are app DOM placed outside the artifact, so observing its box can
+   * never feed back into it.
+   */
+  $effect(() => {
+    const stage = stageEl
+    const mounted = mountToken
+    // The artifact's home is part of its box: the conversation draws it in the
+    // message column and the viewer fills the window, so moving between the two
+    // moves every element the pins are placed from.
+    const filling = fill
+    if (!stage || mounted === 0) return
+    void filling
+    // Deferred a tick rather than bumped here: reading the token to add one to it
+    // inside this effect would make the effect depend on its own write, which
+    // never settles.
+    void tick().then(() => (measureToken += 1))
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => (measureToken += 1))
+    observer.observe(stage)
+    for (const child of Array.from(stage.children)) observer.observe(child)
+    return () => observer.disconnect()
+  })
+
   // A zoom or a pan moves every element the pins, the hover box and the open
   // editor are placed from, so the surface re-measures once the view it draws has
   // actually moved. Measuring from inside a derived would read the rectangles the
