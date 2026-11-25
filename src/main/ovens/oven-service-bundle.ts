@@ -30,9 +30,6 @@ export function serviceBundleRevision(source: string): string {
  *   no cause, and it is what an older bundle printed whenever it could not
  *   answer at all.
  * - A protocol mismatch means the bundle predates the contract this app sends.
- * - A CommonJS global missing in ES module scope means the bundle cannot even
- *   load: a build that pulled Electron into it (through `git-push-jobs`) died
- *   on `__dirname` before answering anything, and only a replacement heals it.
  *
  * The app owns that file on the Oven, so any of these justifies replacing it.
  * A bundle that answers with its own request failure ("could not handle this
@@ -42,9 +39,34 @@ export function serviceBundleRevision(source: string): string {
 const STALE_SERVICE_ANSWERS: readonly RegExp[] = [
   /\bspawn EINVAL\b/u,
   /The Oven service is unavailable\. Check its Node runtime and install the service again\./u,
-  /Oven protocol version mismatch/u,
-  /\b(?:__dirname|__filename|require) is not defined in ES module scope\b/u
+  /Oven protocol version mismatch/u
 ]
+
+/**
+ * How Node fails when it cannot even load a module, as opposed to a module that
+ * loaded and refused a request. A service file that dies this way never answers
+ * anything, so the only cure is replacing it, and the app owns that file. The
+ * list is deliberately broad: waiting for each new way a bad bundle can crash
+ * to be named first is what left an Oven broken for every request.
+ */
+const SERVICE_LOAD_CRASHES: readonly RegExp[] = [
+  /\bis not defined in ES module scope\b/u,
+  /\bSyntaxError\b/u,
+  /\bERR_(?:MODULE_NOT_FOUND|REQUIRE_ESM|UNKNOWN_FILE_EXTENSION|INVALID_PACKAGE_CONFIG|IMPORT_ATTRIBUTE_MISSING)\b/u,
+  /\bCannot find (?:package|module)\b/u,
+  /\bdoes not provide an export named\b/u
+]
+
+/**
+ * True when the service process crashed while loading.
+ *
+ * Only meaningful for a thrown failure (the remote command exited non-zero): a
+ * service that loaded answers `{ ok: false }` instead, and its own errors may
+ * legitimately mention a SyntaxError in the user's files.
+ */
+export function isServiceLoadCrash(message: string): boolean {
+  return SERVICE_LOAD_CRASHES.some((pattern) => pattern.test(message))
+}
 
 /** True when a failure proves the Oven runs a bundle this app did not install. */
 export function isStaleServiceFault(message: string): boolean {

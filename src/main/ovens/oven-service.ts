@@ -21,6 +21,7 @@ import { mirrorLocalGitIdentity, OVEN_GIT_NETWORK_CHANNELS } from './oven-local-
 import { syncLocalGitHostTrust } from './oven-local-git-trust'
 import {
   failedAnswerError,
+  isServiceLoadCrash,
   isStaleServiceFault,
   serviceBundleRevision
 } from './oven-service-bundle'
@@ -782,7 +783,9 @@ export class OvenService {
   /** A stopped or outdated service, from either a thrown error or a JSON answer. */
   private serviceFaultOf(result: Attempt<string>): Error | null {
     const message = result.ok ? failedAnswerError(result.value) : messageOf(result.error)
-    if (!message || (!isStaleServiceFault(message) && !serviceNotRunning(message))) return null
+    if (!message) return null
+    const loadCrash = !result.ok && isServiceLoadCrash(message)
+    if (!loadCrash && !isStaleServiceFault(message) && !serviceNotRunning(message)) return null
     return result.ok ? new Error(message) : toError(result.error)
   }
 
