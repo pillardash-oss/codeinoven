@@ -202,7 +202,11 @@ export async function applyComposerRelocation(input: ComposerRelocationInput): P
   const { projectId, sourceThreadId, targetThreadId } = input
   // Read before writing: an unknown destination draft must never be overwritten.
   const targetBefore = await targetDraftEntry(projectId, targetThreadId)
-  const carried = carryInto(targetBefore, input)
+  const carried = carryInto(
+    targetBefore,
+    input,
+    responseReferencesState.forThread(projectId, targetThreadId)
+  )
   const targetAfter = carried.entry
 
   try {
@@ -244,17 +248,28 @@ export async function applyComposerRelocation(input: ComposerRelocationInput): P
  * its one chip for its `file://` key, and a reference id it already holds is the
  * same reference, so the carried content updates that entry where it sits rather
  * than arriving under a repeated key.
+ *
+ * `liveReferences` is the destination's list as its own composer shows it right
+ * now. It is not redundant with the draft: the store is what the chips are drawn
+ * from, and a draft read back through the recovery parser is only as complete as
+ * that parser is. Folding the live list in first means a carry can only ever add
+ * to what the user sees, never write a draft that omits an annotation the
+ * destination composer is displaying.
  */
 function carryInto(
   entry: ComposerDraftEntry | null,
-  input: ComposerRelocationInput
+  input: ComposerRelocationInput,
+  liveReferences: readonly ResponseReferenceAnchor[] = []
 ): { entry: ComposerDraftEntry } {
   const carried: ComposerDraftEntry = {
     text: entry?.text ?? '',
     attachments: entry?.attachments ?? [],
     projectReferences: entry?.projectReferences ?? [],
     taskReferences: entry?.taskReferences ?? [],
-    promptReferences: entry?.promptReferences ?? [],
+    promptReferences: liveReferences.reduce<ResponseReferenceAnchor[]>(
+      mergeReferenceById,
+      entry?.promptReferences ?? []
+    ),
     startAfterThreads: entry?.startAfterThreads ?? [],
     threadReferences: entry?.threadReferences ?? []
   }

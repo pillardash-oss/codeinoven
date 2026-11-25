@@ -624,6 +624,44 @@ describe('RendererRecoveryStore', () => {
       const reloaded = new RendererRecoveryStore(storage)
       expect(reloaded.draftPromptReferences('project-1', 'thread-1')).toHaveLength(1)
     })
+
+    /**
+     * Every kind of composer annotation survives the round trip through a stored
+     * draft, not only a quoted selection.
+     *
+     * Regression: the `page` kind was missing from the validator's list, so an
+     * element picked on an ordinary page was silently dropped whenever a draft
+     * was parsed   a refresh lost it, and a to-another-chat carry read the
+     * destination's draft as empty and wrote itself in place of the page comments
+     * that chat already held.
+     */
+    it('keeps every kind of composer annotation through a reload', () => {
+      const kinds = [
+        'selection',
+        'design',
+        'page',
+        'file',
+        'video',
+        'image',
+        'svg',
+        'html'
+      ] as const
+      const references = kinds.map((kind) => ({
+        ...annotation,
+        id: `${kind}-1`,
+        label: `${kind} 1`,
+        kind
+      }))
+      const storage = new MemoryStorage()
+      const store = new RendererRecoveryStore(storage)
+      store.setPromptReferences('project-1', 'thread-1', references)
+      store.flushPersist()
+
+      const reloaded = new RendererRecoveryStore(storage)
+      expect(
+        reloaded.draftPromptReferences('project-1', 'thread-1').map((entry) => entry.kind)
+      ).toEqual([...kinds])
+    })
   })
 
   /**
