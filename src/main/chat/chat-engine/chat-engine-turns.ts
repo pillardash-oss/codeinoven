@@ -1021,6 +1021,9 @@ export class ChatEngineTurns {
             part
           )
           if (precisePaths.length > 0) {
+            // A real file change is the only proof the turn is producing work,
+            // so it restarts the work-stall clock (which pure reading never does).
+            this.host.units['work-stall'].noteFileProgress(session.sessionId)
             session.changedPaths ??= new Set()
             session.preciseChangedPaths ??= new Map()
             const claimedAt = Date.now()

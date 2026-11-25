@@ -65,7 +65,10 @@ import type {
   EngineeringSpec,
   EngineeringSpecContent
 } from '../../src/lib/types'
-import { DEFAULT_MAX_CONFLICT_FILE_BYTES } from '../../src/lib/types'
+import {
+  DEFAULT_MAX_CONFLICT_FILE_BYTES,
+  DEFAULT_STEER_TO_START_WORK_MINUTES
+} from '../../src/lib/types'
 import {
   DEFAULT_BACKGROUND_WAKE_LEAD_MS,
   DEFAULT_BROWSER_HIBERNATION_MINUTES,
@@ -138,6 +141,7 @@ const defaultConfig: AppConfig = {
   imageDescriptorAskAgain: false,
   autoRetryAfterReset: false,
   resumeWorkOnRestart: true,
+  steerToStartWorkMinutes: DEFAULT_STEER_TO_START_WORK_MINUTES,
   defaultMergeMethod: 'squash',
   defaultPullStrategy: 'ask',
   maxDiffLines: 100,
@@ -210,6 +214,7 @@ describe('validateAppConfigPatch', () => {
         browserAllowSiteKeymapOverride: false,
         autoRetryAfterReset: true,
         resumeWorkOnRestart: false,
+        steerToStartWorkMinutes: 25,
         browserSearchEngine: 'google',
         browserCustomSearchEngines: [
           { id: 'kagi', name: 'Kagi', searchUrlTemplate: 'https://kagi.com/search?q=%s' }
@@ -254,6 +259,7 @@ describe('validateAppConfigPatch', () => {
       browserAllowSiteKeymapOverride: false,
       autoRetryAfterReset: true,
       resumeWorkOnRestart: false,
+      steerToStartWorkMinutes: 25,
       browserSearchEngine: 'google',
       browserCustomSearchEngines: [
         { id: 'kagi', name: 'Kagi', searchUrlTemplate: 'https://kagi.com/search?q=%s' }
@@ -331,6 +337,10 @@ describe('validateAppConfigPatch', () => {
       ]
     },
     { resumeWorkOnRestart: 1 },
+    { steerToStartWorkMinutes: '10' },
+    { steerToStartWorkMinutes: 0 },
+    { steerToStartWorkMinutes: 121 },
+    { steerToStartWorkMinutes: 1.5 },
     { modelProfiles: 'deep-review' },
     { modelProfiles: [{}] },
     {
@@ -504,9 +514,9 @@ describe('config IPC', () => {
     registerIpcHandlers(storage, database)
 
     const updateHandler = handlers.get('config:update')
-    await expect(
-      updateHandler?.(trustedEvent(), { lastFolderDialogPath: '/tmp' })
-    ).rejects.toThrow('Unsupported config field')
+    await expect(updateHandler?.(trustedEvent(), { lastFolderDialogPath: '/tmp' })).rejects.toThrow(
+      'Unsupported config field'
+    )
     expect(saveConfig).not.toHaveBeenCalled()
   })
 

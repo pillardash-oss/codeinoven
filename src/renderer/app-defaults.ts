@@ -12,6 +12,7 @@ import {
   DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
   DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
   DEFAULT_MAX_CONFLICT_FILE_BYTES,
+  DEFAULT_STEER_TO_START_WORK_MINUTES,
   DEFAULT_IN_APP_NOTIFICATION_SOUND,
   DEFAULT_CONTRAST_LEVEL,
   type AppConfig
@@ -49,6 +50,7 @@ export const defaultConfig: AppConfig = {
   imageDescriptorAskAgain: false,
   autoRetryAfterReset: true,
   resumeWorkOnRestart: true,
+  steerToStartWorkMinutes: DEFAULT_STEER_TO_START_WORK_MINUTES,
   defaultMergeMethod: 'squash',
   defaultPullStrategy: 'ask',
   maxDiffLines: 100,

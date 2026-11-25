@@ -516,6 +516,7 @@ export class ChatEngineTurnsSessions {
     this.host.state.sessionNativeHistory.delete(sessionId)
     this.host.state.parkedSessionReplay.delete(sessionId)
     this.clearSessionWatchdog(sessionId)
+    this.host.units['work-stall'].endTurn(sessionId)
     this.host.units['questions'].clearPendingQuestionsForSession(sessionId)
     this.host.units['permissions'].clearPendingPermissionsForSession(sessionId)
     this.host.units['media-visual'].clearPendingImageDescriptorDecisionsForSession(sessionId)
@@ -868,6 +869,10 @@ export class ChatEngineTurnsSessions {
     // process. Nothing here kills a live turn: the watchdog's own grace window
     // and its silence ceiling decide, exactly as they do for a reported one.
     this.host.units['lifecycle'].startSessionWatchdog(sessionId)
+    // The turn's own work-stall clock starts here too, and survives every
+    // streamed event until a real file change restarts it. An agent that only
+    // reads emits plenty of events, so harness traffic is not the clock.
+    this.host.units['work-stall'].noteTurnStarted(sessionId)
     if (changed) {
       this.host.sessionStatuses.set(sessionId, { state: 'working' })
       this.host.broadcast({
@@ -1090,6 +1095,8 @@ export class ChatEngineTurnsSessions {
   handleSessionIdleSignal(sessionId: string): void {
     if (this.host.handledIdleSessions.has(sessionId)) return
     this.host.handledIdleSessions.add(sessionId)
+    // The turn is over: its work-stall clock and one-nudge budget go with it.
+    this.host.units['work-stall'].endTurn(sessionId)
     // Some idle paths record the status without broadcasting it, so the turn's
     // end is announced here as well as on the status stream.
     this.host.units['turns'].announceTurnActivityChange()

@@ -704,6 +704,22 @@ export class ChatEngineState {
   sessionWatchdogs = new Map<string, ReturnType<typeof setTimeout>>()
 
   /**
+   * Per-session timers for the work-stall steer, keyed by sessionId.
+   *
+   * A turn's clock starts when the turn does and restarts on every real file
+   * change; when it fires without one, the agent is told to stop reading and
+   * start working. The timer is cleared when the turn ends.
+   */
+  workStallTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+  /**
+   * Sessions whose active turn already received the work-stall steer, mapped to
+   * the turn id that received it. One nudge per turn: an agent that ignores it
+   * and keeps reading is never nudged again until a genuinely new turn starts.
+   */
+  workStallNudgedTurns = new Map<string, string>()
+
+  /**
    * Which harness still holds resources for which project, and how long each has
    * been quiet.
    *

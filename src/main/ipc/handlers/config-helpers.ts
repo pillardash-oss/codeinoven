@@ -60,6 +60,8 @@ import {
   MIN_MAX_BACKGROUND_WAKE_HOLD_MS,
   MIN_CIO_CLEANUP_RETENTION_DAYS,
   MAX_CIO_CLEANUP_RETENTION_DAYS,
+  MAX_STEER_TO_START_WORK_MINUTES,
+  MIN_STEER_TO_START_WORK_MINUTES,
   isCioCleanupCategoryId,
   normalizeCioCleanupExcludedCategories
 } from '../../../lib/types'
@@ -193,6 +195,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'imageDescriptorAskAgain',
   'autoRetryAfterReset',
   'resumeWorkOnRestart',
+  'steerToStartWorkMinutes',
   'defaultMergeMethod',
   'defaultPullStrategy',
   'maxDiffLines',
@@ -1135,6 +1138,18 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('resumeWorkOnRestart must be a boolean')
     }
     patch.resumeWorkOnRestart = value.resumeWorkOnRestart
+  }
+
+  if ('steerToStartWorkMinutes' in value) {
+    if (
+      typeof value.steerToStartWorkMinutes !== 'number' ||
+      !Number.isInteger(value.steerToStartWorkMinutes) ||
+      value.steerToStartWorkMinutes < MIN_STEER_TO_START_WORK_MINUTES ||
+      value.steerToStartWorkMinutes > MAX_STEER_TO_START_WORK_MINUTES
+    ) {
+      throw new TypeError('Steer-to-start-work minutes must be a whole number between 1 and 120')
+    }
+    patch.steerToStartWorkMinutes = value.steerToStartWorkMinutes
   }
 
   if ('agentAccountVisibility' in value) {
