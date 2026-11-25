@@ -45,6 +45,7 @@ import {
   wslRunArgv
 } from '../oven-wsl'
 import { ovenRootOperation } from './oven-root-operations'
+import { killOvenProcess, listOvenProcesses } from './oven-process-inventory'
 import { ovenWorkspace } from './oven-workspace'
 import {
   OVEN_UTILITY_HOST_MODE,
@@ -1048,6 +1049,20 @@ async function dispatch(raw: unknown): Promise<unknown> {
   if (request.method === 'runs')
     return [...jobs.values()].map((job) => ({ ...job.run, lastActivityAt: job.touchedAt }))
   if (request.method === 'workspace') return ovenWorkspace(request.input)
+  // The Oven's task manager: this daemon's process tree, and the runs in it.
+  if (request.method === 'processes')
+    return {
+      processes: await listOvenProcesses(process.pid),
+      runs: [...jobs.values()]
+        .filter((job) => job.child && job.run.status === 'running')
+        .map((job) => ({ ...job.run, lastActivityAt: job.touchedAt, pid: job.child?.pid ?? null }))
+    }
+  if (request.method === 'kill-process') {
+    const input = record(request.input)
+    if (typeof input.pid !== 'number') throw new Error('Invalid process id.')
+    await killOvenProcess(process.pid, input.pid, input.force === true)
+    return null
+  }
   // Additive: a bundle that predates it answers "unknown method", which is how
   // the app already treats a stale Oven service.
   if (request.method === 'utility-host') return utilityHost()

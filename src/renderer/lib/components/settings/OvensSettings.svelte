@@ -61,6 +61,8 @@
   import type { MenuItem } from '../shared/ThreadDropdown.svelte'
   import ThreadDropdown from '../shared/ThreadDropdown.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
+  import { feature } from '$lib/feature-registry'
+  import { ovenTaskManagerSource } from '../workspace/task-manager-source'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
 
@@ -130,6 +132,8 @@
   let pendingSecretDisable = $state<Oven | null>(null)
   /** The Oven whose stored credentials are about to be forgotten. */
   let pendingSecretForget = $state<Oven | null>(null)
+  /** The remote Oven whose task manager is open. */
+  let taskManagerOven = $state<Oven | null>(null)
   const hasAppearance = $derived(
     Boolean(
       color !== baselineColor ||
@@ -253,6 +257,12 @@
       })
     items.push({ label: 'Edit Oven', icon: CioPencil, onClick: () => openEditor(oven) })
     if (oven.id !== LOCAL_OVEN_ID) {
+      // The local Oven is this machine, which the rail's task manager covers.
+      items.push({
+        label: 'Task manager',
+        icon: feature('task-manager').icon,
+        onClick: () => (taskManagerOven = oven)
+      })
       items.push({ label: 'separator:clock', divider: true })
       items.push({
         label: 'Match your time zone',
@@ -1569,6 +1579,19 @@
     </div>
   {/if}
 </div>
+
+<!-- Loaded only when opened, like the rail's own task manager. -->
+{#if taskManagerOven}
+  {@const oven = taskManagerOven}
+  {#await loadCachedPanelModule('module:lib/components/workspace/TaskManagerModal.svelte', () => import('$lib/components/workspace/TaskManagerModal.svelte')) then { default: TaskManagerModal }}
+    <TaskManagerModal
+      open
+      title={`${oven.name} task manager`}
+      source={ovenTaskManagerSource(oven.id)}
+      onClose={() => (taskManagerOven = null)}
+    />
+  {/await}
+{/if}
 
 <Modal open={editorOpen} title={editing ? 'Edit Oven' : 'New Oven'} onClose={closeEditor} size="lg">
   <form

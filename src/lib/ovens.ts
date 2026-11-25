@@ -212,6 +212,26 @@ export interface OvenRun {
   lastActivityAt?: number
 }
 
+/** One process an Oven's service is responsible for, as its task manager lists it. */
+export interface OvenProcess {
+  pid: number
+  parentPid: number
+  command: string
+  startedAt: number
+  /** Null where the platform samples none (Windows). */
+  cpuPercent: number | null
+  memoryBytes: number | null
+  /** Null where the platform will not say (anything but Linux). */
+  cwd: string | null
+}
+
+/** What an Oven answers to its task manager: the process tree and the runs on it. */
+export interface OvenProcessSnapshot {
+  processes: OvenProcess[]
+  /** Runs still working, with the pid of the process each one started. */
+  runs: Array<OvenRun & { pid: number | null }>
+}
+
 export interface OvenRunEvent {
   sequence: number
   stream: 'stdout' | 'stderr' | 'exit'

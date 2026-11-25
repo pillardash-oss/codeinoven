@@ -1,3 +1,4 @@
+import { ovenRunIdOfService, ovenTaskManagerSnapshot } from './oven-task-manager'
 import { registerOvenRootIpc } from './oven-root-ipc'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { OvenRegistry } from './oven-registry'
@@ -293,6 +294,25 @@ export function registerOvenIpc(
    * Asked from that machine's own daemon, because its utility host listens on a
    * loopback this app cannot reach. An unavailable vault is a normal answer.
    */
+  ipcMain.handle('oven:taskManagerList', async (_event, raw: unknown) =>
+    ovenTaskManagerSnapshot(await service.processes(ovenId(raw)))
+  )
+  ipcMain.handle(
+    'oven:taskManagerKillProcess',
+    async (_event, raw: unknown, pid: unknown, force: unknown) => {
+      if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0)
+        throw new Error('Invalid process id.')
+      await service.killProcess(ovenId(raw), pid, force === true)
+    }
+  )
+  ipcMain.handle(
+    'oven:taskManagerStopService',
+    async (_event, raw: unknown, serviceId: unknown) => {
+      const runId = typeof serviceId === 'string' ? ovenRunIdOfService(serviceId) : null
+      if (!runId) throw new Error('Only an Oven run can be stopped from its task manager.')
+      await service.stop(ovenId(raw), runId)
+    }
+  )
   ipcMain.handle('oven:utilitySecrets', async (_event, raw: unknown) =>
     service.utilitySecrets(ovenId(raw))
   )

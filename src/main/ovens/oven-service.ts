@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import {
   OVEN_PROTOCOL_VERSION,
   type OvenProbe,
+  type OvenProcessSnapshot,
   type OvenRun,
   type OvenRunEvent,
   type StartOvenRunInput
@@ -319,6 +320,16 @@ export class OvenService {
     if (!(await this.refreshService(id, 'The Oven runs a different service revision.')))
       return probe
     return this.parseProbe(await this.request(id, input))
+  }
+
+  /** The Oven's task manager listing: the service's process tree and its live runs. */
+  async processes(id: string): Promise<OvenProcessSnapshot> {
+    return this.decode<OvenProcessSnapshot>(await this.request(id, { method: 'processes' }))
+  }
+
+  /** End one process the Oven's service runs. The Oven refuses any other pid. */
+  async killProcess(id: string, pid: number, force: boolean): Promise<void> {
+    this.decode(await this.request(id, { method: 'kill-process', input: { pid, force } }))
   }
 
   async runs(id: string): Promise<OvenRun[]> {
