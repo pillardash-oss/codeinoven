@@ -30,6 +30,9 @@ export function serviceBundleRevision(source: string): string {
  *   no cause, and it is what an older bundle printed whenever it could not
  *   answer at all.
  * - A protocol mismatch means the bundle predates the contract this app sends.
+ * - A CommonJS global missing in ES module scope means the bundle cannot even
+ *   load: a build that pulled Electron into it (through `git-push-jobs`) died
+ *   on `__dirname` before answering anything, and only a replacement heals it.
  *
  * The app owns that file on the Oven, so any of these justifies replacing it.
  * A bundle that answers with its own request failure ("could not handle this
@@ -39,7 +42,8 @@ export function serviceBundleRevision(source: string): string {
 const STALE_SERVICE_ANSWERS: readonly RegExp[] = [
   /\bspawn EINVAL\b/u,
   /The Oven service is unavailable\. Check its Node runtime and install the service again\./u,
-  /Oven protocol version mismatch/u
+  /Oven protocol version mismatch/u,
+  /\b(?:__dirname|__filename|require) is not defined in ES module scope\b/u
 ]
 
 /** True when a failure proves the Oven runs a bundle this app did not install. */
