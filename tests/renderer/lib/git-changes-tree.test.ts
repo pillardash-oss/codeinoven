@@ -9,7 +9,8 @@ import {
   matchChangeFiles,
   pathsForNode,
   sortTreeDirs,
-  splitChangePath
+  splitChangePath,
+  subtreeDirKeys
 } from '../../../src/renderer/lib/git-changes-tree'
 
 function change(path: string, status: GitFileChange['status'] = 'modified'): GitFileChange {
@@ -160,6 +161,26 @@ describe('ancestorDirPaths', () => {
 
   it('gives a root file no folders to open', () => {
     expect(ancestorDirPaths('package.json')).toEqual([])
+  })
+})
+
+describe('subtreeDirKeys', () => {
+  it('names the folder and every folder under it, in this section only', () => {
+    const tree = buildChangeTree([
+      change('apps/lib/a.ts'),
+      change('apps/lib/deep/b.ts'),
+      change('apps/test/c.ts')
+    ])
+    const apps = tree.dirs.get('apps')
+    const keys = subtreeDirKeys(apps as NonNullable<typeof apps>, 'Unstaged')
+
+    expect(keys.map((key) => key.split('\u0000')[1])).toEqual([
+      'apps',
+      'apps/lib',
+      'apps/lib/deep',
+      'apps/test'
+    ])
+    expect(keys.every((key) => key.startsWith('Unstaged\u0000'))).toBe(true)
   })
 })
 

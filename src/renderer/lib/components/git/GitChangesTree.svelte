@@ -1,5 +1,7 @@
 <script lang="ts">
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioChevronsDown from '@pdslng/cio-icon/CioChevronsDown.svelte'
+  import CioChevronsUp from '@pdslng/cio-icon/CioChevronsUp.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
   import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
@@ -15,6 +17,7 @@
     filesForNode,
     pathsForNode,
     splitChangePath,
+    subtreeDirKeys,
     sortTreeDirs,
     type GitChangeTreeNode
   } from '$lib/git-changes-tree'
@@ -87,6 +90,19 @@
 
   function toggleDir(key: string): void {
     expandedDirs = { ...expandedDirs, [key]: !(expandedDirs[key] ?? false) }
+  }
+
+  /** Open or fold a folder and everything under it, from that level down. */
+  function toggleSubtree(node: GitChangeTreeNode, sectionKey: string, open: boolean): void {
+    const next = { ...expandedDirs }
+    for (const key of subtreeDirKeys(node, sectionKey)) next[key] = open
+    expandedDirs = next
+  }
+
+  /** Whether anything at or under this folder is open, which decides whether the
+   *  control offers "expand all" or "fold all". */
+  function subtreeHasOpen(node: GitChangeTreeNode, sectionKey: string): boolean {
+    return subtreeDirKeys(node, sectionKey).some((key) => expandedDirs[key] === true)
   }
 
   function onToggleSelectDir(node: GitChangeTreeNode, additive: boolean): void {
@@ -407,19 +423,31 @@
       aria-label={`Actions for ${label}/`}
       title={`Actions for ${label}/`}
     >
-      <button
-        type="button"
+      <!--
+        A div with the button role, not a button element: the row contains the
+        selection Switch and the subtree control, and a button inside a button is
+        invalid markup that browsers resolve by dropping one of them.
+      -->
+      <div
+        role="button"
+        tabindex="0"
         class={[
           'flex h-7 w-full cursor-pointer items-center gap-1.5 pl-1 pr-2 text-left transition-colors',
           dirSelected ? 'bg-primary/10' : 'hover:bg-elevated/50'
         ]}
         aria-expanded={isOpen}
+        aria-label={`${label}/`}
         onclick={(event: MouseEvent) => {
           if (event.metaKey || event.ctrlKey) {
             event.preventDefault()
             onToggleSelectDir(node, true)
             return
           }
+          toggleDir(stateKey)
+        }}
+        onkeydown={(event: KeyboardEvent) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          event.preventDefault()
           toggleDir(stateKey)
         }}
       >
@@ -464,7 +492,32 @@
         <span class="shrink-0 text-[0.5625rem] tabular-nums text-dimmed">
           {filesForNode(node).length}
         </span>
-      </button>
+        {#if node.dirs.size > 0}
+          {@const anyOpen = subtreeHasOpen(node, sectionKey)}
+          <button
+            type="button"
+            class={[
+              'flex h-5 w-5 shrink-0 items-center justify-center transition-colors hover:bg-elevated hover:text-foreground',
+              anyOpen ? 'text-foreground' : 'text-dimmed'
+            ]}
+            title={anyOpen ? `Fold everything under ${label}` : `Expand everything under ${label}`}
+            aria-label={anyOpen
+              ? `Fold everything under ${label}`
+              : `Expand everything under ${label}`}
+            onclick={(event: MouseEvent) => {
+              event.stopPropagation()
+              event.preventDefault()
+              toggleSubtree(node, sectionKey, !anyOpen)
+            }}
+          >
+            {#if anyOpen}
+              <CioChevronsUp size={11} />
+            {:else}
+              <CioChevronsDown size={11} />
+            {/if}
+          </button>
+        {/if}
+      </div>
     </ContextMenu.Trigger>
     <ContextMenu.Portal>
       <ContextMenu.Content

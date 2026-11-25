@@ -224,7 +224,7 @@
       </div>
     {:else}
       <div class="overflow-hidden border border-border bg-surface">
-        <div class="flex items-center gap-1.5 bg-elevated/50 px-2.5 py-1">
+        <div class="flex items-center gap-1.5 bg-elevated/50 py-1 pl-1 pr-2">
           <span
             class="shrink-0"
             role="presentation"
@@ -249,7 +249,7 @@
           <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
             Changed files
           </span>
-          <span class="text-[0.5rem] tabular-nums text-dimmed" title={summaryTitle}>
+          <span class="ml-auto text-[0.5rem] tabular-nums text-dimmed" title={summaryTitle}>
             {commitDiffChanges.length}
           </span>
         </div>
@@ -336,11 +336,11 @@
               <div class="overflow-hidden border border-warning/25 bg-surface">
                 {#each conflictSections as section, si (section.title)}
                   {#if si > 0}<div class="border-t border-border"></div>{/if}
-                  <div class="flex items-center gap-1.5 bg-warning/10 px-2.5 py-1">
+                  <div class="flex items-center gap-1.5 bg-warning/10 py-1 pl-1 pr-2">
                     <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
                       {section.title}
                     </span>
-                    <span class="text-[0.5rem] tabular-nums text-dimmed">
+                    <span class="ml-auto text-[0.5rem] tabular-nums text-dimmed">
                       {section.files.length}
                     </span>
                   </div>
@@ -390,7 +390,7 @@
                   {#if si > 0}<div class="border-t border-border"></div>{/if}
                   {@const sectionAllSelected =
                     section.files.length > 0 && section.files.every((f) => selectedPaths[f.path])}
-                  <div class="flex items-center gap-1.5 bg-elevated/50 px-2.5 py-1">
+                  <div class="flex items-center gap-1.5 bg-elevated/50 py-1 pl-1 pr-2">
                     <span
                       class="shrink-0"
                       role="presentation"
@@ -415,7 +415,7 @@
                     <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
                       {section.title}
                     </span>
-                    <span class="text-[0.5rem] tabular-nums text-dimmed">
+                    <span class="ml-auto text-[0.5rem] tabular-nums text-dimmed">
                       {section.files.length}
                     </span>
                   </div>
@@ -470,7 +470,7 @@
                   {#if si > 0}<div class="border-t border-border"></div>{/if}
                   {@const sectionAllSelected =
                     section.files.length > 0 && section.files.every((f) => selectedPaths[f.path])}
-                  <div class="flex items-center gap-1.5 bg-elevated/50 px-2.5 py-1">
+                  <div class="flex items-center gap-1.5 bg-elevated/50 py-1 pl-1 pr-2">
                     <span
                       class="shrink-0"
                       role="presentation"
@@ -495,7 +495,7 @@
                     <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
                       {section.title}
                     </span>
-                    <span class="text-[0.5rem] tabular-nums text-dimmed">
+                    <span class="ml-auto text-[0.5rem] tabular-nums text-dimmed">
                       {section.files.length}
                     </span>
                   </div>

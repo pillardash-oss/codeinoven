@@ -145,6 +145,19 @@ export function ancestorDirPaths(path: string): string[] {
 export const CHANGE_SECTION_TITLES = ['Conflicts', 'Staged', 'Unstaged', 'Untracked'] as const
 
 /**
+ * The open-state keys of a folder and everything under it.
+ *
+ * A folder's own expand-all control acts on this whole subtree, which is why it
+ * is a list of keys and not a flag: the tree stores open state per row, and the
+ * rows further down are not reachable from the parent without walking it.
+ */
+export function subtreeDirKeys(node: GitChangeTreeNode, sectionKey: string): string[] {
+  const keys = [dirExpansionKey(sectionKey, node.path)]
+  for (const child of node.dirs.values()) keys.push(...subtreeDirKeys(child, sectionKey))
+  return keys
+}
+
+/**
  * The key a folder's open state is stored under.
  *
  * The same directory appears in Staged, Unstaged and Untracked whenever the same
