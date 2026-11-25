@@ -205,6 +205,11 @@ export interface OvenRun {
    * and a run from before this field existed has no owner to compare.
    */
   clientId?: string
+  /**
+   * When the Oven last saw output from this run, or a client read or wrote it.
+   * Absent from a service that predates the field.
+   */
+  lastActivityAt?: number
 }
 
 export interface OvenRunEvent {

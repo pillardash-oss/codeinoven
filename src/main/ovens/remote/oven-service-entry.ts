@@ -329,6 +329,8 @@ interface Job {
   tail: Promise<void>
   queuedBytes: number
   offsets: Map<number, number>
+  /** Last output, read or input on this run, in this daemon's lifetime. */
+  touchedAt: number
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -796,6 +798,7 @@ async function probe(refresh = false): Promise<OvenProbe> {
 }
 function journal(job: Job, stream: OvenRunEvent['stream'], text: string): void {
   const event: OvenRunEvent = { sequence: ++job.sequence, stream, text }
+  job.touchedAt = Date.now()
   const line = `${JSON.stringify(event)}\n`
   const size = Buffer.byteLength(line)
   if (job.bytes + size > MAX_JOURNAL || job.queuedBytes + size > MAX_REQUEST) {
@@ -883,7 +886,8 @@ async function start(raw: unknown): Promise<OvenRun> {
     bytes: 0,
     queuedBytes: 0,
     tail: Promise.resolve(),
-    offsets: new Map([[0, 0]])
+    offsets: new Map([[0, 0]]),
+    touchedAt: run.createdAt
   }
   jobs.set(runId, job)
   try {
@@ -1039,7 +1043,10 @@ async function dispatch(raw: unknown): Promise<unknown> {
   const request = record(raw)
   if (request.protocolVersion !== PROTOCOL) throw new Error('Oven protocol version mismatch.')
   if (request.method === 'probe') return probe(request.refresh === true)
-  if (request.method === 'runs') return [...jobs.values()].map((job) => job.run)
+  // `lastActivityAt` lets a client tell a run someone still works with from one
+  // whose owner vanished, which would otherwise block every service update.
+  if (request.method === 'runs')
+    return [...jobs.values()].map((job) => ({ ...job.run, lastActivityAt: job.touchedAt }))
   if (request.method === 'workspace') return ovenWorkspace(request.input)
   // Additive: a bundle that predates it answers "unknown method", which is how
   // the app already treats a stale Oven service.
@@ -1074,6 +1081,7 @@ async function dispatch(raw: unknown): Promise<unknown> {
     throw new Error(`Unknown Oven request method: ${method}. Install the current Oven service.`)
   const job = jobs.get(id(request.runId))
   if (!job) throw new Error('The remote run does not exist.')
+  if (request.method === 'events' || request.method === 'write') job.touchedAt = Date.now()
   if (request.method === 'events') return events(job, request.after)
   if (request.method === 'stop') {
     if (job.child) {

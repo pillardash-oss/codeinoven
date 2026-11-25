@@ -151,6 +151,19 @@ function ovenClientId(dataRoot: string): string {
   return `${host}/${digest}`
 }
 
+/**
+ * How long a run may sit untouched before its owner counts as gone. A client
+ * that is still there reads its run's events, which resets the clock; three Pi
+ * runs left by an installation that no longer exists blocked every update of an
+ * Oven for days because "another client's run" was never stopped.
+ */
+const ORPHANED_RUN_AFTER_MS = 6 * 60 * 60 * 1000
+
+/** True when nobody has touched this run for long enough that its owner is gone. */
+function orphanedRun(run: OvenRun, now: number): boolean {
+  return now - (run.lastActivityAt ?? run.createdAt) > ORPHANED_RUN_AFTER_MS
+}
+
 /** How many runs a probe answer says the Oven is working on. */
 function activeRunsIn(answer: string): number {
   try {
@@ -472,10 +485,16 @@ export class OvenService {
     const started = this.startedRuns.get(id) ?? new Set<string>()
     for (const run of runs.value) if (run.status !== 'running') started.delete(run.id)
     const running = runs.value.filter((run) => run.status === 'running')
-    // Another client's run is never stopped. The Oven records the owner beside
-    // every run it starts, and its owner is watching it; the update waits.
+    // Another client's live run is never stopped; the update waits for it. A run
+    // nobody has touched for hours has no owner left to watch it, so it
+    // is stopped like this client's own leftovers instead of blocking forever.
+    const now = Date.now()
     const foreign = running.filter(
-      (run) => !started.has(run.id) && run.clientId !== undefined && run.clientId !== this.clientId
+      (run) =>
+        !started.has(run.id) &&
+        run.clientId !== undefined &&
+        run.clientId !== this.clientId &&
+        !orphanedRun(run, now)
     )
     if (foreign.length > 0) {
       const owners = [...new Set(foreign.map((run) => run.clientId))].join(', ')
