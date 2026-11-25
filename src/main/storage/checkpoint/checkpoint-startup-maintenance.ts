@@ -30,7 +30,13 @@ const CHECKPOINT_INDEXES = [
      ON turn_checkpoints(json_extract(data, '$.createdAt'))
      WHERE json_extract(data, '$.status') = 'active'`,
   `CREATE INDEX IF NOT EXISTS idx_turn_checkpoints_project_completed
-     ON turn_checkpoints(project_id, json_extract(data, '$.completedAt'))`
+     ON turn_checkpoints(project_id, json_extract(data, '$.completedAt'))`,
+  // The age bound every maintenance pass now reads its candidates through. It is
+  // one small integer column, so building it is a walk of the table's keys and
+  // not of its JSON: it is what lets the provenance pass and the trim ask "recent
+  // rows" without parsing a checkpoint per row.
+  `CREATE INDEX IF NOT EXISTS idx_turn_checkpoints_created
+     ON turn_checkpoints(created_at, turn_id)`
 ] as const
 
 /**

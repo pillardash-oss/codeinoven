@@ -149,8 +149,8 @@
     const pin = annotationIndicatorElement(indicatorSurface, pick.id)
     if (pin) return anchorBelow(pin.getBoundingClientRect())
     const root = shadowRoot
-    const element = root ? resolvePick(root, pick) : null
-    if (element) return anchorBelow(element.getBoundingClientRect())
+    const anchored = root ? measuredPickBox(root, pick) : null
+    if (anchored) return anchorBelow(anchored)
     const box = frame?.getBoundingClientRect() ?? host?.getBoundingClientRect()
     return box ? { x: box.left + box.width / 2, y: box.top + 48 } : null
   })
@@ -178,9 +178,8 @@
     const box = frame?.getBoundingClientRect()
     if (!root || !box) return []
     return picks.flatMap((pick, index) => {
-      const element = resolvePick(root, pick)
-      if (!element) return []
-      const rect = element.getBoundingClientRect()
+      const rect = measuredPickBox(root, pick)
+      if (!rect) return []
       return [
         {
           id: pick.id,
@@ -257,6 +256,43 @@
     const classes = (element.getAttribute('class') ?? '').split(/\s+/).filter(Boolean)
     if (classes.length > 0) name += `.${classes.slice(0, 2).join('.')}`
     return name
+  }
+
+  /**
+   * Boxes measured for picks, so typing a comment never re-measures the artifact.
+   *
+   * A pick's comment is rewritten on every keystroke of the comment box, and the
+   * parent hands this card a new `picks` array each time. Measuring inside the
+   * derivations then meant one `querySelector` plus one `getBoundingClientRect`
+   * per pick per keystroke, each of them a forced layout of an artifact that can
+   * be a whole page, and the comment text cannot move a pin.
+   *
+   * A box depends on two things: the path the pick resolves and the layout it was
+   * measured in, which `measureToken` stands for (mount, resize, scroll, a new
+   * artifact). So the memo is keyed by exactly those, and a keystroke reuses the
+   * box it already has.
+   *
+   * Plain, not a SvelteMap: nothing on screen reads this cache, so a signal behind
+   * every measurement would invalidate the very derivations it serves.
+   */
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  const measuredPickBoxes = new Map<string, { selector: string; token: number; box: DOMRect }>()
+
+  /** The box for one pick, measured only when its path or the layout changed. */
+  function measuredPickBox(root: ShadowRoot, pick: ResponseReferenceAnchor): DOMRect | null {
+    const token = measureToken
+    const selector = pick.selector ?? ''
+    const cached = measuredPickBoxes.get(pick.id)
+    if (cached !== undefined && cached.selector === selector && cached.token === token)
+      return cached.box
+    const element = resolvePick(root, pick)
+    if (!element) {
+      measuredPickBoxes.delete(pick.id)
+      return null
+    }
+    const box = element.getBoundingClientRect()
+    measuredPickBoxes.set(pick.id, { selector, token, box })
+    return box
   }
 
   /** A CSS path from the artifact's root down to the picked element. */

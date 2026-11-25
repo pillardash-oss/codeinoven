@@ -36,7 +36,7 @@ import {
   type QueuedMessageEntry,
   type StartAfterThreadReference
 } from '$lib/stores/renderer-recovery.svelte'
-import { SweepCoalescer } from '$lib/stores/queued-sweep-coalescer'
+import { CoalescedRun } from '$shared/coalesced-run'
 import { messageId as createMessageId } from '$shared/id'
 import type { AgentEvent, Thread } from '$shared/types'
 
@@ -49,7 +49,7 @@ function threadKey(projectId: string, threadId: string): string {
  *
  * Every sweep re-asks the waiting threads' gates, so a burst of idle transitions
  * and row updates must not become a burst of round-trips. See
- * {@link SweepCoalescer} for the leading-plus-trailing rule.
+ * {@link CoalescedRun} for the leading-plus-trailing rule.
  */
 const SWEEP_COALESCE_MS = 250
 
@@ -59,7 +59,7 @@ class QueuedMessageDispatcher {
   /** Threads whose ThreadView is currently mounted — they own their own dispatch. */
   #mounted = new Set<string>()
   /** Collapses a burst of idle notices into few sweeps. */
-  readonly #sweeps = new SweepCoalescer({
+  readonly #sweeps = new CoalescedRun({
     intervalMs: SWEEP_COALESCE_MS,
     run: () => this.#sweep()
   })

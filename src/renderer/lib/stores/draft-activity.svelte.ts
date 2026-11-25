@@ -39,7 +39,23 @@ interface PendingDraftCommit {
   projectId: string
   threadId: string
   drafting: boolean
-  draftJson: string | null
+  draftJson: DraftJsonSource
+}
+
+/**
+ * The draft content a commit carries, or the function that builds it.
+ *
+ * A thunk exists for the composer's own keystrokes: serializing the draft entry
+ * (text plus every attached reference's full element descriptor) on the keystroke
+ * was one of the per-key costs of typing, and the commit lands one second later
+ * anyway. Resolving it when the timer fires also means the commit carries the
+ * newest state instead of the state at the keystroke that armed it.
+ */
+type DraftJsonSource = string | null | (() => string | null)
+
+/** The value a commit sends, resolving a thunk at the moment it runs. */
+function resolveDraftJson(source: DraftJsonSource): string | null {
+  return typeof source === 'function' ? source() : source
 }
 
 const pendingDraftCommits = new SvelteMap<string, PendingDraftCommit>()
@@ -122,7 +138,7 @@ export function scheduleDraftCommit(
   projectId: string,
   threadId: string,
   drafting: boolean,
-  draftJson: string | null,
+  draftJson: DraftJsonSource,
   delayMs = DRAFT_COMMIT_DEBOUNCE_MS
 ): void {
   if (!projectId || !threadId) return
@@ -131,7 +147,13 @@ export function scheduleDraftCommit(
   if (pending) clearTimeout(pending.timer)
   const timer = setTimeout(() => {
     pendingDraftCommits.delete(key)
-    void invoke('thread:setDraftState', projectId, threadId, drafting, draftJson).catch(() => {})
+    void invoke(
+      'thread:setDraftState',
+      projectId,
+      threadId,
+      drafting,
+      resolveDraftJson(draftJson)
+    ).catch(() => {})
   }, delayMs)
   pendingDraftCommits.set(key, { timer, projectId, threadId, drafting, draftJson })
 }
@@ -145,7 +167,7 @@ export function commitDraftStateNow(
   projectId: string,
   threadId: string,
   drafting: boolean,
-  draftJson: string | null
+  draftJson: DraftJsonSource
 ): void {
   const key = `${projectId}:${threadId}`
   const pending = pendingDraftCommits.get(key)
@@ -153,7 +175,13 @@ export function commitDraftStateNow(
     clearTimeout(pending.timer)
     pendingDraftCommits.delete(key)
   }
-  void invoke('thread:setDraftState', projectId, threadId, drafting, draftJson).catch(() => {})
+  void invoke(
+    'thread:setDraftState',
+    projectId,
+    threadId,
+    drafting,
+    resolveDraftJson(draftJson)
+  ).catch(() => {})
 }
 
 /** Flush every pending draft commit — window unload / app hidden. */
@@ -166,7 +194,7 @@ export function flushAllDraftCommits(): void {
       pending.projectId,
       pending.threadId,
       pending.drafting,
-      pending.draftJson
+      resolveDraftJson(pending.draftJson)
     ).catch(() => {})
   }
 }

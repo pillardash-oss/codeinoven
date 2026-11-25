@@ -76,9 +76,17 @@
   // so it is read once, as the host is built.
   // svelte-ignore state_referenced_locally
   const native = new NativeFloatingPanel(`${hostId}-${crypto.randomUUID()}`)
-  const nativeArmed = $derived(
-    comment !== null && browserVisibility.canUseNativeDock && !native.failed
-  )
+  /**
+   * Whether a comment is on display.
+   *
+   * Read once here rather than as `comment !== null` in the effects below: a
+   * comment's text changes on every keystroke of its field, and the panel hands
+   * over a fresh object each time, so an effect that read the prop itself would
+   * re-run for text it never draws. A derived hands its dependents a value, and
+   * this one only changes when a bubble opens or closes.
+   */
+  const open = $derived(comment !== null)
+  const nativeArmed = $derived(open && browserVisibility.canUseNativeDock && !native.failed)
   const nativeMount: Attachment<HTMLElement> = (element) => native.mount(element)
 
   /** The bubble's own size, which the host window has to match exactly. */
@@ -180,16 +188,30 @@
     }
   }
 
+  /**
+   * The numbers the host window is placed and sized with.
+   *
+   * Deliberately separate values rather than the `position` and `size` objects
+   * they come from: the placement is recomputed whenever the comment prop is
+   * replaced, which is once per keystroke in the field, and a fresh object would
+   * carry that recomputation into the effect below even though nothing moved. A
+   * number that did not change is nothing to publish.
+   */
+  const panelX = $derived(position.x)
+  const panelY = $derived(position.y)
+  const panelWidth = $derived(size.width)
+  const panelHeight = $derived(Math.max(1, size.height))
+
   $effect.pre(() => {
-    if (!comment) native.restore()
+    if (!open) native.restore()
   })
 
   $effect(() => {
-    native.update(nativeArmed, comment !== null, {
-      x: position.x,
-      y: position.y,
-      width: size.width,
-      height: Math.max(1, size.height)
+    native.update(nativeArmed, open, {
+      x: panelX,
+      y: panelY,
+      width: panelWidth,
+      height: panelHeight
     })
   })
 </script>

@@ -1,22 +1,24 @@
 /**
- * Collapses a burst of "something may have become free" notices into a few sweeps.
+ * Collapses a burst of "it may have changed" notices into a few runs of the work.
  *
- * The queued-message dispatcher is asked to sweep on every idle transition of any
- * session and on every thread row that settles, and each sweep asks every waiting
- * thread's gates again. A working project produces those notices in bursts   a
- * worker finishing, a row settling, a turn ending   so the notice itself cannot
- * be the trigger of a round-trip each.
+ * Two places in this app are told about something on every event and have to
+ * answer it by reading state: the queued-message dispatcher (every idle
+ * transition and every settled thread row asks the waiting threads' gates again)
+ * and the keep-awake service (every persisted thread update asks the database
+ * whether any turn is still running). Both notices arrive in bursts — a worker
+ * finishing, several threads parking on the same provider window, a turn ending —
+ * and each burst would otherwise become one read per event on the single
+ * database connection every click waits behind.
  *
  * The rule is leading plus trailing: the first notice after a quiet spell runs at
- * once, so a message still leaves the moment its turn ends, and everything that
+ * once, so the app still reacts the moment it is told, and everything that
  * arrives inside the window collapses into one run at the end of it. A single
- * notice is therefore never delayed, and a storm costs two sweeps instead of one
- * per event.
+ * notice is never delayed, and a burst of fifty costs two runs instead of fifty.
  *
  * The clock and the scheduler are injectable so a test can script a burst without
  * waiting on real time.
  */
-export interface SweepCoalescerOptions {
+export interface CoalescedRunOptions {
   /** Shortest gap between two runs. */
   intervalMs: number
   /** The work a notice asks for. */
@@ -26,7 +28,7 @@ export interface SweepCoalescerOptions {
   clearTimer?: (handle: ReturnType<typeof setTimeout>) => void
 }
 
-export class SweepCoalescer {
+export class CoalescedRun {
   readonly #intervalMs: number
   readonly #run: () => void
   readonly #now: () => number
@@ -37,7 +39,7 @@ export class SweepCoalescer {
   /** The pending trailing run, when notices arrived inside the window. */
   #trailing: ReturnType<typeof setTimeout> | undefined = undefined
 
-  constructor(options: SweepCoalescerOptions) {
+  constructor(options: CoalescedRunOptions) {
     this.#intervalMs = options.intervalMs
     this.#run = options.run
     this.#now = options.now ?? (() => Date.now())

@@ -144,6 +144,34 @@ function markerNumber(reference: ResponseReferenceAnchor, fallback: number): num
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
+/** One conversation's composer references, as the store hands them out. */
+type ReferencesByThread = ReturnType<typeof responseReferencesState.entries>
+
+/**
+ * What makes a pin worth publishing again: its identity and where it is drawn.
+ *
+ * The comment travels with the set because the page draws a commented element
+ * differently from an unwritten one, but its text is not something the page
+ * reads: the pin asks whether a comment exists at all, and the text itself is
+ * drawn by the app's own bubble. Keying the publish on the text instead made
+ * every keystroke of a draft a new pin set, and main answered each one by
+ * running script in the page, so the key holds *whether* a comment exists rather
+ * than what it says. A committed comment therefore still reaches the page (the
+ * pin turns from hollow to marked on the write that gives it one), while a draft
+ * being typed into does not.
+ */
+function markerSignature(markers: BrowserInspectorMarker[]): string {
+  return JSON.stringify(
+    markers.map((marker) => ({
+      id: marker.id,
+      number: marker.number,
+      selector: marker.selector,
+      frame: marker.frame ?? '',
+      hasComment: marker.comment !== ''
+    }))
+  )
+}
+
 class BrowserInspectorSession {
   /** Tabs whose page is armed for picking. */
   private readonly armed = new SvelteSet<string>()
@@ -197,9 +225,11 @@ already have come and gone, which is why the list is watched rather than read
    *
    * A reference changes on every keystroke of a comment draft, and a tab showing
    * the same design page under another conversation is now republished too. The
-   * serialised set is what keeps that from being an IPC call per key: nothing is
-   * sent unless the pins actually changed. A tab whose page moved has a new
-   * design and publishes a different set, so the record cannot outlive its use.
+   * signature of the set is what keeps that from being an IPC call per key:
+   * nothing is sent unless the pins themselves changed (see {@link markerSignature}),
+   * so a draft being typed into is one comparison per open tab and no script run
+   * in the page. A tab whose page moved has a new design and publishes a
+   * different set, so the record cannot outlive its use.
    */
   private readonly publishedMarkers = new Map<string, string>()
   /**
@@ -288,7 +318,11 @@ already have come and gone, which is why the list is watched rather than read
    * comment on the same page follows. A reference is drawn once even when both
    * passes name it.
    */
-  markersFor(tabId: string): BrowserInspectorMarker[] {
+  markersFor(
+    tabId: string,
+    /** The conversations to answer from, when the caller already read them. */
+    entries: ReferencesByThread = responseReferencesState.entries()
+  ): BrowserInspectorMarker[] {
     const tab = this.tabOf(tabId)
     const owner = tab ? { projectId: tab.projectId, threadId: tab.threadId } : null
     const groups: {
@@ -304,7 +338,7 @@ already have come and gone, which is why the list is watched rather than read
       })
       seenGroups.add(`${owner.projectId}\u0000${owner.threadId}`)
     }
-    for (const group of responseReferencesState.entries()) {
+    for (const group of entries) {
       const key = `${group.projectId}\u0000${group.threadId}`
       if (seenGroups.has(key)) continue
       seenGroups.add(key)
@@ -861,7 +895,7 @@ already have come and gone, which is why the list is watched rather than read
     // session can name at all are published here, so a reopened page never waits
     // for a state report to draw them.
     const markers = this.markersFor(tabId)
-    this.publishedMarkers.set(tabId, JSON.stringify(markers))
+    this.publishedMarkers.set(tabId, markerSignature(markers))
     await invoke('browser:inspectMarkers', tabId, markers)
     await invoke('browser:inspectFocus', tabId, referenceId, true)
   }
@@ -960,6 +994,12 @@ already have come and gone, which is why the list is watched rather than read
    * comment whose reference is gone closes with it.
    */
   private onReferencesChanged(_projectId: string, _threadId: string): void {
+    // Read the list once for the whole change. Every open tab is answered from
+    // this one read, and so is the check that decides whether an open bubble
+    // lost its reference: the store parses a JSON key per conversation on every
+    // read, so asking per tab (and again per open bubble) made one keystroke pay
+    // for the whole tab strip.
+    const entries = responseReferencesState.entries()
     // A comment belongs to a design page, so any tab showing that page has to be
     // told again, not only the tab of the conversation that changed: the same
     // screen is opened by an agent in the thread's tab and by the board in its
@@ -967,8 +1007,10 @@ already have come and gone, which is why the list is watched rather than read
     // stays one comparison per open tab instead of an IPC call per keystroke.
     for (const tab of contextSidebarState.browserTabs) {
       if (tab.kind !== 'browser') continue
-      this.publishMarkers(tab.id)
+      this.publishMarkers(tab.id, entries)
     }
+    const held = new TabFlags()
+    for (const group of entries) for (const reference of group.references) held.add(reference.id)
     // An open bubble whose reference is gone (removed from the composer) closes
     // with it, exactly as the page's own card used to. Asked of every
     // conversation rather than of the tab's owner, because a tab that moved on
@@ -976,7 +1018,7 @@ already have come and gone, which is why the list is watched rather than read
     // comment is removed there.
     for (const tabId of [...this.editing.keys()]) {
       const editing = this.editing.get(tabId)
-      if (editing && !responseReferencesState.findById(editing.referenceId)) {
+      if (editing && !held.has(editing.referenceId)) {
         this.editing.delete(tabId)
       }
     }
@@ -992,15 +1034,19 @@ already have come and gone, which is why the list is watched rather than read
    * already own. A tab that cannot be resolved is skipped, so an unknown tab is
    * never asked about.
    */
-  private publishMarkers(tabId: string): void {
-    const markers = this.markersFor(tabId)
+  private publishMarkers(
+    tabId: string,
+    /** The conversations to answer from, when the caller already read them. */
+    entries: ReferencesByThread = responseReferencesState.entries()
+  ): void {
+    const markers = this.markersFor(tabId, entries)
     // A tab with no owner and no comments for it is not published at all, so an
     // unknown tab is never asked about; one the sidebar can still answer for, or
     // one whose comments live in another conversation, is.
     if (!this.ownerOf(tabId) && markers.length === 0) return
-    const serialized = JSON.stringify(markers)
-    if (this.publishedMarkers.get(tabId) === serialized) return
-    this.publishedMarkers.set(tabId, serialized)
+    const signature = markerSignature(markers)
+    if (this.publishedMarkers.get(tabId) === signature) return
+    this.publishedMarkers.set(tabId, signature)
     void invoke('browser:inspectMarkers', tabId, markers).catch(() => {
       // The tab may have gone since it was listed; forget the set so a reopened
       // tab with the same pins is published rather than suppressed by it.

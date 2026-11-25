@@ -402,6 +402,21 @@ class WorkspaceState {
     }
   }
 
+  /**
+   * Point the open conversation at the authoritative row for the same thread.
+   *
+   * Creating a thread selects an optimistic row and main answers with the row it
+   * persisted under the same id, so the conversation does not change   only the
+   * row it reads from does. Re-running `openThread` for that answer re-recorded
+   * the visit, re-stamped every sidebar row's age, walked the notice list and
+   * persisted the selection again, all for a thread the user was already looking
+   * at.
+   */
+  adoptConfirmedThread(thread: Thread): void {
+    if (this.selectedThread?.id !== thread.id) return
+    this.selectedThread = thread
+  }
+
   // ─── Keyboard shortcut signals ──────────────────────────────────────────
   /** Incremented to signal Workspace to create a thread in the active project. */
   requestCreateThreadCount = $state(0)

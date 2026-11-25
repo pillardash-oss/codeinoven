@@ -597,8 +597,14 @@ export class RendererRecoveryStore {
     )
       return
 
-    const next = { ...this.composerDrafts }
-    if (
+    // Write the one entry this draft owns instead of replacing the whole record.
+    // Replacing it woke every reader that looks inside `composerDrafts` for any
+    // thread — the sidebar's draft scan, every mounted row, and the composer of
+    // every open thread — on every keystroke. Adding or removing a key still
+    // bumps the record's own version, so `Object.keys` readers such as
+    // `listDraftThreadRefs` keep seeing it, while typing in a draft that is
+    // already stored now only wakes that thread's readers.
+    const emptied =
       draft.length === 0 &&
       nextAttachments.length === 0 &&
       nextProjectReferences.length === 0 &&
@@ -606,14 +612,17 @@ export class RendererRecoveryStore {
       nextPromptReferences.length === 0 &&
       current.startAfterThreads.length === 0 &&
       current.threadReferences.length === 0
-    ) {
-      delete next[key]
+    if (emptied) {
+      delete this.composerDrafts[key]
     } else {
-      if (!(key in next) && Object.keys(next).length >= MAX_RECOVERY_DRAFTS) {
-        const oldestKey = Object.keys(next)[0]
-        if (oldestKey) delete next[oldestKey]
+      if (
+        !(key in this.composerDrafts) &&
+        Object.keys(this.composerDrafts).length >= MAX_RECOVERY_DRAFTS
+      ) {
+        const oldestKey = Object.keys(this.composerDrafts)[0]
+        if (oldestKey) delete this.composerDrafts[oldestKey]
       }
-      next[key] = {
+      this.composerDrafts[key] = {
         text: draft,
         attachments: nextAttachments,
         projectReferences: nextProjectReferences,
@@ -623,9 +632,9 @@ export class RendererRecoveryStore {
         threadReferences: current.threadReferences
       }
     }
-    this.composerDrafts = next
     // Mirror the draft-derived label into its 24h cookie so the sidebar/header
     // can show what the user is typing instead of the "New Thread" placeholder.
+    // That write coalesces a burst inside its own module, so typing is one write.
     setDraftLabelCookie(threadId, draft)
     this.persist()
     publishDraftActivity(projectId, threadId, this.hasDraftContent(projectId, threadId))
@@ -633,12 +642,26 @@ export class RendererRecoveryStore {
     // cleared composer never leaves a stale draft behind; a non-empty draft
     // commits 10s after the last edit (debounced), unless the edit was a
     // deliberate one, which commits now.
-    if (key in next) {
-      const content = JSON.stringify(next[key])
-      if (deliberate) commitDraftStateNow(projectId, threadId, true, content)
-      else {
+    if (!emptied) {
+      if (deliberate) {
+        const entry = this.composerDrafts[key]
+        commitDraftStateNow(projectId, threadId, true, entry ? JSON.stringify(entry) : null)
+      } else {
+        // Serialize when the commit actually fires. Stringifying the entry (its
+        // text plus every attached reference's full element descriptor) on the
+        // keystroke was pure per-key cost, and resolving it late also means the
+        // commit carries the newest state rather than the keystroke that armed it.
         const delay = typingComment ? COMMENT_COMMIT_DEBOUNCE_MS : undefined
-        scheduleDraftCommit(projectId, threadId, true, content, delay)
+        scheduleDraftCommit(
+          projectId,
+          threadId,
+          true,
+          () => {
+            const entry = this.composerDrafts[key]
+            return entry ? JSON.stringify(entry) : null
+          },
+          delay
+        )
       }
     } else {
       commitDraftStateNow(projectId, threadId, false, null)
