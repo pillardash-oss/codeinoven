@@ -1,5 +1,5 @@
 import { request as httpRequest } from 'node:http'
-import { mkdtemp, mkdir, readFile, rm, stat } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type {
@@ -15,8 +15,6 @@ import {
   type OvenUtilityHostHandle
 } from '../../../src/main/ovens/remote/oven-utility-host'
 import {
-  OVEN_UTILITY_LINUX_NO_SECRET_TOOL_REASON,
-  OVEN_UTILITY_LINUX_NO_SESSION_BUS_REASON,
   createOvenUtilitySecretBackend,
   type SecretBackend,
   type SecretBackendProbe,
@@ -311,7 +309,7 @@ describe('Oven secret store', () => {
 })
 
 describe('Oven secret backends', () => {
-  it('reports Linux unavailable without a session bus and available with one', async () => {
+  it('falls back to encrypted files without a session bus and uses the service with one', async () => {
     const directory = join(
       await mkdtemp(join(resolve('.cio/tmp'), 'oven-secret-backend-')),
       'files'
@@ -329,10 +327,17 @@ describe('Oven secret backends', () => {
       runner: withoutBus.runner,
       directory
     })
-    expect(await noBus.probe()).toEqual({
-      available: false,
-      reason: OVEN_UTILITY_LINUX_NO_SESSION_BUS_REASON
-    })
+    expect(await noBus.probe()).toEqual({ available: true })
+    expect(noBus.id).toBe('linux-encrypted-file')
+    await noBus.write('github', 'token-value')
+    expect(await noBus.read('github')).toBe('token-value')
+    expect((await stat(join(directory, 'store-key'))).mode & 0o777).toBe(0o600)
+    // The value never lands on disk as plain text.
+    const sealedFiles = (await readdir(directory)).filter((name) => name.endsWith('.sealed'))
+    expect(sealedFiles).toHaveLength(1)
+    expect((await readFile(join(directory, sealedFiles[0]))).includes('token-value')).toBe(false)
+    await noBus.remove('github')
+    expect(await noBus.read('github')).toBeNull()
     // A machine with no bus is never asked to run a tool that would hang on it.
     expect(withoutBus.calls).toHaveLength(0)
 
@@ -344,6 +349,7 @@ describe('Oven secret backends', () => {
       directory
     })
     expect(await bus.probe()).toEqual({ available: true })
+    expect(bus.id).toBe('linux-secret-service')
     expect(withBus.calls.map((call) => call.argv.slice(0, 2))).toEqual([
       ['which', 'secret-tool'],
       ['secret-tool', 'lookup']
@@ -363,7 +369,7 @@ describe('Oven secret backends', () => {
     expect(withBus.calls.at(-1)?.argv).not.toContain(VALUE)
   })
 
-  it('reports the missing secret-tool when the session bus exists', async () => {
+  it('falls back to encrypted files when secret-tool is missing', async () => {
     const directory = join(
       await mkdtemp(join(resolve('.cio/tmp'), 'oven-secret-backend-')),
       'files'
@@ -375,10 +381,8 @@ describe('Oven secret backends', () => {
       runner,
       directory
     })
-    expect(await backend.probe()).toEqual({
-      available: false,
-      reason: OVEN_UTILITY_LINUX_NO_SECRET_TOOL_REASON
-    })
+    expect(await backend.probe()).toEqual({ available: true })
+    expect(backend.id).toBe('linux-encrypted-file')
   })
 
   it('keeps a macOS value and its key out of argv', async () => {

@@ -1006,6 +1006,7 @@
     if (backend === 'macos-keychain') return 'the login keychain'
     if (backend === 'windows-dpapi') return 'Windows DPAPI'
     if (backend === 'linux-secret-service') return 'the secret service'
+    if (backend === 'linux-encrypted-file') return 'encrypted files only this account can read'
     return 'no vault'
   }
 

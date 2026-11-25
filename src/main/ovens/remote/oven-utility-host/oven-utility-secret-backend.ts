@@ -147,7 +147,10 @@ export function createOvenUtilitySecretBackend(options: SecretBackendOptions): S
     case 'darwin':
       return new MacosKeychainSecretBackend(options.directory, run)
     case 'linux':
-      return new LinuxSecretServiceBackend(run, options.env ?? process.env)
+      return new LinuxSecretBackend(
+        new LinuxSecretServiceBackend(run, options.env ?? process.env),
+        new LinuxEncryptedFileBackend(options.directory)
+      )
     case 'win32':
       return new WindowsDpapiSecretBackend(options.directory, run)
     default:
@@ -240,6 +243,32 @@ async function writeSecretFile(path: string, data: string | Buffer): Promise<voi
   await chmod(path, 0o600)
 }
 
+/** Encrypt one value with a 32-byte key: IV, then tag, then ciphertext. */
+function sealValue(secret: Buffer, value: string): Buffer {
+  const iv = randomBytes(FILE_IV_BYTES)
+  const cipher = createCipheriv(FILE_CIPHER, secret, iv, { authTagLength: FILE_TAG_BYTES })
+  const body = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()])
+  return Buffer.concat([iv, cipher.getAuthTag(), body])
+}
+
+/** Decrypt what `sealValue` wrote. A tampered file fails its tag check and throws. */
+function openSealed(secret: Buffer, sealed: Buffer): string {
+  const body = FILE_IV_BYTES + FILE_TAG_BYTES
+  const decipher = createDecipheriv(FILE_CIPHER, secret, sealed.subarray(0, FILE_IV_BYTES), {
+    authTagLength: FILE_TAG_BYTES
+  })
+  decipher.setAuthTag(sealed.subarray(FILE_IV_BYTES, body))
+  return Buffer.concat([decipher.update(sealed.subarray(body)), decipher.final()]).toString('utf8')
+}
+
+/** Read a file, answering null when it does not exist. */
+async function readOptional(path: string): Promise<Buffer | null> {
+  return await readFile(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null
+    throw error
+  })
+}
+
 /**
  * The login keychain, through the tool macOS ships for exactly this.
  *
@@ -275,31 +304,18 @@ class MacosKeychainSecretBackend implements SecretBackend {
 
   async read(key: string): Promise<string | null> {
     assertKey(key)
-    const sealed = await readFile(this.pathFor(key)).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') return null
-      throw error
-    })
+    const sealed = await readOptional(this.pathFor(key))
     if (!sealed) return null
     const secret = await this.storeKey()
     if (!secret) return null
-    const body = FILE_IV_BYTES + FILE_TAG_BYTES
-    const decipher = createDecipheriv(FILE_CIPHER, secret, sealed.subarray(0, FILE_IV_BYTES), {
-      authTagLength: FILE_TAG_BYTES
-    })
-    decipher.setAuthTag(sealed.subarray(FILE_IV_BYTES, body))
-    return Buffer.concat([decipher.update(sealed.subarray(body)), decipher.final()]).toString(
-      'utf8'
-    )
+    return openSealed(secret, sealed)
   }
 
   async write(key: string, value: string): Promise<void> {
     assertKey(key)
     assertValue(value)
     const secret = (await this.storeKey()) ?? (await this.createStoreKey())
-    const iv = randomBytes(FILE_IV_BYTES)
-    const cipher = createCipheriv(FILE_CIPHER, secret, iv, { authTagLength: FILE_TAG_BYTES })
-    const body = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()])
-    await writeSecretFile(this.pathFor(key), Buffer.concat([iv, cipher.getAuthTag(), body]))
+    await writeSecretFile(this.pathFor(key), sealValue(secret, value))
   }
 
   async remove(key: string): Promise<void> {
@@ -460,6 +476,121 @@ class LinuxSecretServiceBackend implements SecretBackend {
       throw new Error(
         `The secret service could not remove \`${key}\` (secret-tool exit ${result.code}).`
       )
+  }
+}
+
+/** The file holding the key a Linux machine without a secret service encrypts with. */
+const LINUX_STORE_KEY_FILE = 'store-key'
+
+/**
+ * Encrypted files, for a Linux machine with no secret service to hand a key to.
+ *
+ * A headless server rarely runs one: GNOME Keyring needs a password at login
+ * that nobody is there to type, the kernel keyring forgets everything on reboot,
+ * and per-user `systemd-creds` arrives only in systemd 256. So the key lives in
+ * a 0600 file in a 0700 directory, readable by this account and root only, and
+ * every value is AES-256-GCM sealed with it, as DPAPI does it on Windows. It is
+ * weaker than a store that needs a password to open, and that is the trade an
+ * unattended machine has to make to keep anything across a reboot.
+ */
+class LinuxEncryptedFileBackend implements SecretBackend {
+  readonly id: OvenUtilitySecretBackend = 'linux-encrypted-file'
+
+  constructor(private readonly directory: string) {}
+
+  async probe(): Promise<SecretBackendProbe> {
+    try {
+      await mkdir(this.directory, { recursive: true, mode: 0o700 })
+      await chmod(this.directory, 0o700)
+      return { available: true }
+    } catch (error) {
+      return {
+        available: false,
+        reason: `The credential folder on this machine cannot be written (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}).`
+      }
+    }
+  }
+
+  async read(key: string): Promise<string | null> {
+    assertKey(key)
+    const sealed = await readOptional(this.pathFor(key))
+    if (!sealed) return null
+    const secret = await readOptional(this.keyPath())
+    if (!secret) return null
+    return openSealed(secret, sealed)
+  }
+
+  async write(key: string, value: string): Promise<void> {
+    assertKey(key)
+    assertValue(value)
+    await writeSecretFile(this.pathFor(key), sealValue(await this.storeKey(), value))
+  }
+
+  async remove(key: string): Promise<void> {
+    assertKey(key)
+    await rm(this.pathFor(key), { force: true })
+  }
+
+  /** The key, created on first use. `wx` keeps two writers from each making one. */
+  private async storeKey(): Promise<Buffer> {
+    const existing = await readOptional(this.keyPath())
+    if (existing?.length === 32) return existing
+    await mkdir(this.directory, { recursive: true, mode: 0o700 })
+    try {
+      await writeFile(this.keyPath(), randomBytes(32), { mode: 0o600, flag: 'wx' })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    }
+    const saved = await readOptional(this.keyPath())
+    if (saved?.length !== 32) throw new Error('The credential key on this machine is damaged.')
+    return saved
+  }
+
+  private keyPath(): string {
+    return join(this.directory, LINUX_STORE_KEY_FILE)
+  }
+
+  private pathFor(key: string): string {
+    return `${secretFilePath(this.directory, key)}.sealed`
+  }
+}
+
+/**
+ * Linux: the secret service when one answers, encrypted files otherwise.
+ *
+ * The choice is made by the probe and then held, so one machine never splits
+ * its credentials across two stores within one daemon's life.
+ */
+class LinuxSecretBackend implements SecretBackend {
+  private active: SecretBackend
+
+  constructor(
+    private readonly service: SecretBackend,
+    private readonly files: SecretBackend
+  ) {
+    this.active = files
+  }
+
+  get id(): OvenUtilitySecretBackend {
+    return this.active.id
+  }
+
+  async probe(): Promise<SecretBackendProbe> {
+    const service = await this.service.probe()
+    this.active = service.available ? this.service : this.files
+    return service.available ? service : await this.files.probe()
+  }
+
+  read(key: string): Promise<string | null> {
+    return this.active.read(key)
+  }
+
+  write(key: string, value: string): Promise<void> {
+    return this.active.write(key, value)
+  }
+
+  remove(key: string): Promise<void> {
+    return this.active.remove(key)
   }
 }
 
