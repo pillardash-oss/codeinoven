@@ -99,7 +99,7 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
     if (isBrowserAssistantThread(thread)) return
     const index = this.allThreads.findIndex((candidate) => candidate.id === thread.id)
     if (index < 0) {
-      this.allThreads = [thread, ...this.allThreads]
+      this.allThreads.unshift(thread)
       return
     }
     const existing = this.allThreads[index]
@@ -107,13 +107,19 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
       (candidate, candidateIndex) => candidateIndex !== index && candidate.id === thread.id
     )
     if (!hasDuplicate && this.root.mergeThreadsInList.sidebarRowUnchanged(existing, thread)) return
-    let replaced = false
-    this.allThreads = this.allThreads.flatMap((candidate) => {
-      if (candidate.id !== thread.id) return [candidate]
-      if (replaced) return []
-      replaced = true
-      return [thread]
-    })
+    // Replace the row in place. Rebuilding the whole array for one row (a
+    // `flatMap` over every thread on every `thread:updated`) gave the list a new
+    // identity each time, so every derivation that reads it re-filtered and
+    // re-sorted every project, and every mounted row was reconciled, for a
+    // change that belongs to one row. An index write keeps the array and marks
+    // exactly that element; the duplicate sweep stays, in place, for an
+    // ingestion that ran twice.
+    this.allThreads[index] = thread
+    for (let candidate = this.allThreads.length - 1; candidate >= 0; candidate -= 1) {
+      if (candidate !== index && this.allThreads[candidate]?.id === thread.id) {
+        this.allThreads.splice(candidate, 1)
+      }
+    }
   }
 
   /**

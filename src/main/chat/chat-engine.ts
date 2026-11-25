@@ -33,6 +33,7 @@ import { type AgentSecretResolution } from '../utilities/agent-secret-service'
 import { type OrchestrationRuntime } from './chat-engine-orchestration'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import { type EffectiveExperts } from '../../lib/experts'
+import type { ThreadOpenDigest } from '../../lib/ipc/invoke-thread'
 import type { ExpertSettingsService } from '../design/expert-settings-service'
 import { McpOAuthService } from '../utilities/mcp-oauth/mcp-oauth-service'
 import type { ReapOrphansOptions, ReapOrphansResult } from '../agents/agent-process-service'
@@ -1184,6 +1185,17 @@ export class ChatEngine {
   }
   async listPermissions(projectId: string, threadId: string): Promise<PermissionRequest[]> {
     return this.units['permissions'].listPermissions(projectId, threadId)
+  }
+  /**
+   * Every read a thread mount needs, from one thread-row read.
+   *
+   * The mount used to spend five round trips on this (the row, permissions,
+   * questions, image-descriptor cards, session status) and each of them re-read
+   * the same row. A failed digest must never take the open with it: the renderer
+   * falls back to the individual channels it used before.
+   */
+  async readOpenDigest(projectId: string, threadId: string): Promise<ThreadOpenDigest> {
+    return this.units['open-digest'].readOpenDigest(projectId, threadId)
   }
   async listImageDescriptorErrors(
     projectId: string,

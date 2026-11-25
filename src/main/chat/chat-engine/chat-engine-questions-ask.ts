@@ -385,16 +385,33 @@ export class ChatEngineQuestionsAsk {
     return driver.hasActiveTurn ? driver.hasActiveTurn(pending.request.sessionId) : true
   }
 
-  /** Merge provider-held questions into the authoritative pending-question queue. */
-  async listQuestions(projectId: string, threadId: string): Promise<PendingAgentQuestionRequest[]> {
+  /**
+   * Merge provider-held questions into the authoritative pending-question queue.
+   *
+   * `preloadedThread` is the row an aggregate read already has: passing it skips
+   * both row reads below (the Oven-routing probe and the post-readiness read).
+   * `undefined` means "read it here" and `null` means "already known to be
+   * absent", so every other call site keeps answering exactly as before.
+   */
+  async listQuestions(
+    projectId: string,
+    threadId: string,
+    preloadedThread?: Thread | null
+  ): Promise<PendingAgentQuestionRequest[]> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
-    const ovenThread = await this.host.threadManager.getThread(projectId, threadId)
+    const ovenThread =
+      preloadedThread === undefined
+        ? await this.host.threadManager.getThread(projectId, threadId)
+        : preloadedThread
     if (ovenThread && this.host.state.ovenChat.remote(ovenThread))
       return this.host.state.ovenChat.questions(ovenThread)
 
     await this.host.threadCreation?.awaitReady(threadId)
-    const thread = await this.host.threadManager.getThread(projectId, threadId)
+    const thread =
+      preloadedThread === undefined
+        ? await this.host.threadManager.getThread(projectId, threadId)
+        : preloadedThread
     if (!thread?.sessionId) return []
     // Pending provider questions belong to the thread's bound session, which
     // after a mid-run harness switch is owned by the original harness even

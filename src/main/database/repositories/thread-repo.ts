@@ -14,18 +14,11 @@ import {
   INBOX_PROJECT_ID,
   type Thread,
   type ThreadContextUsage,
-  type ThreadSearchResult,
   type ThreadStatus
 } from '../../../lib/types'
+import type { QueryLane } from '../database-worker'
 import { rowToThread, serializeGroupParticipants } from './thread-repo/thread-row'
 import type { ThreadRow } from './thread-repo/thread-row'
-import {
-  buildThreadSearchSql,
-  mergeThreadSearchResults,
-  threadSearchMessageLimit,
-  type MessageMatchRow,
-  type ThreadSearchOptions
-} from './thread-repo/thread-search'
 
 export { parseThreadContextUsage } from './thread-repo/thread-row'
 export {
@@ -851,15 +844,23 @@ export class ThreadRepo {
    * Whole thread rows for the given ids, read on the database worker. Used to
    * hydrate semantic search matches, which arrive as ids and scores and must
    * become full `Thread` results without a synchronous read.
+   *
+   * `lane` is the queue the caller wants the read on. A search passes `async`,
+   * because hydrating its own matches is part of answering it and must not share
+   * the queue a click is waiting in; every other caller keeps the default.
    */
-  async listByIdsViaWorker(ids: readonly string[]): Promise<Thread[]> {
+  async listByIdsViaWorker(
+    ids: readonly string[],
+    options: { lane?: QueryLane } = {}
+  ): Promise<Thread[]> {
     const unique = [...new Set(ids)].filter((id) => id.length > 0)
     if (unique.length === 0) return []
     const placeholders = unique.map(() => '?').join(',')
     const result = await this.db.queryViaWorker(
       `SELECT * FROM threads WHERE id IN (${placeholders}) AND ${unarchivedThreadSql()}`,
       unique,
-      0
+      0,
+      { lane: options.lane }
     )
     if (!result.ok) return []
     return result.rows.map((row) => rowToThread(row as unknown as ThreadRow))
@@ -1213,36 +1214,5 @@ export class ThreadRepo {
         stmt.run(now - i, now, now, ids[i])
       }
     })
-  }
-
-  /**
-   * Full-text thread search across titles and conversation content.
-   *
-   * Results are deduped by thread: title matches lead, then the threads with
-   * the most matching messages, most recently active first. Message matches
-   * surface user messages and the agent's final output from
-   * conversation-scoped records.
-   */
-  search(
-    query: string,
-    options: ThreadSearchOptions = {},
-    useSearchMeta = false
-  ): ThreadSearchResult[] {
-    const raw = query.trim()
-    if (!raw) return []
-    const built = buildThreadSearchSql(raw, options, useSearchMeta)
-    const titleRows = this.db.all<ThreadRow>(
-      `${built.title.sql} LIMIT ?`,
-      ...built.title.params,
-      built.limit
-    )
-    const messageRows = built.fts
-      ? this.db.all<ThreadRow & MessageMatchRow>(
-          `${built.fts.sql} LIMIT ?`,
-          ...built.fts.params,
-          threadSearchMessageLimit(built.limit)
-        )
-      : []
-    return mergeThreadSearchResults(titleRows, messageRows, raw, built.limit)
   }
 }

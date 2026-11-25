@@ -152,11 +152,11 @@
   }
 
   /**
-   * Record the live screen's scroll offset and copy the screen when it leaves.
+   * Record the live screen's scroll offset and keep the screen when it leaves.
    *
    * Bound to the thread id alone, never the thread row: an attachment re-runs
    * when anything it read changes, and its teardown is the "left" signal. A row
-   * refresh (the server confirming a new thread) would otherwise copy the screen
+   * refresh (the server confirming a new thread) would otherwise keep the screen
    * the user is still on, and that copy then replaces the live view and its
    * composer mid-keystroke.
    */

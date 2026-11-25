@@ -343,6 +343,26 @@ export class Database {
     return this.asyncReads.getWorker()
   }
 
+  /**
+   * Tell the async lane when a person is working, so its daily whole-file
+   * integrity probe waits for a quiet moment instead of spending ten seconds of
+   * CPU and disk next to an interaction.
+   *
+   * The "database is quiet" half is answered by the maintenance worker's own
+   * queue: every read and write routed to it is interactive traffic, and this
+   * worker's quiet window therefore covers both directions. The foreground half
+   * is all the caller has to supply — a predicate over its windows — because
+   * only the app knows what is on screen.
+   */
+  setActivitySignal(signal: { isUserActive?: () => boolean }): void {
+    this.asyncReads.setActivitySignal({
+      ...(signal.isUserActive ? { isUserActive: signal.isUserActive } : {}),
+      waitForDatabaseQuiet: (quietMs, deadlineMs) =>
+        this.maintenance.getWorker()?.waitForInteractiveQuiet(quietMs, deadlineMs) ??
+        Promise.resolve()
+    })
+  }
+
   /** Explicit corruption / full-disk health check. */
   async healthCheck(): Promise<WorkerHealthResult> {
     return this.maintenance.healthCheck()

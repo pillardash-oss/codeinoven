@@ -12,7 +12,7 @@ import {
 import { validateBoundedString, validateEntityId } from '../../ipc/ipc-validation'
 import { PermissionRequestGoneError } from '../../drivers/driver.interface'
 import type { HarnessDriver } from '../../drivers/driver.interface'
-import type { AgentEvent, PermissionReply, PermissionRequest } from '../../../lib/types'
+import type { AgentEvent, PermissionReply, PermissionRequest, Thread } from '../../../lib/types'
 import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '../../../lib/types'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/ipc/browser'
 import {
@@ -450,11 +450,26 @@ export class ChatEnginePermissions {
     await driver.abort(pending.session.projectPath, sessionId)
   }
 
-  /** List unresolved permission requests for renderer reconnect recovery. */
-  async listPermissions(projectId: string, threadId: string): Promise<PermissionRequest[]> {
+  /**
+   * List unresolved permission requests for renderer reconnect recovery.
+   *
+   * `preloadedThread` is the row an aggregate read already has: a caller that
+   * just read the thread (the open digest) passes it so this never asks the
+   * database worker for the same row again. `undefined` means "read it here",
+   * and `null` means "already known to be absent", so every other call site
+   * keeps answering exactly as before.
+   */
+  async listPermissions(
+    projectId: string,
+    threadId: string,
+    preloadedThread?: Thread | null
+  ): Promise<PermissionRequest[]> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
-    const ovenThread = await this.host.threadManager.getThread(projectId, threadId)
+    const ovenThread =
+      preloadedThread === undefined
+        ? await this.host.threadManager.getThread(projectId, threadId)
+        : preloadedThread
     if (ovenThread && this.host.state.ovenChat.remote(ovenThread))
       return this.host.state.ovenChat.permissions(ovenThread)
 

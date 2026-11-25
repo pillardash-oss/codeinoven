@@ -1,4 +1,5 @@
 import { tick } from 'svelte'
+import { SvelteSet } from 'svelte/reactivity'
 
 import { invoke } from '$lib/ipc.svelte'
 
@@ -11,12 +12,17 @@ import { threadHoldsOpenTrace } from '$lib/stores/thread-preload'
 import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
 import { warmThreadHold } from '$lib/stores/queued-resource-wait.svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
+import { logRendererError } from '$lib/system/renderer-logger'
 import type {
   AgentMessage,
+  AgentSessionStatus,
+  PermissionRequest,
+  Thread,
   ThreadMessageCursor,
   ThreadSettings,
   TurnStreamPartsPage
 } from '$shared/types'
+import type { ThreadOpenDigest } from '$shared/ipc/invoke-thread'
 import {
   hasRenderableWorkingParts,
   isActivityOnlyUserMessage,
@@ -138,6 +144,22 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
 
   /** Set by `bind()`: how many messages the first paint mounts. */
   mountedCount = $state(0)
+
+  /**
+   * The one open-digest answer this mount shares between every read it needs.
+   *
+   * Opening a thread used to ask five channels for answers that all keyed off
+   * the same thread row   the row itself, the pending permission queue, the
+   * pending question queue, the unresolved image-descriptor cards, and the live
+   * session status   and each of those was a job on the one shared database
+   * worker that re-read that row. The digest answers all five from a single row
+   * read, is started by whichever part of the restore asks first, and is reused
+   * by the rest, so the mount spends one round trip instead of five.
+   */
+  #openDigest: Promise<ThreadOpenDigest | null> | null = null
+
+  /** The thread `#openDigest` belongs to; a different thread starts a new read. */
+  #openDigestKey = ''
 
   /** Id of the first mounted message while the reader is scrolled up. With an
    *  anchor pinned, the window runs from what the reader is reading all the
@@ -937,6 +959,99 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     }
   }
 
+  /**
+   * The mount's single open-digest answer, started once per thread.
+   *
+   * Both halves of the restore ask for it   the transcript load wants the row,
+   * the session restore wants the pending queues and the live status   so it is
+   * memoized here instead of each of them paying a round trip. A rejection can
+   * only mean the aggregate itself is unavailable (the parts it could not
+   * answer are named in `failures`), and it answers `null` so every caller
+   * falls back to the exact channel it used before this existed.
+   */
+  readOpenDigest(projectId: string, threadId: string): Promise<ThreadOpenDigest | null> {
+    const key = `${projectId}:${threadId}`
+    if (this.#openDigest !== null && this.#openDigestKey === key) return this.#openDigest
+    this.#openDigestKey = key
+    this.#openDigest = invoke('thread:openDigest', projectId, threadId).catch((error: unknown) => {
+      logRendererError('The thread open digest could not be read', error)
+      return null
+    })
+    return this.#openDigest
+  }
+
+  /** The visible thread row the digest carried, or its own channel when the
+   *  aggregate could not read it   the same value and the same failure mode as
+   *  the `thread:get` call this replaces. */
+  private async openThreadRow(projectId: string, id: string): Promise<Thread | null> {
+    const digest = await this.readOpenDigest(projectId, id)
+    if (digest && !digest.failures.includes('thread')) return digest.thread
+    return invoke('thread:get', projectId, id)
+  }
+
+  /**
+   * The live session status, from the digest or from its own channel.
+   *
+   * A failed status read is a real failure of the restore   it is what the
+   * mount has always reported as "could not connect to the agent"   so the
+   * fallback call is left to reject exactly as it did before.
+   */
+  private async sessionStatusFor(
+    projectId: string,
+    id: string,
+    digest: ThreadOpenDigest | null
+  ): Promise<AgentSessionStatus | null> {
+    if (digest && !digest.failures.includes('sessionStatus')) return digest.sessionStatus
+    return invoke('agent:getSessionStatus', projectId, id)
+  }
+
+  /**
+   * Adopt the pending permission queue the digest carried.
+   *
+   * Same rule as the dedicated hydrate in `editVideoNote`: whatever this view
+   * already knows stays unless the authoritative list is newer than it, so a
+   * request the live stream filed while the read was in flight is never wiped
+   * by it.
+   */
+  private adoptPendingPermissions(pending: PermissionRequest[]): void {
+    const { projectId, id } = this.root.handleAgentEvent.thread
+    const knownIds = new SvelteSet(
+      conversationAttention.permissions(projectId, id).map((request) => request.id)
+    )
+    conversationAttention.reconcile(projectId, id, pending, knownIds)
+  }
+
+  /**
+   * Adopt the reading extras the open digest carried: the unresolved
+   * image-descriptor card and the pending question queue.
+   *
+   * These enrich an opened thread rather than hold it open, so the caller keeps
+   * deciding when they land (before the frame for a live turn, after it for a
+   * finished one). Only the reads it could not answer fall back to their own
+   * channels, which is the behaviour every mount had before this existed.
+   */
+  private adoptOpenDigestExtras(digest: ThreadOpenDigest | null): void {
+    if (!digest) {
+      void this.root.sources.refreshPendingImageDescriptorError()
+      void this.root.composerScope.refreshPendingQuestions()
+      return
+    }
+    if (digest.failures.includes('imageDescriptorErrors')) {
+      void this.root.sources.refreshPendingImageDescriptorError()
+    } else {
+      this.root.sources.pendingImageDescriptorError = digest.imageDescriptorErrors[0] ?? null
+    }
+    if (digest.failures.includes('questions')) {
+      void this.root.composerScope.refreshPendingQuestions()
+      return
+    }
+    // A request the user already resolved here keeps its card closed: the read
+    // can still carry it while the answer is in flight.
+    this.root.handleAgentEvent.pendingQuestionRequests = digest.questions.filter(
+      (request) => !this.root.sources.resolvedQuestionRequestIds.has(request.requestId)
+    )
+  }
+
   async loadLocal(attempt = 0): Promise<void> {
     // Controller-driven conversations load themselves; ThreadView just renders.
     if (this.root.props.controller) return
@@ -980,7 +1095,7 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
         this.root.composerScope.restoreResponseReferences()
       })
       // Background persistence/config enrichment   never blocks input, never shows loading
-      void Promise.all([invoke('thread:get', projectId, id), invoke('config:get')])
+      void Promise.all([this.openThreadRow(projectId, id), invoke('config:get')])
         .then(([threadData, config]) => {
           if (!this.alive) return
           // Self-heal the history flag: a thread seeded empty must never stay
@@ -1019,7 +1134,7 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     }
     try {
       const [threadData, , config] = await Promise.all([
-        invoke('thread:get', projectId, id),
+        this.openThreadRow(projectId, id),
         // A warm cache is re-read, never trusted. A sibling instance writes the
         // same mirrored conversation this window holds, and its announcement is
         // best effort: a batch still waiting on the coalescing timer when the
@@ -1154,7 +1269,17 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     // unmounts this view, so the card comes from the store and is reconciled
     // here instead of from state this mount owns.
     conversationAttention.track(projectId, id)
-    void this.root.editVideoNote.refreshPendingPermissions()
+    // The permission queue travels on the open digest this mount already needs, so
+    // a blocked card costs no round trip of its own. A digest that could not
+    // carry it falls back to the dedicated channel, exactly as this read did
+    // before.
+    void this.readOpenDigest(projectId, id).then((digest) => {
+      if (digest && !digest.failures.includes('permissions')) {
+        this.adoptPendingPermissions(digest.permissions)
+        return
+      }
+      void this.root.editVideoNote.refreshPendingPermissions()
+    })
 
     // Independent extras   each lands as it resolves, none block the paint.
     void this.root.switchProject.loadProjectContext()
@@ -1188,11 +1313,16 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       }
     }
 
+    // The digest started above is what this pass reads everything else from. By
+    // the time the engineering-state reconcile above has finished (a frame plus
+    // a spec read) it has almost always already answered, so the session
+    // handshake no longer starts a third pass over the same thread row.
+    const openDigest = await this.readOpenDigest(projectId, id)
     try {
-      this.root.handleAgentEvent.providerStatus = await invoke(
-        'agent:getSessionStatus',
+      this.root.handleAgentEvent.providerStatus = await this.sessionStatusFor(
         projectId,
-        id
+        id,
+        openDigest
       )
       if (!this.alive) return
       if (
@@ -1231,19 +1361,16 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       }
       const liveSessionWorking = this.root.handleAgentEvent.providerStatus?.state === 'working'
       if (liveSessionWorking) {
-        await this.root.sources.refreshPendingImageDescriptorError()
-        if (!this.alive) return
-        await this.root.composerScope.refreshPendingQuestions()
+        this.adoptOpenDigestExtras(openDigest)
         if (!this.alive) return
       } else {
         // A completed thread has nothing waiting on these: a question only exists
-        // while work is in flight. They enrich the opened thread, so they load
+        // while work is in flight. They enrich the opened thread, so they land
         // after the frame instead of holding the restore. The key is per-thread
         // because this scheduler is latest-wins across the whole renderer: a
         // shared key let another thread's mount cancel this one's restore.
         scheduleDeferredWork(`thread:restored-session-extras:${projectId}:${id}`, () => {
-          void this.root.sources.refreshPendingImageDescriptorError()
-          void this.root.composerScope.refreshPendingQuestions()
+          this.adoptOpenDigestExtras(openDigest)
         })
       }
       this.root.abortRun.syncOpenSubagentTabs()
