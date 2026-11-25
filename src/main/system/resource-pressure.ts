@@ -3,19 +3,16 @@
  *
  * The sampler is a background service, so it follows the app's rule for one: it
  * only runs while somebody is asking. A read takes a CPU delta from the last
- * snapshot the sampler holds and answers from a five sample window without
- * waiting for anything; the one second loop keeps that window fresh while a
- * consumer is asking, and stops thirty seconds after the last read. No consumer,
- * no timer.
+ * snapshot the sampler holds and answers from its sample window without waiting
+ * for anything; the one second loop keeps that window fresh while a consumer is
+ * asking, and stops thirty seconds after the last read. No consumer, no timer.
  *
- * The window and the last snapshot survive the stop. A delta measured across the
- * idle gap answers the same question (is there room right now) and is if
- * anything the longer average, so the first read after a pause answers from what
- * the sampler already knew instead of paying for a warm-up. Only the very first
- * read after the process starts has no snapshot to subtract, and it answers
- * immediately while that one delta is taken in the background: this read is on
- * the click path, so it may never hold a message and may never report an
- * unanswered reading as a machine that is short.
+ * A CPU shortage is an expensive answer, so it has to be a sustained one. The
+ * window spans fifteen seconds and it is only believed once ten readings have
+ * filled it, because five seconds of one compile, one local model load or one
+ * dictation is a burst and not a machine that is short. A reading that is not
+ * there yet answers "not short" instead of "no room": an unknown is not a
+ * shortage, and reporting it as one moved work that did not need moving.
  *
  * CPU comes from `os.cpus()` deltas rather than a load average, because a load
  * average is a minute of history and the question here is "is there room right
@@ -41,8 +38,31 @@ import { Logger } from './logger'
 export const PRIME_WINDOW_MS = 250
 /** How often the armed sampler takes a CPU reading. */
 const SAMPLE_INTERVAL_MS = 1_000
-/** How many readings the window averages over, which is the five second span. */
-const WINDOW_SAMPLES = 5
+/**
+ * How many readings the window averages over: the last fifteen seconds.
+ *
+ * Long enough that a burst is diluted instead of believed, short enough that the
+ * answer is still about now rather than about the last minute.
+ */
+const WINDOW_SAMPLES = 15
+/**
+ * How many readings have to be in the window before a CPU shortage counts.
+ *
+ * Below this the reading is unknown, and an unknown is answered as room rather
+ * than as a shortage. Ten seconds is the smallest span that survived every burst
+ * measured on a real machine: a compile, a local model load, and a dictation
+ * pipeline each fit inside five seconds and none of them lasted ten.
+ */
+const SUSTAINED_SAMPLES = 10
+/**
+ * What an unknown CPU reading is reported as.
+ *
+ * The policy reads a low idle share as a shortage, so "nothing is known" has to
+ * be reported as room: a cold sampler, or one that has not watched long enough,
+ * must never move work or hold a message. Memory is read for real in the same
+ * answer and still gates on its own.
+ */
+const UNKNOWN_CPU_AVAILABLE_PERCENT = 100
 /** How long an armed sampler stays alive after the last read. */
 export const IDLE_DISARM_MS = 30_000
 
@@ -264,37 +284,33 @@ export class ResourcePressureSampler {
     const cpuAvailablePercent = this.#refreshCpu()
     this.#armIdleDisarm()
     return decideAdmission({
-      cpuAvailablePercent,
+      cpuAvailablePercent: cpuAvailablePercent ?? UNKNOWN_CPU_AVAILABLE_PERCENT,
       memoryAvailableBytes: await this.#readings.memoryAvailableBytes(),
       totalMemoryBytes: this.#readings.totalMemoryBytes()
     })
   }
 
   /**
-   * The idle share now, from the delta against the last snapshot held.
+   * The sustained idle share, or null while the window is still filling.
    *
-   * Zero means "nothing is known to be idle", never "the machine is short".
-   * The policy maps a busy CPU to `offload`, which starts the work on a process
-   * of its own rather than holding the message, so an unanswered CPU reading can
-   * only ever cost a small extra process and never the user's turn. That is why
-   * the first read after the process starts answers 0 and takes its delta to
-   * fill the window in the background: this read answers the send click, and an
-   * unanswered first reading must never be reported as a machine with no room
-   * and must never hold work. Memory comes back real in that same answer, and a
-   * genuine memory shortage may still hold the message, because that number is
-   * read and not unknown.
+   * Null means "unknown", never "short": the policy reports an idle machine as
+   * too little evidence, so nothing moves and nothing waits on it. The one second
+   * loop fills the window from the moment the first read arms it, so a machine
+   * that is genuinely pegged is known to be pegged within ten seconds, and a
+   * machine that had one busy moment is never called short for it.
    */
-  #refreshCpu(): number {
+  #refreshCpu(): number | null {
     const next = this.#readings.cpu()
     const previous = this.#previous
     this.#previous = next
     if (previous === null) {
       this.#prime()
-      return 0
+      return null
     }
     this.#push(idlePercent(previous, next))
     this.#startTicker()
-    return this.#averageIdlePercent() ?? 0
+    if (this.#window.length < SUSTAINED_SAMPLES) return null
+    return this.#averageIdlePercent()
   }
 
   #averageIdlePercent(): number | null {
@@ -305,11 +321,11 @@ export class ResourcePressureSampler {
   }
 
   /**
-   * The one short delta the first answer could not wait for.
+   * One short delta the first answer could not wait for.
    *
    * It runs off the caller's path: the read that starts it has already answered,
-   * and the window it fills is what later reads average. It is unref'd, like the
-   * loop it starts, so a pending prime never keeps the process alive.
+   * and the window it starts filling is what later reads average. It is unref'd,
+   * like the loop it starts, so a pending prime never keeps the process alive.
    */
   #prime(): void {
     if (this.#primeTimer) return
@@ -347,13 +363,15 @@ export class ResourcePressureSampler {
   }
 
   /**
-   * No reads for a while: stop the loop, and keep what it learned.
+   * No reads for a while: stop the loop, and forget the window it filled.
    *
-   * Dropping the snapshot and the window was what made the first send after a
-   * pause pay for a fresh warm-up. They stay instead: a delta taken across the
-   * idle gap is a legitimate reading of the same question, and the next read
-   * measures it without sleeping. Only the timers stop, which is all "no
-   * consumer, no timer" ever meant.
+   * The snapshot stays, so a delta taken across the idle gap is a real reading
+   * of the same question and the next read does not pay for a warm-up. The
+   * window goes, because it describes the last stretch of activity and nothing
+   * else: keeping it meant a burst from before the pause outvoted the present, so
+   * a machine that had a busy minute an hour ago still read as short. Starting
+   * again from the gap delta is both fresher and cheaper, and while the new
+   * window fills the answer is "unknown", which is never a shortage.
    */
   #disarm(): void {
     if (this.#ticker) clearInterval(this.#ticker)
@@ -362,6 +380,7 @@ export class ResourcePressureSampler {
     this.#ticker = null
     this.#idleTimer = null
     this.#primeTimer = null
+    this.#window.length = 0
   }
 }
 

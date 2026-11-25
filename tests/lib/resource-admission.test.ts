@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   CPU_AVAILABLE_FLOOR_PERCENT,
+  HOST_REJOIN_PERCENT,
+  HOST_SATURATION_PERCENT,
   LARGE_MACHINE_MEMORY_FLOOR_BYTES,
   LARGE_MACHINE_TOTAL_BYTES,
   OVEN_RUN_CAP_MAX,
@@ -9,6 +11,8 @@ import {
   decideAdmission,
   decideOvenAdmission,
   holdsAdmission,
+  hostHasRoom,
+  hostIsSaturated,
   memoryFloorBytes,
   ovenRunCapacity,
   type OvenResourceSample,
@@ -204,5 +208,39 @@ describe('ovenRunCapacity', () => {
   it('stays inside its bounds', () => {
     expect(ovenRunCapacity(0)).toBe(OVEN_RUN_CAP_MIN)
     expect(ovenRunCapacity(1024 * GB)).toBe(OVEN_RUN_CAP_MAX)
+  })
+})
+
+/**
+ * A second host is decided by the host's own CPU, never by the machine's.
+ *
+ * Offloading a session because some other program is busy moves no work off that
+ * program and only adds a process, so a machine pegged while its host is idle has
+ * to read as "one host is enough".
+ */
+describe('host placement', () => {
+  it('calls a host saturated only when it is spending a whole core', () => {
+    expect(hostIsSaturated(HOST_SATURATION_PERCENT)).toBe(true)
+    expect(hostIsSaturated(HOST_SATURATION_PERCENT - 0.1)).toBe(false)
+    // What a hosted session normally looks like: nowhere near its ceiling.
+    expect(hostIsSaturated(1.2)).toBe(false)
+  })
+
+  it('never calls an unread host saturated', () => {
+    expect(hostIsSaturated(null)).toBe(false)
+    expect(hostIsSaturated(Number.NaN)).toBe(false)
+  })
+
+  it('gives a borrowed session back well below the saturation gate', () => {
+    expect(hostHasRoom(HOST_REJOIN_PERCENT - 0.1)).toBe(true)
+    expect(hostHasRoom(HOST_REJOIN_PERCENT)).toBe(false)
+    // Draining at the gate itself would hand the sessions home, saturate the
+    // primary again, and open a host again on the next turn.
+    expect(hostHasRoom(HOST_SATURATION_PERCENT)).toBe(false)
+  })
+
+  it('treats an unread host as having room, because one host is the goal', () => {
+    expect(hostHasRoom(null)).toBe(true)
+    expect(hostHasRoom(Number.NaN)).toBe(true)
   })
 })

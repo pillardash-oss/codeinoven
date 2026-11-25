@@ -4,7 +4,6 @@ import {
   IDLE_DISARM_MS,
   PRIME_WINDOW_MS,
   ResourcePressureSampler,
-  type CpuSnapshot,
   type DeviceReadings
 } from '../../src/main/system/resource-pressure'
 
@@ -16,25 +15,37 @@ const GIGABYTE = 1024 ** 3
 const TOTAL_MEMORY_BYTES = 32 * GIGABYTE
 /** Well above the 0.5 GB floor of a machine this size, so memory never decides. */
 const AVAILABLE_MEMORY_BYTES = 6 * GIGABYTE
+/** Seconds of one-second readings the sampler has to watch before it believes a shortage. */
+const SUSTAINED_SECONDS = 10
 
 /**
- * A machine the test moves by hand.
+ * A machine the test drives by the second.
  *
- * `cpu()` hands out the snapshots in order and then repeats the one that is last
- * at the time of the call, so time only advances where the test pushes a newer
- * snapshot: a read that arrives with nothing elapsed measures a zero delta
- * instead of inventing CPU use.
+ * Every `cpu()` call advances one second of ticks and hands back the snapshot,
+ * so whatever idle share the test sets is exactly what that reading measured.
+ * Time is the test's, not the wall clock's: nothing here depends on how fast the
+ * runner is.
  */
-function scriptedMachine(snapshots: CpuSnapshot[]): DeviceReadings {
-  let read = 0
+function scriptedMachine(initialIdleShare: number): {
+  readings: DeviceReadings
+  setIdleShare: (share: number) => void
+} {
+  let idle = 0
+  let total = 0
+  let share = initialIdleShare
   return {
-    cpu: () => {
-      const snapshot = snapshots[Math.min(read, snapshots.length - 1)]
-      read += 1
-      return snapshot ?? { idle: 0, total: 0 }
+    readings: {
+      cpu: () => {
+        total += 100
+        idle += share * 100
+        return { idle, total }
+      },
+      memoryAvailableBytes: () => Promise.resolve(AVAILABLE_MEMORY_BYTES),
+      totalMemoryBytes: () => TOTAL_MEMORY_BYTES
     },
-    memoryAvailableBytes: () => Promise.resolve(AVAILABLE_MEMORY_BYTES),
-    totalMemoryBytes: () => TOTAL_MEMORY_BYTES
+    setIdleShare: (next) => {
+      share = next
+    }
   }
 }
 
@@ -64,52 +75,78 @@ describe('resource pressure reads', () => {
     vi.useRealTimers()
   })
 
-  it('answers the very first read without waiting for the prime', async () => {
-    const sampler = new ResourcePressureSampler(
-      scriptedMachine([
-        { idle: 0, total: 0 },
-        { idle: 90, total: 100 }
-      ])
-    )
+  /**
+   * A cold sampler knows nothing, and "nothing is known" is not "the machine is
+   * short". Reporting it as a shortage was how a burst, or the first read after a
+   * launch, moved work and held messages on a machine with room.
+   */
+  it('answers a cold read with room rather than a shortage', async () => {
+    const { readings } = scriptedMachine(0.9)
+    const sampler = new ResourcePressureSampler(readings)
 
     const decision = await readWithoutTimers(sampler)
 
-    // No snapshot behind the first read: nothing is known to be idle, which the
-    // policy turns into offload rather than a hold. The real memory reading
-    // travels with it.
     expect(decision).not.toBe('pending')
     if (decision === 'pending') return
-    expect(decision.cpuAvailablePercent).toBe(0)
-    expect(decision.action).toBe('offload')
+    expect(decision.cpuAvailablePercent).toBe(100)
+    expect(decision.action).toBe('proceed')
+    // The real memory reading travels with it: only the CPU is unknown.
     expect(decision.memoryAvailableBytes).toBe(AVAILABLE_MEMORY_BYTES)
     expect(decision.totalMemoryBytes).toBe(TOTAL_MEMORY_BYTES)
   })
 
-  it('answers a read after the idle disconnect from the retained window, without the prime', async () => {
-    const snapshots: CpuSnapshot[] = [
-      { idle: 0, total: 0 },
-      { idle: 80, total: 100 }
-    ]
-    const sampler = new ResourcePressureSampler(scriptedMachine(snapshots))
+  it('calls a machine short only after it has stayed short', async () => {
+    const { readings } = scriptedMachine(0.01)
+    const sampler = new ResourcePressureSampler(readings)
 
-    expect((await sampler.read()).cpuAvailablePercent).toBe(0)
-    // The background prime lands: 80 of 100 ticks idle, so the window is [80].
-    await vi.advanceTimersByTimeAsync(PRIME_WINDOW_MS)
-    // Nobody reads for the idle window, so the loop stops. No time passes in the
-    // scripted machine here, so the window keeps its one reading.
+    expect((await sampler.read()).action).toBe('proceed')
+    // Two busy seconds are a burst, not a machine that cannot take work.
+    await vi.advanceTimersByTimeAsync(PRIME_WINDOW_MS + 2_000)
+    expect((await sampler.read()).action).toBe('proceed')
+
+    await vi.advanceTimersByTimeAsync(SUSTAINED_SECONDS * 1_000)
+    const decision = await sampler.read()
+    expect(decision.cpuAvailablePercent).toBeCloseTo(1)
+    expect(decision.action).toBe('offload')
+  })
+
+  it('does not believe a burst inside an otherwise idle window', async () => {
+    const { readings, setIdleShare } = scriptedMachine(0.9)
+    const sampler = new ResourcePressureSampler(readings)
+    await sampler.read()
+
+    setIdleShare(0.01)
+    await vi.advanceTimersByTimeAsync(PRIME_WINDOW_MS + 3_000)
+    setIdleShare(0.95)
+    await vi.advanceTimersByTimeAsync(9_000)
+
+    const decision = await sampler.read()
+    // Three busy seconds out of thirteen cannot hold a message.
+    expect(decision.action).toBe('proceed')
+    expect(decision.cpuAvailablePercent).toBeGreaterThan(50)
+  })
+
+  /**
+   * A window describes the stretch of activity it was filled in, and nothing
+   * else. Keeping it across the idle pause let a busy minute from before the
+   * pause outvote the machine as it actually is afterwards.
+   */
+  it('forgets the window it filled once it stops watching', async () => {
+    const { readings, setIdleShare } = scriptedMachine(0.01)
+    const sampler = new ResourcePressureSampler(readings)
+    await sampler.read()
+    // A full window of a pegged machine, then nobody asks for thirty seconds.
+    await vi.advanceTimersByTimeAsync(PRIME_WINDOW_MS + 15_000)
     await vi.advanceTimersByTimeAsync(IDLE_DISARM_MS)
     expect(vi.getTimerCount()).toBe(0)
-    // 90 of the 100 ticks since the last sample were idle, across the gap.
-    snapshots.push({ idle: 170, total: 200 })
 
-    const decision = await readWithoutTimers(sampler)
+    setIdleShare(0.95)
+    const decision = await sampler.read()
 
-    // The gap delta went into the retained window and the average of both is the
-    // answer: a sampler that had dropped the window would answer 90, one that had
-    // dropped the snapshot as well would answer 0 and offload.
-    expect(decision).not.toBe('pending')
-    if (decision === 'pending') return
-    expect(decision.cpuAvailablePercent).toBe(85)
+    // The dropped window cannot outvote the present: the read answers from the
+    // delta across the pause, which is one reading, so the CPU is unknown and
+    // unknown is room.
+    expect(decision.cpuAvailablePercent).toBe(100)
     expect(decision.action).toBe('proceed')
   })
 })

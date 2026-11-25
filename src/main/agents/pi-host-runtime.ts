@@ -9,12 +9,21 @@
  */
 import { PiHostSupervisor } from './pi-host-supervisor'
 import { spawnPiHost } from './pi-host-launcher'
+import { HostCpuSampler } from './host-cpu-sampler'
 import { resourcePressure } from '../system/resource-pressure'
 import { appServiceRegistry } from '../system/app-service-registry'
 import { Logger } from '../system/logger'
 
 let supervisor: PiHostSupervisor | null = null
 let unsubscribeHosts: (() => void) | null = null
+/**
+ * Per-host CPU, the reading that decides whether new work needs another host.
+ *
+ * It lives here rather than in the supervisor because it is a timer over the
+ * app's process metrics, and a timer is armed and disarmed by whoever knows
+ * whether there is anything to answer for (see {@link syncHostServices}).
+ */
+const hostCpu = new HostCpuSampler()
 /** Retry that waits for Electron to name a host process's pid. */
 let pidRetry: ReturnType<typeof setTimeout> | null = null
 /** Pid retries left for the hosts running right now. */
@@ -27,10 +36,11 @@ export function piHostSupervisor(): PiHostSupervisor {
   if (supervisor !== null) return supervisor
   const created = new PiHostSupervisor(spawnPiHost, {
     requestTimeoutMs: 10 * 60_000,
-    // Placement is main's decision. A busy CPU opens a temporary host so new work
-    // does not queue behind it, and the rejoin check hands those sessions back to
-    // the primary once the same reading says there is room, which is what keeps
-    // the one-host arrangement that costs the least RAM.
+    // Placement is main's decision, and it is about the host process, not the
+    // device: a second host relieves this host's event loop, and it can never
+    // relieve whatever else on the machine is using the CPU. The device reading
+    // is there only to refuse a second process on a machine short on memory.
+    readHostCpu: (pid) => hostCpu.cpuPercent(pid),
     readPressure: () => resourcePressure.read()
   })
   // A host is a process, so its row is created when it starts and dropped when
@@ -49,6 +59,7 @@ export function stopPiHost(): void {
   unsubscribeHosts = null
   if (pidRetry !== null) clearTimeout(pidRetry)
   pidRetry = null
+  hostCpu.stop()
   supervisor?.stop()
   supervisor = null
   for (const id of hostServiceIds.values()) appServiceRegistry.unregister(id)
@@ -113,4 +124,20 @@ function syncHostServices(host: PiHostSupervisor): void {
     pidRetry.unref?.()
   }
   if (live.length === named.length) pidRetriesLeft = 20
+  syncHostCpuSampling(host, live)
+}
+
+/**
+ * Arm or disarm the host CPU sampler.
+ *
+ * Sampling is a timer, so it exists only while it has an answer to give: a host
+ * with a turn in flight (which is exactly when a sub-agent asks for a session and
+ * a placement decision is made), or a temporary host whose loan the primary's
+ * own CPU decides on. A host keeping idle sessions warm needs neither, and an
+ * idle app then holds no timer at all.
+ */
+function syncHostCpuSampling(host: PiHostSupervisor, live: number[]): void {
+  const working = live.some((pid) => pid > 0 && host.busyOn(pid) > 0)
+  if (live.length > 1 || working) hostCpu.start()
+  else hostCpu.stop()
 }
