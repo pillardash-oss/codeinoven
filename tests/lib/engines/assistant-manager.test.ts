@@ -4,6 +4,7 @@ import { AssistantManager } from '../../../src/lib/engines/assistant-manager'
 import { ProjectManager } from '../../../src/lib/engines/project-manager'
 import { ThreadManager } from '../../../src/lib/engines/thread-manager'
 import { ASSISTANT_SPACE_ID, assistantKnowledgeComplete } from '../../../src/lib/types'
+import type { Assistant, Thread } from '../../../src/lib/types'
 import type { Database } from '../../../src/main/database/database'
 
 describe('AssistantManager', () => {
@@ -189,6 +190,63 @@ describe('AssistantManager', () => {
     expect(assistants.knowledgeThread(assistant.id)).toBeNull()
     expect(assistants.listAssistantTasks().map((entry) => entry.id)).not.toContain(task.id)
     expect(await threads.getThread(ASSISTANT_SPACE_ID, setup.id)).toBeNull()
+  })
+
+  /**
+   * An assistant whose clock is the whole assistant: its knowledge, its model and
+   * its schedule live in the Getting started thread, so that thread is the only
+   * thing its clock can run. Amebo had exactly this shape and silently lost its
+   * daily run, first when the thread was hidden and then when the task listing
+   * learned to skip setup threads.
+   */
+  async function makeKnowledgeOnlyAssistant(): Promise<{
+    setup: Thread
+    assistant: Assistant
+  }> {
+    const assistant = assistants.createAssistant({
+      name: 'Amebo',
+      schedule: { cadence: 'weekdays', times: ['08:30'] },
+      scheduleName: "Amebo's Roundup"
+    })
+    const setup = await threads.createThread({
+      projectId: ASSISTANT_SPACE_ID,
+      providerId: 'pi',
+      title: 'Getting started',
+      assistantId: assistant.id,
+      assistantGettingStarted: true
+    })
+    return { setup, assistant }
+  }
+
+  it('runs an assistant that owns no task thread on its knowledge thread', async () => {
+    const { setup, assistant } = await makeKnowledgeOnlyAssistant()
+    // The task listing stays truthful: the authoring host is not a job.
+    expect(assistants.listAssistantTasks()).toEqual([])
+    expect(assistants.listAssistantClockTargets().map((entry) => entry.id)).toEqual([setup.id])
+    expect(assistants.listAssistantClockTargetsFor(assistant.id).map((entry) => entry.id)).toEqual([
+      setup.id
+    ])
+  })
+
+  it('keeps a hidden knowledge thread on its assistant clock', async () => {
+    const { setup, assistant } = await makeKnowledgeOnlyAssistant()
+    assistants.setKnowledgeHidden(assistant.id, true)
+    expect(assistants.knowledgeThread(assistant.id)?.archived).toBe(true)
+    // Hiding takes the row out of the sidebar's lists and nothing else.
+    expect(assistants.listAssistantTasks()).toEqual([])
+    expect(assistants.listAssistantClockTargets().map((entry) => entry.id)).toEqual([setup.id])
+  })
+
+  it('prefers a real task over the knowledge thread once the assistant owns one', async () => {
+    const { assistant } = await makeKnowledgeOnlyAssistant()
+    const task = await threads.createThread({
+      projectId: ASSISTANT_SPACE_ID,
+      providerId: 'pi',
+      title: 'Triage the queue'
+    })
+    assistants.assignTask(task.id, assistant.id)
+    // A task is the job; the authoring host stops standing in for one.
+    expect(assistants.listAssistantClockTargets().map((entry) => entry.id)).toEqual([task.id])
   })
 
   it('lists only assistant-space tasks', async () => {

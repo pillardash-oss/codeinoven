@@ -45,8 +45,13 @@ function schedulesEqual(
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
-/** Listing options shared by the sync and worker-backed task listings. */
-const LIST_TASKS_OPTIONS: ThreadListOptions = { includeArchived: false }
+/**
+ * Listing options for a clock read. An archived row means two different things
+ * in the assistant space, so the listing has to see archived rows to tell them
+ * apart: a retired task is off the clock, while a hidden knowledge thread is
+ * only out of the sidebar and still hosts its assistant's roundup.
+ */
+const ASSISTANT_SPACE_OPTIONS: ThreadListOptions = { includeArchived: true }
 
 /**
  * AssistantManager   CRUD and task-grouping for assistants.
@@ -528,12 +533,51 @@ export class AssistantManager {
    * here made the scheduler run it on every slot of its assistant's clock and
    * dispatch the assistant against its own name with no task to do. The panel
    * already counts only real tasks (`assistantThreadCount`) and the run contract
-   * already refuses to run the setup thread; the scheduler now agrees with both.
+   * already refuses to run the setup thread.
+   *
+   * The clock is a different question from the task listing, and it is answered by
+   * `listAssistantClockTargets`: an assistant with no task thread at all is run by
+   * its own roundup instead of being silently dropped from the schedule.
    */
   listAssistantTasks(): Thread[] {
-    // Archived tasks are hidden tasks: they keep their thread and their
-    // history but are never listed, scheduled, or counted again.
-    return this.listableTaskThreads(this.assistantTaskThreads())
+    return this.taskThreadsFrom(
+      this.threadRepo.listByProject(ASSISTANT_SPACE_ID, ASSISTANT_SPACE_OPTIONS)
+    )
+  }
+
+  /**
+   * What the clock can fire, which is more than the task listing holds.
+   *
+   * A task thread is the normal target. An assistant that owns no task thread
+   * still has a clock   the schedule belongs to the assistant, and its knowledge
+   * and its model live in its Getting started thread   so that thread is what its
+   * roundup runs on. Firing it whenever a task existed is what made Pildash
+   * research its own name every Monday and Friday; firing it only when nothing
+   * else is on the clock keeps the assistant that has one job from going silent,
+   * which is what happened to Amebo.
+   *
+   * A knowledge thread is a target whether or not it is hidden. Hiding it is a
+   * sidebar state ("take the authoring host out of my lists"), never a statement
+   * about the assistant's clock, so it must not cost the user their runs.
+   */
+  listAssistantClockTargets(): Thread[] {
+    return this.clockTargetsFrom(
+      this.threadRepo.listByProject(ASSISTANT_SPACE_ID, ASSISTANT_SPACE_OPTIONS)
+    )
+  }
+
+  /** The clock targets of one assistant. */
+  listAssistantClockTargetsFor(assistantId: string): Thread[] {
+    return this.listAssistantClockTargets().filter((thread) => thread.assistantId === assistantId)
+  }
+
+  /** The clock targets, read on the database worker (see `listAssistantTasksViaWorker`). */
+  async listAssistantClockTargetsViaWorker(): Promise<Thread[]> {
+    const rows = await this.threadRepo.listByProjectViaWorker(
+      ASSISTANT_SPACE_ID,
+      ASSISTANT_SPACE_OPTIONS
+    )
+    return this.clockTargetsFrom(rows)
   }
 
   /**
@@ -547,19 +591,46 @@ export class AssistantManager {
   async listAssistantTasksViaWorker(): Promise<Thread[]> {
     const rows = await this.threadRepo.listByProjectViaWorker(
       ASSISTANT_SPACE_ID,
-      LIST_TASKS_OPTIONS
+      ASSISTANT_SPACE_OPTIONS
     )
-    return this.listableTaskThreads(rows)
+    return this.taskThreadsFrom(rows)
   }
 
-  private listableTaskThreads(rows: Thread[]): Thread[] {
+  /**
+   * The task threads in one assistant-space read. A run is one execution of a
+   * task, never a task, and an archived task is one the user retired: it keeps
+   * its thread and its history but is never listed, scheduled, or counted again.
+   */
+  private taskThreadsFrom(rows: readonly Thread[]): Thread[] {
     return rows
-      .filter((thread) => !isAssistantRunThread(thread) && !isAssistantSetupThread(thread))
+      .filter(
+        (thread) =>
+          !isAssistantRunThread(thread) && !isAssistantSetupThread(thread) && !thread.archived
+      )
       .sort((a, b) => b.lastActivity - a.lastActivity)
   }
 
-  private assistantTaskThreads(): Thread[] {
-    return this.threadRepo.listByProject(ASSISTANT_SPACE_ID, LIST_TASKS_OPTIONS)
+  /** The newest Getting started thread of every assistant that owns no task thread. */
+  private roundupThreadsFrom(rows: readonly Thread[]): Thread[] {
+    const owned = new Set<string>()
+    for (const thread of rows) {
+      if (thread.assistantId && !isAssistantRunThread(thread) && !isAssistantSetupThread(thread))
+        owned.add(thread.assistantId)
+    }
+    const newest = new Map<string, Thread>()
+    for (const thread of rows) {
+      if (!thread.assistantId || owned.has(thread.assistantId)) continue
+      if (!isAssistantSetupThread(thread)) continue
+      const current = newest.get(thread.assistantId)
+      if (!current || thread.createdAt > current.createdAt) newest.set(thread.assistantId, thread)
+    }
+    return [...newest.values()]
+  }
+
+  private clockTargetsFrom(rows: readonly Thread[]): Thread[] {
+    return [...this.taskThreadsFrom(rows), ...this.roundupThreadsFrom(rows)].sort(
+      (a, b) => b.lastActivity - a.lastActivity
+    )
   }
 
   /**
@@ -607,7 +678,10 @@ export class AssistantManager {
   /**
    * Hide or reveal an assistant's knowledge thread by archiving it. The thread stays
    * pinned in both states, so it is never evicted and never unpinnable; the
-   * archive flag is only what takes it out of the sidebar's lists.
+   * archive flag is only what takes it out of the sidebar's lists. It is never what
+   * takes the assistant off its clock: an assistant whose only thread is this one
+   * still runs its roundup on it (`listAssistantClockTargets`), because hiding the
+   * authoring host is a sidebar choice, not a request to stop the schedule.
    */
   setKnowledgeHidden(assistantId: string, hidden: boolean): Thread {
     const existing = this.knowledgeThread(assistantId)

@@ -560,7 +560,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         Logger.dev('Scheduled assistant run skipped   no chat engine', { threadId: task.id })
         return
       }
-      const prompt = assistantRunPrompt(task, assistant?.name)
+      const prompt = assistantRunPrompt(task, assistant?.name, assistant?.scheduleName)
       const runSettings = run.settings ?? task.settings
       if (!runSettings) {
         Logger.error('Assistant run has no bound settings', { taskId: task.id, runId: run.id })
