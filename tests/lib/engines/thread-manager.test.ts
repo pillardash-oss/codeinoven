@@ -283,6 +283,126 @@ describe('ThreadManager', () => {
     })
   })
 
+  it('never evicts a working thread, even when it is the oldest candidate', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-26T13:00:00.000Z'))
+    const { manager } = await createManager(2)
+    const working = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Running now'
+    })
+    await manager.setStatus('project1', working.id, 'executing')
+
+    vi.setSystemTime(new Date('2026-07-26T13:01:00.000Z'))
+    const idle = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Idle'
+    })
+
+    // The bucket is full and the running thread is the oldest row, so eviction
+    // must skip it and take the idle thread instead of killing live work.
+    vi.setSystemTime(new Date('2026-07-26T13:02:00.000Z'))
+    const created = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Created'
+    })
+    expect(await manager.getThread('project1', working.id)).not.toBeNull()
+    expect(await manager.getThread('project1', idle.id)).toBeNull()
+    expect(await manager.getThread('project1', created.id)).not.toBeNull()
+  })
+
+  it('never evicts a thread parked on the user for an answer', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-26T13:30:00.000Z'))
+    const { manager } = await createManager(2)
+    const parked = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Waiting on a permission card'
+    })
+    await manager.setStatus('project1', parked.id, 'awaiting_approval')
+
+    vi.setSystemTime(new Date('2026-07-26T13:31:00.000Z'))
+    const idle = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Idle'
+    })
+
+    vi.setSystemTime(new Date('2026-07-26T13:32:00.000Z'))
+    await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Created'
+    })
+    expect(await manager.getThread('project1', parked.id)).not.toBeNull()
+    expect(await manager.getThread('project1', idle.id)).toBeNull()
+  })
+
+  it('never evicts an unread thread', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-26T14:00:00.000Z'))
+    const { manager } = await createManager(2)
+    const finished = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Finished, never opened'
+    })
+    await manager.setStatus('project1', finished.id, 'completed')
+    await manager.markUnread('project1', finished.id)
+
+    vi.setSystemTime(new Date('2026-07-26T14:01:00.000Z'))
+    const idle = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Idle'
+    })
+
+    // The unread result is the oldest candidate and still survives: the dot the
+    // user was promised must not disappear before they opened the thread.
+    vi.setSystemTime(new Date('2026-07-26T14:02:00.000Z'))
+    await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Created'
+    })
+    expect(await manager.getThread('project1', finished.id)).not.toBeNull()
+    expect(await manager.getThread('project1', idle.id)).toBeNull()
+  })
+
+  it('refuses to exceed the limit when every thread is unread or working', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-26T14:30:00.000Z'))
+    const { manager } = await createManager(2)
+    const running = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Running'
+    })
+    await manager.setStatus('project1', running.id, 'planning')
+    const unread = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Unread'
+    })
+    await manager.setStatus('project1', unread.id, 'completed')
+    await manager.markUnread('project1', unread.id)
+
+    await expect(
+      manager.createThread({
+        projectId: 'project1',
+        providerId: 'openai',
+        title: 'Cannot fit'
+      })
+    ).rejects.toThrow(AllThreadsProtectedError)
+
+    expect(await manager.getThread('project1', running.id)).not.toBeNull()
+    expect(await manager.getThread('project1', unread.id)).not.toBeNull()
+  })
+
   it('keeps a stable feature slug across renames and forks', async () => {
     const { manager, db } = await createManager()
     const parent = await manager.createThread({

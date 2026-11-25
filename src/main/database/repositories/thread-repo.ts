@@ -468,6 +468,8 @@ export interface ThreadCapacityCandidate {
   id: string
   pinned: boolean
   status: ThreadStatus
+  /** Unread threads are immune to automatic cleanup, so the flag travels here. */
+  read: boolean
   lastActivity: number
   /** Owning scope bucket; `undefined` resolves to the Default scope. */
   scopeBucketId?: string
@@ -1069,13 +1071,17 @@ export class ThreadRepo {
    * Read only the fields needed to enforce per-project capacity on the worker.
    * Orchestration children do not count toward the user-visible thread bound.
    *
+   * A candidate is not the same as an eviction: `read`, `status`, `pinned` and
+   * the orchestration roles travel here so the capacity rules can refuse to
+   * delete an unread, busy, parked, `spec` or coordinating thread.
+   *
    * An archived thread is invincible: it is never a candidate, it never occupies
    * one of the project's slots, and neither is a thread whose subtree holds one,
    * because deleting that thread would take the archived conversation with it.
    */
   async listCapacityCandidatesViaWorker(projectId: string): Promise<ThreadCapacityCandidate[]> {
     const result = await this.db.queryViaWorker(
-      `SELECT id, pinned, status, last_activity, scope_bucket_id, assignment_role, achievement_role
+      `SELECT id, pinned, status, read, last_activity, scope_bucket_id, assignment_role, achievement_role
        FROM threads
        WHERE project_id = ?
          AND ${unarchivedThreadSql()}
@@ -1092,6 +1098,9 @@ export class ThreadRepo {
       id: String(row['id']),
       pinned: row['pinned'] === 1,
       status: String(row['status']) as ThreadStatus,
+      // Defaulted to read so a row written before the column existed is never
+      // shielded from cleanup by a missing value.
+      read: row['read'] == null ? true : Number(row['read']) === 1,
       lastActivity: Number(row['last_activity']),
       scopeBucketId: row['scope_bucket_id'] == null ? undefined : String(row['scope_bucket_id']),
       assignmentRole:
