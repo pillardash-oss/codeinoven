@@ -344,12 +344,10 @@ function markWorkspaceReadyIfInteractive(): void {
   // workspace so the first Cmd+K thread search ranks semantically instead of
   // paying the model load inside its answer. No-op unless intent search is on.
   state.searchService?.warm()
-  // The workspace is settled and interactive, which is the second moment the
-  // microphone is allowed to open ahead of a press: a user who reaches for the
-  // dictation shortcut without ever hovering a mic must not lose their first
-  // words to CoreAudio's device open. A press that already came first wins, and
-  // the late arm stands down instead of re-opening the device.
-  state.speechService?.warmCaptureAfterSettle()
+  // Nothing here touches the microphone. A settled workspace is not a gesture:
+  // opening the input device at this point lit the system microphone indicator
+  // on every launch, so the device opens only when the user actually asks to
+  // record (a pointer over a mic, the first tap of the shortcut, or the press).
   void completeStartupIfReady()
 }
 

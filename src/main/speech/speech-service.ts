@@ -277,25 +277,15 @@ export class SpeechService {
     void this.nativeCapture.ping().catch((error) => {
       Logger.dev('Native speech capture could not be started ahead of time:', error)
     })
-    // The microphone is not opened here. Opening CoreAudio's input device is
-    // what lights the system microphone indicator, so at launch the app would
-    // look like it was recording while the user was only looking at their
-    // desktop. The device is opened at the first of two moments instead: the
-    // user's first real gesture (a pointer over a mic, or the first tap of the
-    // dictation shortcut) or, if none has come, once the workspace has settled
-    // and the user could actually record (see `warmCaptureAfterSettle`).
+    // The microphone is never opened here, and never on a timer either. Opening
+    // CoreAudio's input device is what lights the system microphone indicator,
+    // so any boot- or settle-time warmup made the app look like it was
+    // recording while the user was only looking at their desktop. The device
+    // opens on exactly one kind of trigger: an explicit gesture from the user
+    // (a pointer over a mic, the first tap of the dictation shortcut, or the
+    // press itself). Nothing that happens without the user asking touches it.
   }
 
-  private captureWarmupTimer: ReturnType<typeof setTimeout> | null = null
-  /**
-   * Whether the microphone has been opened once this session, by a warmup or by
-   * a press.
-   *
-   * Priming builds the engine and leaves the device released, so the second
-   * caller has nothing to gain and a second device open only re-lights the
-   * microphone indicator for no reason.
-   */
-  private capturePrimed = false
   /**
    * Reads the `voiceRecordingEnabled` setting, the second way a user can have a
    * mic on screen (the first is an installed ASR model). Wired by the boot
@@ -307,70 +297,6 @@ export class SpeechService {
   /** Let the capture gate see the audio-to-LLM setting. */
   setDictationSettingSource(source: () => Promise<boolean>): void {
     this.dictationSettingEnabled = source
-  }
-
-  /**
-   * Open the microphone once the workspace has settled.
-   *
-   * Boot is over by then: the splash is gone, the renderer has hydrated and the
-   * feature graph is up, so a device open no longer competes with startup. This
-   * is the second of the two moments the microphone may open; a press that
-   * arrives first wins, and `capturePrimed` is what makes the late arm a no-op
-   * then instead of re-opening the device behind a live take.
-   *
-   * The microphone is released again by the warmup itself (the engine is built
-   * and then stopped), so what this buys is a press that starts the take instead
-   * of paying CoreAudio's 150-800 ms device open and losing the first words.
-   */
-  warmCaptureAfterSettle(delayMs = 750): void {
-    if (this.capturePrimed) return
-    this.scheduleCaptureWarmup(delayMs)
-  }
-
-  /**
-   * Prime the native microphone ahead of a press.
-   *
-   * Warming rather than waiting for the press is what makes a shortcut recording
-   * start on the press: a shortcut never hovers a mic, so a gesture-driven
-   * warmup cannot help it. Every caller runs after the app is usable and is
-   * skipped once the microphone has been primed already.
-   */
-  private scheduleCaptureWarmup(delayMs: number): void {
-    if (this.captureWarmupTimer) clearTimeout(this.captureWarmupTimer)
-    if (this.capturePrimed) return
-    if (!microphoneAccessGranted()) return
-    this.captureWarmupTimer = setTimeout(() => {
-      this.captureWarmupTimer = null
-      void this.warmCaptureIfIdle()
-    }, delayMs)
-  }
-
-  private async warmCaptureIfIdle(): Promise<void> {
-    // A take that started first (or a microphone the user is already holding
-    // open by hovering a mic) owns the device, and priming underneath it would
-    // shut the engine it depends on.
-    if (this.capturePrimed || this.openCaptures.size > 0) return
-    if (!microphoneAccessGranted()) return
-    // Gate the warmup exactly like the mic control it exists for: a user with no
-    // usable model and the audio-to-LLM setting off has no mic on screen, and
-    // the microphone must not open for them.
-    if (!(await this.dictationAvailable())) return
-    // A sibling instance that is recording negotiated the device already, and a
-    // second process opening it can make that device renegotiate mid-take.
-    if (await this.storage.anotherInstanceIsRecording()) return
-    if (this.capturePrimed || this.openCaptures.size > 0) return
-    this.capturePrimed = true
-    await this.nativeCapture.warm().catch((error) => {
-      Logger.dev('Native speech capture warmup failed (non-fatal):', error)
-    })
-  }
-
-  /** A press supersedes any warmup still waiting on its timer. */
-  private claimCapturePrimed(): void {
-    this.capturePrimed = true
-    if (!this.captureWarmupTimer) return
-    clearTimeout(this.captureWarmupTimer)
-    this.captureWarmupTimer = null
   }
 
   /**
@@ -537,9 +463,6 @@ export class SpeechService {
     // never opens the microphone.
     if (!(await this.dictationAvailable())) return
     if (await this.storage.anotherInstanceIsRecording()) return
-    // The user's intent is here first, so a warmup still waiting on its timer
-    // must not open the device a second time underneath this arm.
-    this.claimCapturePrimed()
     await this.nativeCapture.arm()
   }
 
@@ -586,9 +509,6 @@ export class SpeechService {
     // opens CoreAudio while the answer is still pending.
     const access = await requestMicrophoneAccess()
     if (!access.granted) throw new Error(access.message ?? 'Microphone access is unavailable.')
-    // The press is the warmup's equal: whichever came first opens the device, and
-    // the other one stands down instead of re-opening it mid-take.
-    this.claimCapturePrimed()
     const started = await this.storage.beginNativeCapture(scope)
     try {
       // `pressedAt` is the instant of the gesture, not of this line: the take
@@ -678,14 +598,7 @@ export class SpeechService {
 
   async failNativeCapture(sessionId: string, message: string): Promise<SpeechRecordingAttempt> {
     await this.nativeCapture.stop(sessionId).catch(() => undefined)
-    const attempt = await this.failCapture(sessionId, message)
-    // A failed take can leave the recorder dead or cold, and that is the one
-    // case a primed microphone no longer means anything: the next press is a
-    // retry the user has already asked for, so the device is opened again for it
-    // rather than the retry paying the open and losing its first words.
-    this.capturePrimed = false
-    if (microphoneAccessGranted()) this.scheduleCaptureWarmup(500)
-    return attempt
+    return this.failCapture(sessionId, message)
   }
 
   async markAttemptFailure(attemptId: string, message: string): Promise<SpeechRecordingAttempt> {
@@ -1250,11 +1163,6 @@ export class SpeechService {
       existing.available = true
       if (capability) existing.capability = capability
       await this.persistInstalledIndex()
-      // The mic appears as soon as an ASR model is usable, so the recorder is
-      // primed for it now rather than on the first press.
-      if (existing.capability === 'asr' && microphoneAccessGranted()) {
-        this.scheduleCaptureWarmup(0)
-      }
       this.emit({ kind: 'history', attemptId: existing.artifactId, stage: 'completed' })
       return structuredClone(existing)
     }
@@ -1270,7 +1178,6 @@ export class SpeechService {
     }
     this.installed.artifacts.push(artifact)
     await this.persistInstalledIndex()
-    if (capability === 'asr' && microphoneAccessGranted()) this.scheduleCaptureWarmup(0)
     this.emit({ kind: 'history', attemptId: artifact.artifactId, stage: 'completed' })
     return structuredClone(artifact)
   }
@@ -1597,10 +1504,6 @@ export class SpeechService {
   }
 
   async dispose(): Promise<void> {
-    if (this.captureWarmupTimer) {
-      clearTimeout(this.captureWarmupTimer)
-      this.captureWarmupTimer = null
-    }
     this.eviction.dispose()
     this.downloader.abortAll()
     const activeNativeSession = this.nativeCapture.activeSessionId
@@ -1938,9 +1841,6 @@ export class SpeechService {
       capability: artifact.capability
     })
     await this.persistInstalledIndex()
-    // A model that just became usable is the moment the mic appears for a user
-    // who had none, so this is when the recorder is primed for it.
-    if (artifact.capability === 'asr' && microphoneAccessGranted()) this.scheduleCaptureWarmup(0)
   }
 
   private installedIndexPath(): string {
