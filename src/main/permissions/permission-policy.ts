@@ -102,6 +102,64 @@ const SAFE_AUTO_PERMISSIONS = new Set(['read', 'list', 'search'])
  *  but deleting a spec or a worktree destroys authored work, so those stay
  *  gated even though their parent folder never prompts. */
 const SCRATCH_RESERVED_DIRECTORIES = ['specs', 'git'] as const
+/** One `NAME=<literal>` assignment a chain made before using it. Only literal
+ *  text is recorded: a value that evaluates anything stays unresolved, so the
+ *  proofs below keep asking about it. */
+const SHELL_ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u
+const SHELL_ASSIGNMENT_VALUE = /^[A-Za-z0-9._~/-]+$/u
+
+function recordShellAssignment(tokens: readonly string[], variables: Map<string, string>): boolean {
+  if (tokens.length !== 1) return false
+  const match = SHELL_ASSIGNMENT.exec(tokens[0] ?? '')
+  const name = match?.[1]
+  const value = match?.[2]
+  if (name === undefined || value === undefined) return false
+  if (!SHELL_ASSIGNMENT_VALUE.test(value)) return false
+  variables.set(name, value)
+  return true
+}
+
+/** One token with the chain's own literal assignments and `$PWD` applied.
+ *
+ *  `$PWD` is the directory the shell is in at that point, which the caller
+ *  tracks through `cd`. Undefined when the token still depends on something
+ *  this module cannot read: substitution, an unknown variable, a backtick. */
+function expandShellToken(
+  token: string,
+  variables: ReadonlyMap<string, string>,
+  workingDirectory: string
+): string | undefined {
+  let unresolved = false
+  const expanded = token.replace(
+    /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/gu,
+    (_match: string, braced: string | undefined, bare: string | undefined) => {
+      const name = braced ?? bare ?? ''
+      if (name === 'PWD') return workingDirectory
+      const value = variables.get(name)
+      if (value === undefined) unresolved = true
+      return value ?? ''
+    }
+  )
+  if (unresolved || /[`$]/u.test(expanded)) return undefined
+  return expanded
+}
+
+/** Every token of one segment, expanded. Undefined when any of them is
+ *  unreadable, because a proof that skips one token proves nothing. */
+function expandShellSegment(
+  segment: readonly string[],
+  variables: ReadonlyMap<string, string>,
+  workingDirectory: string
+): string[] | undefined {
+  const expanded: string[] = []
+  for (const token of segment) {
+    const value = expandShellToken(token, variables, workingDirectory)
+    if (value === undefined) return undefined
+    expanded.push(value)
+  }
+  return expanded
+}
+
 /** Commands that run another command from a string. A scratch-confined call
  *  cannot vouch for what these evaluate, so they always ask. */
 const SHELL_INTERPRETERS = new Set([
@@ -587,22 +645,49 @@ export class PermissionPolicy {
     })
   }
 
+  /** Whether a delete target with a glob provably only enumerates inside work
+   *  this session owns.
+   *
+   *  A shell glob expands to names inside the directory its static prefix
+   *  names; it cannot climb out without a literal `..`, and a target that names
+   *  one is refused. So deleting a `packages` glob of build output under the
+   *  stage proves what deleting one package's output proves. A pattern with no
+   *  prefix at all (`rm -rf *`, `rm -rf /*`) still asks: it names no directory
+   *  this module can check. */
+  private isConfinedDeletionGlob(target: string, base: string): boolean {
+    if (!target || target.startsWith('~')) return false
+    if (hasTraversal(target)) return false
+    const prefix = target.split(/[*?[\]]/u)[0] ?? ''
+    if (prefix.length === 0) return false
+    const normalized = normalizeNativePath(prefix)
+    const resolvedPrefix = isAbsolute(normalized) ? resolve(normalized) : resolve(base, normalized)
+    return this.isConfinedDeletionTarget(resolvedPrefix)
+  }
+
   /** Whether a shell command provably removes only files this session owns.
    *
    *  Only the segments that actually delete are proven, and each one is
    *  resolved against the working directory the chain has `cd`ed into so a
-   *  `cd` out of the session's roots rejects. A glob, a variable, a
-   *  substitution, a `~`, or a wrapper that evaluates another command hides
-   *  its targets, so it yields false and the ordinary card still asks. */
+   *  `cd` out of the session's roots rejects. A glob, a substitution, a `~`,
+   *  or a wrapper that evaluates another command hides its targets, so it
+   *  yields false and the ordinary card still asks. A `NAME=<literal>`
+   *  assignment is followed the way the shell follows it, and `$PWD` is the
+   *  directory the chain is in at that point, so `S=.cio/tmp/stage; rm -rf
+   *  "$S"` proves what `rm -rf .cio/tmp/stage` proves.
+   */
   private isConfinedDestructiveCommand(command: string): boolean {
     if (!command.trim() || command.length > MAX_PROVEN_COMMAND_LENGTH) return false
-    if (/[$`\n\r{}]/u.test(command)) return false
+    if (/[`\n\r{}]/u.test(command)) return false
     const segments = shellSegments(command)
     if (!segments) return false
+    const variables = new Map<string, string>()
     let workingDirectory: string | undefined = this.projectRoot
     let removesSomething = false
     for (const segment of segments) {
-      const references = segmentReferences(segment)
+      const expanded = expandShellSegment(segment, variables, workingDirectory ?? this.projectRoot)
+      if (expanded === undefined) return false
+      if (recordShellAssignment(expanded, variables)) continue
+      const references = segmentReferences(expanded)
       if (references === undefined) return false
       const [name, ...operands] = references.tokens
       if (name === undefined) return false
@@ -632,7 +717,13 @@ export class PermissionPolicy {
       }
       if (removal.length === 0) return false
       for (const target of removal) {
-        if (!isReadableTarget(target)) return false
+        if (!isReadableTarget(target)) {
+          // A glob is proven by the directory it enumerates, not by the names
+          // it matches: a pattern cannot leave the directory its static prefix
+          // names without a literal `..`, and that is refused here.
+          if (!this.isConfinedDeletionGlob(target, workingDirectory)) return false
+          continue
+        }
         const normalized = normalizeNativePath(target)
         const resolvedPath = isAbsolute(normalized)
           ? resolve(normalized)
@@ -667,16 +758,23 @@ export class PermissionPolicy {
    * traversal, a heredoc, and anything that evaluates another command reject:
    * those can reach outside without naming a path the policy can see. A
    * redirect to `/dev/null` and a descriptor duplication name no file at all,
-   * so they never disqualify an otherwise confined command.
+   * so they never disqualify an otherwise confined command. A `NAME=<literal>`
+   * assignment is read the way the shell reads it, and `$PWD` is the directory
+   * the chain is in at that point, so staging through `S=.cio/tmp/stage` is
+   * provable instead of asking because a `$` appeared.
    */
   private isScratchCommand(command: string): boolean {
     if (!command.trim() || command.length > 8192) return false
-    if (/[`$]/u.test(command) || /\n|\r/u.test(command)) return false
+    if (/[`]/u.test(command) || /\n|\r/u.test(command)) return false
     const segments = shellSegments(command)
     if (!segments) return false
+    const variables = new Map<string, string>()
     let workingDirectory = this.projectRoot
     for (const segment of segments) {
-      const references = segmentReferences(segment)
+      const expanded = expandShellSegment(segment, variables, workingDirectory)
+      if (expanded === undefined) return false
+      if (recordShellAssignment(expanded, variables)) continue
+      const references = segmentReferences(expanded)
       if (references === undefined) return false
       const [name, ...operands] = references.tokens
       if (name === undefined) return false
