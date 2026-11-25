@@ -39,6 +39,19 @@
       ...job.tools
     ]
   })
+  /**
+   * What "Run in background" means for a handoff.
+   *
+   * A run that already has its thread does not need a dock chip: the thread is
+   * on screen showing the same progress, so the panel simply goes away. Until
+   * the thread exists the run has no other surface, and docking it keeps the
+   * only report of the handoff within reach.
+   */
+  function background(): void {
+    if (job.threadId && job.started) agentAssistJobs.dismiss(job.id)
+    else agentAssistJobs.minimize(job.id)
+  }
+
   function openThread(): void {
     if (job.threadId)
       void openAssistThread(job.projectId, job.threadId).then(
@@ -80,7 +93,7 @@
           ? 'The configured prompt is ready for you to edit and send.'
           : 'Open the thread for the full result and any requested answers.'}
   minimized={job.minimized}
-  onMinimize={() => agentAssistJobs.minimize(job.id)}
+  onMinimize={background}
   onClose={() => agentAssistJobs.close(job.id)}
   storageKey={`agent-assist-job-${job.id}`}
   actionWhileRunning
