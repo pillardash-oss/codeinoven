@@ -42,6 +42,16 @@
  * this channel   and the link is the immediate one that a filesystem watch that
  * stopped delivering can never take away. Both carry the batch id, and the
  * registry dedupes by it, so a batch that arrives twice applies once.
+ *
+ * One more channel rides the same link: a region-screenshot request. The chord
+ * is claimed system-wide, so a single process holds it, while the capture has to
+ * land in the window the user is looking at, which may belong to a sibling. That
+ * request is the one frame that is *addressed*: it names the instance that should
+ * act, because a region selector shown by two processes would deliver the same
+ * capture twice. Unlike the stream frames, this one is not merely best effort on
+ * the sending side either: `publishScreenshotRequest` answers whether the target
+ * is reachable, so the caller can take the capture itself rather than leave the
+ * chord dead when no link exists yet.
  */
 
 import { createHash } from 'node:crypto'
@@ -118,8 +128,8 @@ export function isRemoteRenderEvent(event: AgentEvent): boolean {
   return REMOTE_RENDER_EVENT_TYPES.has(event.type)
 }
 
-/** What a frame carries, so one link can serve both live channels. */
-type InstanceBusFrameKind = 'agent' | 'threads'
+/** What a frame carries, so one link can serve every live channel. */
+type InstanceBusFrameKind = 'agent' | 'threads' | 'screenshot'
 
 interface InstanceBusFrameBase {
   v: 1
@@ -147,8 +157,39 @@ interface ThreadChangeFrame extends InstanceBusFrameBase {
   batch: CrossInstanceThreadEvent
 }
 
+/**
+ * One process asking another to take the region screenshot the user just started.
+ *
+ * The chord is claimed system-wide by a single process, while the capture has to
+ * land in the window the user is looking at, so the process holding the chord
+ * asks the instance that owns that window. The request names its target rather
+ * than describing it, because only one instance may start a selector: two would
+ * show two overlays and deliver the same region twice.
+ */
+interface ScreenshotRequestFrame extends InstanceBusFrameBase {
+  kind: 'screenshot'
+  requestId: string
+  targetPid: number
+  /** When the chord was pressed, so a frame that sat too long is not acted on. */
+  emittedAt: number
+}
+
+/**
+ * The first line a link carries, so each side learns which process it is talking to.
+ *
+ * A dialled link knows its peer from the dial, but an accepted one does not: a
+ * silent sibling may publish no frame for minutes, and asking it to take a
+ * screenshot needs its link to be addressable before that.
+ */
+interface HelloFrame {
+  v: 1
+  kind: 'hello'
+  from: number
+  seq: 0
+}
+
 /** One frame on the wire. Line-delimited JSON, one message per line. */
-type InstanceBusFrame = AgentEventFrame | ThreadChangeFrame
+type InstanceBusFrame = AgentEventFrame | ThreadChangeFrame | ScreenshotRequestFrame
 
 /** A frame body: what the caller supplies, before the envelope is added. */
 type InstanceBusFrameBody =
@@ -228,6 +269,8 @@ export class InstanceEventBus {
   private readonly links = new Set<Socket>()
   /** Links this process dialled, by peer pid, so a peer is dialled once. */
   private readonly peers = new Map<number, Socket>()
+  /** The peer each accepted link belongs to, learned from its hello frame. */
+  private readonly peerLinks = new Map<number, Socket>()
   /** Peers with a dial in flight, so two reconciles never dial one peer twice. */
   private readonly dialing = new Set<number>()
   /** Consecutive failed dials per peer, which is what paces the next one. */
@@ -249,6 +292,9 @@ export class InstanceEventBus {
   private readonly lastSeqByPid = new Map<number, number>()
   private readonly listeners = new Set<(payload: RemoteAgentEventPayload) => void>()
   private readonly threadChangeListeners = new Set<(batch: CrossInstanceThreadEvent) => void>()
+  private readonly screenshotRequestListeners = new Set<
+    (request: { requestId: string; targetPid: number; emittedAt: number; from: number }) => void
+  >()
   /**
    * Resolves a session id to the conversation that owns it. The sender knows
    * this, and shipping it with each frame is what lets a sibling window bind a
@@ -298,6 +344,7 @@ export class InstanceEventBus {
     this.lastReconcileAttemptAt = 0
     this.lastReconcileFoundPeer = false
     for (const pid of [...this.peers.keys()]) this.forgetPeer(pid)
+    this.peerLinks.clear()
     this.dropLinks()
     this.dialing.clear()
     this.dialFailures.clear()
@@ -327,6 +374,54 @@ export class InstanceEventBus {
   /** Whether at least one sibling link is open right now. */
   get hasConnectedPeers(): boolean {
     return this.links.size > 0
+  }
+
+  /** Subscribe to region-screenshot requests another instance addressed here. */
+  onScreenshotRequest(
+    listener: (request: {
+      requestId: string
+      targetPid: number
+      emittedAt: number
+      from: number
+    }) => void
+  ): () => void {
+    this.screenshotRequestListeners.add(listener)
+    return () => this.screenshotRequestListeners.delete(listener)
+  }
+
+  /**
+   * Ask one instance to take the region screenshot the chord started.
+   *
+   * Addressed rather than broadcast, and answered honestly: `false` means this
+   * process has no open link to that instance, so the caller must take the
+   * capture itself instead of leaving the chord dead. A link only becomes
+   * addressable once the peer says hello, which is why the hello frame exists.
+   */
+  publishScreenshotRequest(targetPid: number): boolean {
+    if (!this.started) return false
+    const socket = this.linkTo(targetPid)
+    if (!socket) return false
+    if (socket.writableLength > MAX_BUFFERED_BYTES) return false
+    this.sequence += 1
+    const frame: ScreenshotRequestFrame = {
+      v: 1,
+      kind: 'screenshot',
+      from: this.localPid,
+      seq: this.sequence,
+      requestId: `${this.localPid}:${this.sequence}`,
+      targetPid,
+      emittedAt: Date.now()
+    }
+    socket.write(`${JSON.stringify(frame)}\n`)
+    return true
+  }
+
+  /** The open link to one peer, whether this process dialled it or accepted it. */
+  private linkTo(pid: number): Socket | null {
+    const dialled = this.peers.get(pid)
+    if (dialled && this.links.has(dialled)) return dialled
+    const accepted = this.peerLinks.get(pid)
+    return accepted && this.links.has(accepted) ? accepted : null
   }
 
   /** Whether this process is serving its endpoint, which it only does beside a sibling. */
@@ -589,6 +684,13 @@ export class InstanceEventBus {
   private forgetPeer(pid: number): void {
     const socket = this.peers.get(pid)
     this.peers.delete(pid)
+    const accepted = this.peerLinks.get(pid)
+    if (accepted) {
+      this.peerLinks.delete(pid)
+      this.links.delete(accepted)
+      accepted.removeAllListeners('close')
+      accepted.destroy()
+    }
     // A restarted peer publishes from its own sequence again, so what this
     // process remembers of the previous one must go with the old link.
     this.lastSeqByPid.delete(pid)
@@ -619,6 +721,11 @@ export class InstanceEventBus {
     socket.unref()
     socket.setNoDelay(true)
     this.links.add(socket)
+    // Say who is on this link before anything else needs to address it. A peer
+    // built before this frame simply ignores it, which costs nothing beyond
+    // having to wait for its first real frame to learn who it is.
+    const hello: HelloFrame = { v: 1, kind: 'hello', from: this.localPid, seq: 0 }
+    if (socket.writableLength <= MAX_BUFFERED_BYTES) socket.write(`${JSON.stringify(hello)}\n`)
     // A link attaching proves a sibling exists, so the publish path's probe gate
     // starts over: once this link is gone, the next frame may probe for whoever
     // is left without waiting out a gate stamped before the link existed.
@@ -626,6 +733,9 @@ export class InstanceEventBus {
     this.lastReconcileFoundPeer = false
     socket.on('close', () => {
       this.links.delete(socket)
+      for (const [pid, linked] of this.peerLinks) {
+        if (linked === socket) this.peerLinks.delete(pid)
+      }
       // Nothing left to receive from, so what this process remembers of the
       // previous publisher must not outlive its link.
       if (this.links.size === 0) this.lastSeqByPid.clear()
@@ -643,7 +753,7 @@ export class InstanceEventBus {
       while (newline !== -1) {
         const line = buffer.slice(0, newline)
         buffer = buffer.slice(newline + 1)
-        if (line.length > 0) this.deliver(line)
+        if (line.length > 0) this.deliver(line, socket)
         newline = buffer.indexOf('\n')
       }
     })
@@ -651,9 +761,13 @@ export class InstanceEventBus {
   }
 
   /** Hand one received frame to local consumers, if it is well formed. */
-  private deliver(line: string): void {
+  private deliver(line: string, socket: Socket): void {
     const frame = parseFrame(line, this.localPid)
     if (!frame) return
+    if (frame.kind === 'hello') {
+      this.peerLinks.set(frame.from, socket)
+      return
+    }
     // One link per peer pair is the rule, so a repeat should be impossible; this
     // is the guard that keeps a duplicate from duplicating streamed text if two
     // links ever do form (a stale endpoint from an earlier run, a reconnection
@@ -673,6 +787,22 @@ export class InstanceEventBus {
       }
       return
     }
+    if (frame.kind === 'screenshot') {
+      const request = {
+        requestId: frame.requestId,
+        targetPid: frame.targetPid,
+        emittedAt: frame.emittedAt,
+        from: frame.from
+      }
+      for (const listener of this.screenshotRequestListeners) {
+        try {
+          listener(request)
+        } catch (error) {
+          Logger.error('Cross-instance screenshot listener failed:', error)
+        }
+      }
+      return
+    }
     for (const listener of this.threadChangeListeners) {
       try {
         listener(frame.batch)
@@ -687,6 +817,15 @@ export class InstanceEventBus {
 type ParsedFrame =
   | { kind: 'agent'; from: number; seq: number; payload: RemoteAgentEventPayload }
   | { kind: 'threads'; from: number; seq: number; batch: CrossInstanceThreadEvent }
+  | {
+      kind: 'screenshot'
+      from: number
+      seq: number
+      requestId: string
+      targetPid: number
+      emittedAt: number
+    }
+  | { kind: 'hello'; from: number }
 
 /** A frame as received, before any field is trusted. */
 interface RawFrame {
@@ -698,6 +837,9 @@ interface RawFrame {
   threadId?: unknown
   event?: unknown
   batch?: unknown
+  requestId?: unknown
+  targetPid?: unknown
+  emittedAt?: unknown
 }
 
 /**
@@ -718,6 +860,19 @@ function parseFrame(line: string, localPid: number): ParsedFrame | null {
   if (typeof frame.from !== 'number' || frame.from === localPid) return null
   const from = frame.from
   const seq = typeof frame.seq === 'number' ? frame.seq : 0
+  if (frame.kind === 'hello') return { kind: 'hello', from }
+  if (frame.kind === 'screenshot') {
+    if (typeof frame.requestId !== 'string' || frame.requestId.length === 0) return null
+    if (typeof frame.targetPid !== 'number' || !Number.isInteger(frame.targetPid)) return null
+    return {
+      kind: 'screenshot',
+      from,
+      seq,
+      requestId: frame.requestId,
+      targetPid: frame.targetPid,
+      emittedAt: typeof frame.emittedAt === 'number' ? frame.emittedAt : 0
+    }
+  }
   // A publisher built before frames carried a kind only ever sent agent events.
   if (frame.kind === 'threads') {
     const batch = parseThreadBatch(frame.batch)

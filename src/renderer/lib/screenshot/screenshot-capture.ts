@@ -10,11 +10,15 @@ import type { ScreenshotCapture } from '$shared/types'
  * Delivery of system-wide region captures to the prompt that should receive one.
  *
  * A capture is taken by the main process while another app may own the keyboard,
- * so nothing in the renderer was part of the gesture. The composer registers
- * here as the active attachment target, and the system-wide chord is claimed
- * only while one is mounted: with no thread open the shortcut does nothing. A
- * capture that still arrives with no composer is held briefly for one to mount,
- * and only then falls back to the clipboard.
+ * so nothing in the renderer was part of the gesture. The composer registers here
+ * as the active attachment target, and mounted composers are ranked against each
+ * other so the capture lands in the prompt the user is actually in.
+ *
+ * The chord itself is not gated on that registration: it belongs to the instance
+ * the user is looking at, and whether a prompt happens to be open there is not
+ * what decides where the capture goes. A capture that still arrives with no
+ * composer is held briefly for one to mount, and only then falls back to the
+ * clipboard.
  */
 
 export interface ScreenshotTarget {
@@ -32,22 +36,18 @@ let held: ScreenshotCapture[] = []
 let fallbackTimer: ReturnType<typeof setTimeout> | null = null
 let delivering = false
 
-/** The keymap's effective chord, published to main only while a target exists. */
+/** The keymap's effective chord, published to main so it can be claimed. */
 let shortcutKeys: readonly string[] = []
 
-function publishGated(): void {
-  publishScreenshotShortcut(targets.length > 0 ? shortcutKeys : [])
+/** Publish the chord. Main decides which instance answers it. */
+function publishChord(): void {
+  publishScreenshotShortcut(shortcutKeys)
 }
 
-/** Record the effective chord; main claims it only while a composer is mounted. */
+/** Record the effective chord; main claims it for the whole system. */
 export function setScreenshotShortcutKeys(keys: readonly string[]): void {
   shortcutKeys = keys
-  publishGated()
-}
-
-/** Whether a composer is mounted to receive a capture. */
-export function hasScreenshotTarget(): boolean {
-  return targets.length > 0
+  publishChord()
 }
 
 /** How long a capture waits for a composer before it is offered as a path. */
@@ -56,7 +56,6 @@ const COMPOSER_WAIT_MS = 8000
 /** Register the composer that should receive captures; the cleanup unregisters. */
 export function registerScreenshotTarget(target: ScreenshotTarget): () => void {
   targets.push(target)
-  if (targets.length === 1) publishGated()
   if (fallbackTimer) {
     clearTimeout(fallbackTimer)
     fallbackTimer = null
@@ -66,7 +65,6 @@ export function registerScreenshotTarget(target: ScreenshotTarget): () => void {
     const index = targets.indexOf(target)
     if (index < 0) return
     targets.splice(index, 1)
-    if (targets.length === 0) publishGated()
   }
 }
 

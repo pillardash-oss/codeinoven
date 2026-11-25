@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -162,5 +163,112 @@ describe('InstanceRegistry shared-thread announcements', () => {
       'utf8'
     )
     await waitFor(() => !registry.hasOtherLiveInstance(), 4_000)
+  })
+})
+
+/**
+ * The focus half of the registry.
+ *
+ * Two instances share one system-wide screenshot chord, so the process holding it
+ * has to know which window the user is in: the focused one, or the one used most
+ * recently while the app sits behind another application. These entries are only
+ * trusted for live processes, so the peers below are real child processes rather
+ * than fabricated pids.
+ */
+describe('InstanceRegistry window focus and screenshot chord', () => {
+  const children: ChildProcess[] = []
+
+  afterEach(() => {
+    for (const child of children.splice(0)) child.kill()
+  })
+
+  /** A real live pid, because a peer entry is only read while its process runs. */
+  async function spawnIdleProcess(): Promise<number> {
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => undefined, 60_000)'], {
+      stdio: 'ignore'
+    })
+    children.push(child)
+    await new Promise<void>((resolve) => child.once('spawn', () => resolve()))
+    if (!child.pid) throw new Error('The idle peer process did not start')
+    return child.pid
+  }
+
+  /** The entry one sibling writes, as the registry would read it. */
+  function announcePeer(directory: string, pid: number, entry: Record<string, unknown>): string {
+    const file = join(directory, `${pid}.json`)
+    writeFileSync(
+      file,
+      JSON.stringify({ pid, startedAt: Date.now(), lastHeartbeat: Date.now(), ...entry }),
+      'utf8'
+    )
+    return file
+  }
+
+  /** This process's own registry, the one whose focus is published below. */
+  function createSelfRegistry(directory: string): InstanceRegistry {
+    const registry = new InstanceRegistry(directory)
+    registries.push(registry)
+    return registry
+  }
+
+  it('names the focused window, and the last used one only while none is focused', async () => {
+    const directory = await registryDirectory()
+    const registry = createSelfRegistry(directory)
+    registry.start()
+    expect(registry.focusedInstancePid()).toBeNull()
+
+    registry.publishWindowFocus(true)
+    expect(registry.focusedInstancePid()).toBe(process.pid)
+
+    const peerPid = await spawnIdleProcess()
+    // The peer was used more recently, but it is not the window on screen.
+    announcePeer(directory, peerPid, { focused: false, focusedAt: Date.now() + 60_000 })
+    expect(registry.focusedInstancePid()).toBe(process.pid)
+
+    // The app goes behind another application: the newest gain answers.
+    registry.publishWindowFocus(false)
+    expect(registry.focusedInstancePid()).toBe(peerPid)
+  })
+
+  it('prefers a live focus over a stale one left by a crashed window', async () => {
+    const directory = await registryDirectory()
+    const registry = createSelfRegistry(directory)
+    registry.start()
+
+    const crashedPid = await spawnIdleProcess()
+    const livePid = await spawnIdleProcess()
+    announcePeer(directory, crashedPid, { focused: true, focusedAt: Date.now() })
+    announcePeer(directory, livePid, { focused: true, focusedAt: Date.now() - 5_000 })
+
+    // Both claim focus; the entry that took it most recently is the real one.
+    expect(registry.focusedInstancePid()).toBe(crashedPid)
+    announcePeer(directory, crashedPid, { focused: false, focusedAt: Date.now() })
+    expect(registry.focusedInstancePid()).toBe(livePid)
+  })
+
+  it('reports the sibling that announced the global chord, never itself', async () => {
+    const directory = await registryDirectory()
+    const registry = createSelfRegistry(directory)
+    registry.start()
+    const accelerator = 'Command+Shift+7'
+    expect(registry.screenshotChordHolder(accelerator)).toBeNull()
+
+    registry.publishScreenshotChord(accelerator)
+    // A process cannot be the holder it is asking about: a failed registration is
+    // exactly the moment it asks.
+    expect(registry.screenshotChordHolder(accelerator)).toBeNull()
+
+    const peerPid = await spawnIdleProcess()
+    const peerFile = announcePeer(directory, peerPid, {
+      focused: true,
+      focusedAt: Date.now(),
+      screenshotChord: { accelerator, at: Date.now() }
+    })
+    expect(registry.screenshotChordHolder(accelerator)).toBe(peerPid)
+    expect(registry.screenshotChordHolder('Control+Alt+Other')).toBeNull()
+
+    // A held chord dies with its process, and the entry goes with the claim.
+    rmSync(peerFile)
+    expect(registry.screenshotChordHolder(accelerator)).toBeNull()
   })
 })

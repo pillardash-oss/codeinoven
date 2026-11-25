@@ -65,6 +65,7 @@ import {
 import { setTranscriptChangeListener } from '../../lib/engines/thread-manager-transcripts'
 import { instanceEventBus } from '../system/instance-event-bus'
 import { instanceRegistry } from '../system/instance-registry'
+import { installScreenshotRouting } from '../system/screenshot-service'
 import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import type { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { ModelPricingService } from '../providers/model-pricing-service'
@@ -1270,6 +1271,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // peers so a sibling window renders the same run this one renders. It arms its
   // listener only while the registry proves another instance is running.
   instanceEventBus.start()
+  // The region-screenshot chord is claimed system-wide, so this process may hold
+  // it while the user is working in a sibling. Routing makes the capture follow
+  // the window the user is in, and answering a sibling's request is the other
+  // half of that: it is installed with the bus that carries the requests.
+  installScreenshotRouting()
   // Shared rows and transcripts a sibling writes into: the writer announces the
   // threads it touched, and this instance re-reads and pushes them.
   state.crossInstanceThreads = new CrossInstanceThreadService(database)

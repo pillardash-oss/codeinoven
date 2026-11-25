@@ -46,7 +46,10 @@ export function publishScreenshotShortcut(keys: readonly string[]): void {
         result.registered ||
         !result.reason ||
         result.reason === 'unbound' ||
-        result.reason === 'unsupported-platform'
+        result.reason === 'unsupported-platform' ||
+        // A sibling instance holds the chord for the whole system and routes the
+        // capture to whichever window the user is in, this one included.
+        result.reason === 'peer-instance'
       ) {
         warnedReason = null
         return

@@ -9,15 +9,24 @@ import type {
 } from '../../lib/types'
 import { broadcastAppToast } from '../ipc/app-toast'
 import { sendToRenderer } from '../ipc/renderer-delivery'
+import { instanceEventBus } from './instance-event-bus'
+import { instanceRegistry } from './instance-registry'
 import { Logger } from './logger'
 import { ensureScreenshotPermission, screenshotPermissionState } from './screenshot-permission'
 import { pruneScreenshots } from './screenshot-service/screenshot-files'
+import { watchWindowFocus } from './screenshot-service/screenshot-focus'
 import { selectRegionOnMac } from './screenshot-service/screenshot-mac'
 import { selectRegionWithOverlay } from './screenshot-service/screenshot-overlay'
 import {
   screenshotSelector,
   unsupportedScreenshotReason
 } from './screenshot-service/screenshot-platform'
+import {
+  installScreenshotRequests,
+  routeScreenshotCapture,
+  type ScreenshotRequestSource,
+  type ScreenshotRoutingHost
+} from './screenshot-service/screenshot-router'
 
 /**
  * Region screenshots for agents.
@@ -33,6 +42,12 @@ import {
  * free to start while the browser or another app owns the keyboard. The window
  * receives the finished file and attaches it to the active prompt.
  *
+ * The chord is also claimed once per *system*, while several instances of this app
+ * can be running against one config root. Whoever wins the claim therefore routes
+ * the capture to the instance the user is looking at instead of assuming the
+ * window that holds the shortcut is the window they are in (see
+ * `screenshot-service/screenshot-router`).
+ *
  * macOS uses the system's selector, Windows and X11 use the app's overlay. Both
  * decode and encode outside the main process.
  */
@@ -46,9 +61,19 @@ const SCREENSHOT_DIRECTORY = 'screenshots'
 const TRIGGER_DEBOUNCE_MS = 400
 
 let activeAccelerator: string | null = null
+/**
+ * The chord the renderer last asked for, whether or not it was claimed.
+ *
+ * Remembered so the claim can be taken over: a sibling that held the chord and
+ * exited leaves it unclaimed for everybody, and no renderer announces the keymap
+ * again on its own.
+ */
+let requestedAccelerator: string | null = null
 let capturing = false
 let lastTriggerAt = 0
 let pending: ScreenshotCapture[] = []
+/** Cleanup for a routing install already in place, so a rebuild registers nothing twice. */
+let installedRouting: (() => void) | null = null
 
 /** macOS answers its own screenshot chords even when Electron reports the
  *  registration as successful, so main refuses them as well as the renderer. */
@@ -58,6 +83,52 @@ const MAC_SCREENSHOT_ACCELERATORS: ReadonlySet<string> = new Set([
   'Command+Shift+5',
   'Command+Shift+6'
 ])
+
+/**
+ * The capture decision the chord consults, wired to this process. A capture
+ * started by the chord is taken where the user is, not where the shortcut was
+ * registered.
+ */
+const routingHost: ScreenshotRoutingHost = {
+  localPid: process.pid,
+  focusedInstancePid: () => instanceRegistry.focusedInstancePid(),
+  requestRemoteCapture: (targetPid) => instanceEventBus.publishScreenshotRequest(targetPid),
+  captureLocally: () => captureScreenshotForAgent()
+}
+
+/** Requests a sibling addresses here, as the router reads them. */
+const siblingScreenshotRequests: ScreenshotRequestSource = (listener) =>
+  instanceEventBus.onScreenshotRequest((request) =>
+    listener({
+      requestId: request.requestId,
+      targetPid: request.targetPid,
+      emittedAt: request.emittedAt
+    })
+  )
+
+/**
+ * Wire the chord's cross-instance behaviour for the life of this process.
+ *
+ * Three pieces belong together: publishing where the user is, answering a
+ * sibling's request for a capture, and taking the chord over when the instance
+ * that held it exits. Installed once from the post-paint services, beside the
+ * instance bus that carries the requests, and idempotent because a service graph
+ * is allowed to be rebuilt.
+ */
+export function installScreenshotRouting(): () => void {
+  if (installedRouting) return installedRouting
+  const stopFocus = watchWindowFocus((focused) => instanceRegistry.publishWindowFocus(focused))
+  const stopRequests = installScreenshotRequests(routingHost, siblingScreenshotRequests)
+  const stopHandover = instanceRegistry.onLiveInstanceSetChanged(() => claimRequestedChord())
+  const stop = (): void => {
+    installedRouting = null
+    stopFocus()
+    stopRequests()
+    stopHandover()
+  }
+  installedRouting = stop
+  return stop
+}
 
 function screenshotsDirectory(): string {
   return join(app.getPath('userData'), SCREENSHOT_DIRECTORY)
@@ -151,12 +222,16 @@ export async function captureScreenshotForAgent(): Promise<ScreenshotCaptureOutc
  * effective chord is answered without touching the registration.
  */
 export function setScreenshotShortcut(accelerator: string | null): ScreenshotShortcutRegistration {
+  requestedAccelerator = accelerator
   // A session with no selector (Wayland, for now) must not give up a system-wide
   // key for a capture that cannot happen.
   if (!screenshotSelector()) return { registered: false, reason: 'unsupported-platform' }
   if (accelerator === activeAccelerator) {
     if (!accelerator) return { registered: false, reason: 'unbound' }
-    if (globalShortcut.isRegistered(accelerator)) return { registered: true }
+    if (globalShortcut.isRegistered(accelerator)) {
+      instanceRegistry.publishScreenshotChord(accelerator)
+      return { registered: true }
+    }
   }
   if (activeAccelerator) {
     try {
@@ -165,6 +240,7 @@ export function setScreenshotShortcut(accelerator: string | null): ScreenshotSho
       Logger.dev('The previous screenshot chord could not be released:', error)
     }
     activeAccelerator = null
+    instanceRegistry.publishScreenshotChord(null)
   }
   if (!accelerator) return { registered: false, reason: 'unbound' }
   if (process.platform === 'darwin' && MAC_SCREENSHOT_ACCELERATORS.has(accelerator)) {
@@ -172,19 +248,45 @@ export function setScreenshotShortcut(accelerator: string | null): ScreenshotSho
   }
   try {
     const registered = globalShortcut.register(accelerator, () => {
-      void captureScreenshotForAgent()
+      routeScreenshotCapture(routingHost)
     })
     if (!registered) {
       Logger.dev('The screenshot chord is already claimed by the system', { accelerator })
+      // A sibling instance may be the one holding it. That is the normal shape of
+      // a shared chord, not a broken shortcut: the holder routes the capture to
+      // whichever window the user is in, this one included, so no warning is due.
+      const holder = instanceRegistry.screenshotChordHolder(accelerator)
+      if (holder !== null) {
+        Logger.dev('Another instance holds the screenshot chord', { accelerator, holder })
+        return { registered: false, reason: 'peer-instance' }
+      }
       return { registered: false, reason: 'in-use' }
     }
     activeAccelerator = accelerator
+    instanceRegistry.publishScreenshotChord(accelerator)
     Logger.dev('The region screenshot chord is registered', { accelerator })
     return { registered: true }
   } catch (error) {
     Logger.error('The screenshot chord is not a valid accelerator:', error)
     return { registered: false, reason: 'invalid' }
   }
+}
+
+/**
+ * Take the chord over once the instance that held it is gone.
+ *
+ * The claim is system-wide and dies with the process that made it, while this
+ * process keeps the keymap's chord in memory. Without this, closing the window
+ * that happened to register the shortcut would leave every remaining instance
+ * with a dead key: their own registration failed at launch and nothing ever asks
+ * again.
+ */
+function claimRequestedChord(): void {
+  const accelerator = requestedAccelerator
+  if (!accelerator) return
+  if (activeAccelerator === accelerator && globalShortcut.isRegistered(accelerator)) return
+  if (instanceRegistry.screenshotChordHolder(accelerator) !== null) return
+  setScreenshotShortcut(accelerator)
 }
 
 /** Captures taken while no window existed, handed over once on reopen. */

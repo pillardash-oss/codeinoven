@@ -366,3 +366,81 @@ describe('instanceBusEndpoint', () => {
     expect(instanceBusEndpoint(DEEP_DIRECTORY, PEER_A, DEEP_TEMP_ROOT)).toBe(endpoint)
   })
 })
+
+describe('InstanceEventBus region-screenshot requests', () => {
+  /** Publish until the peer says it heard one, or give up. */
+  async function deliverRequest(
+    send: () => boolean,
+    received: () => number,
+    timeoutMs = 4_000
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (received() > 0) return
+      send()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    throw new Error('Timed out waiting for the cross-instance bus')
+  }
+
+  it('carries a request to the instance it addresses, in both directions', async () => {
+    const directory = await busDirectory()
+    const live = membership(PEER_A, PEER_B)
+    const a = peer(directory, PEER_A, live)
+    const b = peer(directory, PEER_B, live)
+    const heardByA: Array<{ requestId: string; targetPid: number }> = []
+    const heardByB: Array<{ requestId: string; targetPid: number }> = []
+    a.onScreenshotRequest((request) => heardByA.push(request))
+    b.onScreenshotRequest((request) => heardByB.push(request))
+    a.start()
+    b.start()
+    await waitFor(() => a.hasConnectedPeers && b.hasConnectedPeers)
+
+    // A dialled the link, so it already knows B. B accepted it and can only
+    // address A once A's hello arrived, which is why the hello frame exists.
+    await deliverRequest(
+      () => a.publishScreenshotRequest(PEER_B),
+      () => heardByB.length
+    )
+    await deliverRequest(
+      () => b.publishScreenshotRequest(PEER_A),
+      () => heardByA.length
+    )
+
+    expect(heardByB[0]).toMatchObject({ targetPid: PEER_B, from: PEER_A })
+    expect(heardByA[0]).toMatchObject({ targetPid: PEER_A, from: PEER_B })
+  })
+
+  it('says so when the instance it would ask is not reachable', async () => {
+    const directory = await busDirectory()
+    const alone = peer(directory, PEER_A, membership(PEER_A))
+    // Before the bus starts nothing can be addressed at all.
+    expect(alone.publishScreenshotRequest(PEER_B)).toBe(false)
+    alone.start()
+
+    // The caller takes the capture itself rather than leaving the chord dead, so
+    // the answer has to be honest about a pid no open link belongs to.
+    expect(alone.publishScreenshotRequest(999_999)).toBe(false)
+  })
+
+  it('stops delivering requests once the bus is stopped', async () => {
+    const directory = await busDirectory()
+    const live = membership(PEER_A, PEER_B)
+    const a = peer(directory, PEER_A, live)
+    const b = peer(directory, PEER_B, live)
+    const heard: unknown[] = []
+    b.onScreenshotRequest((request) => heard.push(request))
+    a.start()
+    b.start()
+    await waitFor(() => a.hasConnectedPeers && b.hasConnectedPeers)
+    await deliverRequest(
+      () => a.publishScreenshotRequest(PEER_B),
+      () => heard.length
+    )
+
+    a.stop()
+
+    expect(a.publishScreenshotRequest(PEER_B)).toBe(false)
+    expect(heard).toHaveLength(1)
+  })
+})
