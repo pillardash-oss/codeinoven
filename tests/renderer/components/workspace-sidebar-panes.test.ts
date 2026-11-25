@@ -206,10 +206,13 @@ const projectRowsById = (target: HTMLElement) =>
     ])
   )
 
-/** The one "Show more" at the foot of the Timeline pane, by its own text. */
-const historyControl = (pane: Element | null | undefined): HTMLButtonElement | null =>
-  [...(pane?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find((button) =>
-    ['Show more', 'Loading history…'].includes(button.textContent?.trim() ?? '')
+/** A Timeline footer control by its own text. */
+const footControl = (
+  pane: Element | null | undefined,
+  label: 'Show more' | 'Show less' | 'Loading history…'
+): HTMLButtonElement | null =>
+  [...(pane?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find(
+    (button) => button.textContent?.trim() === label
   ) ?? null
 
 beforeEach(() => {
@@ -241,7 +244,7 @@ describe('workspace sidebar panes', () => {
 
     // Rows the timeline already holds are revealed first, and the label never
     // carries a count: one control, one word, whatever is left.
-    const longHistory = Array.from({ length: 20 }, (_, index) =>
+    const longHistory = Array.from({ length: 40 }, (_, index) =>
       thread(`alpha-old-${index}`, 'alpha')
     )
     const paged = mountPane({
@@ -249,13 +252,31 @@ describe('workspace sidebar panes', () => {
       threadsByProject: new SvelteMap([['alpha', longHistory]])
     })
     await tick()
-    const pager = paged.pane && historyControl(paged.pane)
-    expect(pager?.textContent?.trim()).toBe('Show more')
+    expect(footControl(paged.pane, 'Show more')?.textContent?.trim()).toBe('Show more')
+    expect(footControl(paged.pane, 'Show less')).toBeNull()
     expect(rowsById(paged.pane).size).toBe(THREAD_LIST_PAGE_SIZE)
-    pager?.click()
+
+    // Extending the list past its first page grows a Show less, drawn above the
+    // way forward so the reader looking at the end of the list finds it first.
+    footControl(paged.pane, 'Show more')?.click()
     flushSync()
-    expect(rowsById(paged.pane).size).toBe(longHistory.length)
-    expect(historyControl(paged.pane)).toBeNull()
+    expect(rowsById(paged.pane).size).toBe(THREAD_LIST_PAGE_SIZE * 2)
+    const showLess = footControl(paged.pane, 'Show less')
+    const showMoreAgain = footControl(paged.pane, 'Show more')
+    expect(showLess).not.toBeNull()
+    expect(showMoreAgain).not.toBeNull()
+    if (!showLess || !showMoreAgain) throw new Error('the footer controls did not render')
+    expect(
+      showLess.compareDocumentPosition(showMoreAgain) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+
+    // The way back returns to the first page, and the rows it hid are the ones
+    // already in memory, so Show more reveals them again without a DB read.
+    showLess.click()
+    flushSync()
+    expect(rowsById(paged.pane).size).toBe(THREAD_LIST_PAGE_SIZE)
+    expect(footControl(paged.pane, 'Show less')).toBeNull()
+    expect(footControl(paged.pane, 'Show more')).not.toBeNull()
     void unmount(paged.component)
 
     // Every row in memory is on screen, so the press reads the next DB page and
@@ -263,7 +284,7 @@ describe('workspace sidebar panes', () => {
     const loadPage = vi.fn(async () => {})
     const dbTail = mountPane({ hasMoreHistory: true, onLoadHistoryPage: loadPage })
     await tick()
-    const showMore = dbTail.pane && historyControl(dbTail.pane)
+    const showMore = footControl(dbTail.pane, 'Show more')
     expect(showMore?.textContent?.trim()).toBe('Show more')
     showMore?.click()
     flushSync()

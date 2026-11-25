@@ -1377,6 +1377,14 @@
                  loader below it, and the reader had to add up two numbers to know
                  whether anything was left. -->
             {@const sectionHasMoreRows = hiddenSectionCount > 0}
+            <!-- Once the section has grown past the page it opened with, the way
+                 back sits above the way forward: the reader who extended the list
+                 is looking at its end, so Show less belongs where their eye is,
+                 not underneath the control that would extend it further. Search
+                 results are never budgeted, so they never grow a Show less. -->
+            {@const sectionExpanded =
+              !searchPanelActive &&
+              sidebar.getVisibleCount(section.key, TIMELINE_PAGE_SIZE) > TIMELINE_PAGE_SIZE}
             {@const canLoadHistory =
               ownsHistoryTail && !searchPanelActive && hasMoreHistory && !sectionHasMoreRows}
             <!-- The first docked group takes the rest of the column's height with
@@ -1465,6 +1473,14 @@
                   </SidebarListRow>
                 {/each}
               </div>
+              {#if sectionExpanded}
+                <button
+                  class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
+                  onclick={() => sidebar.showLessThreads(section.key, TIMELINE_PAGE_SIZE)}
+                >
+                  Show less
+                </button>
+              {/if}
               {#if sectionHasMoreRows || (canLoadHistory && listTailRevealed)}
                 <button
                   class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait {section.group
