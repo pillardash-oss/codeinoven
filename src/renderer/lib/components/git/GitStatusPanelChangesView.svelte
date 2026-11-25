@@ -161,14 +161,26 @@
     return () => observer.disconnect()
   }
 
-  // One stable attachment for every card: the title comes from the element, so
-  // the attachment is not re-created (and its observer not rebuilt) on every
-  // render the way a factory returning a fresh function would be.
+  /**
+   * One stable attachment for every card's scrolling body: the title comes from
+   * the element, so the attachment is not re-created (and its observer not
+   * rebuilt) on every render the way a factory returning a fresh function would
+   * be.
+   *
+   * It measures the *body*, not the card. The card is the box being sized, so its
+   * scroll height is the height it was given: measuring it would feed the layout
+   * back into itself and freeze every section at whatever it happened to be on
+   * the first pass. The body scrolls, so its `scrollHeight` is the content's real
+   * height however little of it is on screen, and the chrome around it (header,
+   * borders) is the difference between the two boxes.
+   */
   const measureCard: Attachment<HTMLElement> = (element) => {
-    const title = element.dataset.cardTitle
+    const title = element.dataset.cardBody
     if (!title) return
     const measure = (): void => {
-      const natural = element.scrollHeight
+      const card = element.closest<HTMLElement>('[data-card-title]')
+      const chrome = card ? card.offsetHeight - element.clientHeight : 0
+      const natural = element.scrollHeight + Math.max(0, chrome)
       if (naturalHeights[title] === natural) return
       naturalHeights = { ...naturalHeights, [title]: natural }
     }
@@ -400,7 +412,7 @@
         bottom; a card that holds more scrolls inside itself, so a long Unstaged
         section never hides Staged or Untracked above it.
       -->
-      <div class="flex min-h-0 flex-col gap-1 p-1" {@attach measureColumn}>
+      <div class="flex min-h-0 flex-1 flex-col gap-1 p-1" {@attach measureColumn}>
         {#each cards as card, cardIndex (card.title)}
           {@const measuredHeight = cardHeights?.[cardIndex]}
           <div
@@ -409,7 +421,6 @@
               ? cardShare
               : `height: ${measuredHeight}px; flex: 0 0 auto`}
             data-card-title={card.title}
-            {@attach measureCard}
           >
             {#if changesView === 'tree'}
               <GitChangesTree
@@ -418,6 +429,7 @@
                 {expanded}
                 {loadingDiff}
                 {diffErrors}
+                {measureCard}
                 bind:selectedPaths
                 onToggleDiff={(change) => toggleDiff(change)}
                 onToggleStage={(change) => toggleStage(change)}
@@ -476,7 +488,11 @@
                     {card.files.length}
                   </span>
                 </div>
-                <div class="min-h-0 overflow-y-auto">
+                <div
+                  class="min-h-0 overflow-y-auto"
+                  data-card-body={card.title}
+                  {@attach measureCard}
+                >
                   {#each card.files as change (change.path)}
                     <GitFileRow
                       {change}
