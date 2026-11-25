@@ -6,13 +6,10 @@ import {
   validateSyncWithOptions
 } from '../validation/pr'
 import { gitInvocation } from '../../git/git-refusal'
-import {
-  broadcastGitPushProgress,
-  cancelGitPushJob,
-  startGitPushJob
-} from '../../git/git-push-jobs'
+import { cancelGitPushJob, startGitPushJob } from '../../git/git-push-jobs'
 
 import type { IpcHandlerContext } from './context'
+import type { GitPushProgress } from '../../../lib/types'
 
 export function registerGitRemoteOperations(
   ctx: {
@@ -24,12 +21,17 @@ export function registerGitRemoteOperations(
     >
     gitCredentialRef: IpcHandlerContext['gitCredentialRef']
     resolveProjectPath: IpcHandlerContext['resolveProjectPath']
+    /**
+     * Where push progress goes. The desktop app broadcasts it to its windows; the
+     * Oven service runs without Electron and leaves it unset.
+     */
+    onPushProgress?: (progress: GitPushProgress) => void
   },
   ipcMain: {
     handle(channel: string, handler: (event: unknown, ...args: unknown[]) => unknown): void
   }
 ): void {
-  const { gitService, syncPeers, vault, gitCredentialRef, resolveProjectPath } = ctx
+  const { gitService, syncPeers, vault, gitCredentialRef, resolveProjectPath, onPushProgress } = ctx
 
   // ─── Git remotes, sync & credentials ────────────────────────────────────
   const gitCredentialStatus = async (projectId: string) => ({
@@ -221,7 +223,7 @@ export function registerGitRemoteOperations(
             {
               signal: job.signal,
               onProgress: (event) =>
-                broadcastGitPushProgress({
+                onPushProgress?.({
                   projectId: safeProjectId,
                   scopeBucketId: safeScopeBucketId,
                   stage: event.stage,
