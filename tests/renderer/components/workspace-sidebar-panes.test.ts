@@ -65,6 +65,7 @@ vi.mock('$lib/components/specs/SpecConversationSidebar.svelte', async () => {
 import SidebarHarness from './stubs/SidebarHarness.svelte'
 import { sidebarState } from '$lib/stores/sidebar.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
+import { threadGroupingState } from '$lib/stores/thread-grouping.svelte'
 import { WorkspaceSidebarController } from '$lib/components/workspace/WorkspaceSidebarController.svelte'
 import { WorkspaceProjectDialogs } from '$lib/components/workspace/WorkspaceProjectDialogs.svelte'
 import { ScopeActionsController } from '$lib/components/scope/ScopeActionsController.svelte'
@@ -136,6 +137,8 @@ function props(mode: 'projects' | 'chats' | 'threads') {
     typingThreadKeys: new Set<string>(),
     hasMoreHistory: false,
     historyLoading: false,
+    historyPaged: false,
+    historyFolded: false,
     projectPageLoading: null,
     sidebar: new WorkspaceSidebarController(),
     projectDialogs: new WorkspaceProjectDialogs({
@@ -160,7 +163,8 @@ function props(mode: 'projects' | 'chats' | 'threads') {
     onOpenScopedThread: vi.fn(),
     onSwitchScopedProject: vi.fn(async () => {}),
     onLoadProjectThreadsPage: vi.fn(async () => {}),
-    onLoadHistoryPage: vi.fn(async () => {}),
+    onShowMoreHistory: vi.fn(async () => {}),
+    onCollapseHistory: vi.fn(),
     projectHasMoreInDb: () => false,
     onSelectMode: () => {},
     panelActions: () => []
@@ -204,6 +208,12 @@ const projectRowsById = (target: HTMLElement) =>
     ])
   )
 
+/** The older-history control at the foot of the Timeline pane, by its own text. */
+const historyControl = (pane: Element | null | undefined): HTMLButtonElement | null =>
+  [...(pane?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find((button) =>
+    ['Show more', 'Show less', 'Loading history…'].includes(button.textContent?.trim() ?? '')
+  ) ?? null
+
 beforeEach(() => {
   document.body.innerHTML = ''
   // The sidebar's own store persists width/collapse; keep each test on defaults.
@@ -212,6 +222,69 @@ beforeEach(() => {
 })
 
 describe('workspace sidebar panes', () => {
+  it('toggles the older-history control between Show more and Show less', async () => {
+    // Grouping draws one heading per status and the tail belongs to the last of
+    // them; the flat list is the same control with nothing between it and the
+    // foot of the pane.
+    if (threadGroupingState.enabled) threadGroupingState.toggleEnabled()
+
+    const mountPane = (overrides: Record<string, unknown>) => {
+      const target = document.createElement('div')
+      document.body.append(target)
+      const component = mount(SidebarHarness, {
+        target,
+        props: {
+          sidebarProps: { ...props('threads'), ...overrides },
+          initialMode: 'threads'
+        }
+      })
+      return { target, component, pane: target.querySelector('[data-sidebar-pane="threads"]') }
+    }
+
+    // Nothing paged yet: the control is the pager's own "Show more".
+    const showMoreHandler = vi.fn(async () => {})
+    const pager = mountPane({ hasMoreHistory: true, onShowMoreHistory: showMoreHandler })
+    await tick()
+    const showMore = pager.pane && historyControl(pager.pane)
+    expect(showMore?.textContent?.trim()).toBe('Show more')
+    showMore?.click()
+    flushSync()
+    expect(showMoreHandler).toHaveBeenCalledTimes(1)
+    void unmount(pager.component)
+
+    // A page is in the timeline: the same control folds it away again.
+    const collapse = vi.fn()
+    const expanded = mountPane({
+      hasMoreHistory: true,
+      historyPaged: true,
+      onCollapseHistory: collapse
+    })
+    await tick()
+    const showLess = expanded.pane && historyControl(expanded.pane)
+    expect(showLess?.textContent?.trim()).toBe('Show less')
+    showLess?.click()
+    flushSync()
+    expect(collapse).toHaveBeenCalledTimes(1)
+    void unmount(expanded.component)
+
+    // Folded, and the DB is exhausted: only reopening is left, and it redraws
+    // the pages already in the list instead of asking for another one.
+    const reopen = vi.fn(async () => {})
+    const folded = mountPane({
+      hasMoreHistory: false,
+      historyPaged: true,
+      historyFolded: true,
+      onShowMoreHistory: reopen
+    })
+    await tick()
+    const reopened = folded.pane && historyControl(folded.pane)
+    expect(reopened?.textContent?.trim()).toBe('Show more')
+    reopened?.click()
+    flushSync()
+    expect(reopen).toHaveBeenCalledTimes(1)
+    void unmount(folded.component)
+  })
+
   it('keeps the timeline rows mounted when the shell moves to another view', async () => {
     const { target, component } = renderSidebar('threads')
     await tick()

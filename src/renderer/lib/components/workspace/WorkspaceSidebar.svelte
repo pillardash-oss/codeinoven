@@ -90,6 +90,10 @@
     typingThreadKeys: ReadonlySet<string>
     hasMoreHistory: boolean
     historyLoading: boolean
+    /** Whether the timeline holds rows the older-history pager loaded. */
+    historyPaged: boolean
+    /** Whether those rows are folded away again, so the control offers them back. */
+    historyFolded: boolean
     projectPageLoading: string | null
     sidebar: WorkspaceSidebarController
     projectDialogs: WorkspaceProjectDialogs
@@ -120,7 +124,8 @@
     onOpenScopedThread: (thread: Thread) => Promise<void>
     onSwitchScopedProject: (projectId: string) => Promise<void>
     onLoadProjectThreadsPage: (projectId: string) => Promise<void>
-    onLoadHistoryPage: () => Promise<void>
+    onShowMoreHistory: () => Promise<void>
+    onCollapseHistory: () => void
     projectHasMoreInDb: (projectId: string) => boolean
     /** Switch the panel between its own lists: the projects tree and the
      *  timeline. The Projects/Threads tabs call it. */
@@ -154,6 +159,8 @@
     typingThreadKeys,
     hasMoreHistory,
     historyLoading,
+    historyPaged,
+    historyFolded,
     projectPageLoading,
     sidebar,
     projectDialogs,
@@ -172,7 +179,8 @@
     onOpenScopedThread,
     onSwitchScopedProject,
     onLoadProjectThreadsPage,
-    onLoadHistoryPage,
+    onShowMoreHistory,
+    onCollapseHistory,
     projectHasMoreInDb,
     onSelectMode,
     panelActions
@@ -1344,7 +1352,14 @@
                heading read as a way to open that heading instead. -->
             {@const isLastSection = sectionIndex === drawnThreadSections.length - 1}
             {@const ownsHistoryTail = section.key === historyTailSectionKey && !section.folded}
-            {@const showLoadOlder = ownsHistoryTail && !searchPanelActive && hasMoreHistory}
+            {@const showLoadOlder =
+              ownsHistoryTail && !searchPanelActive && (hasMoreHistory || historyPaged)}
+            <!-- Reopening the history is the pager's own "Show more"; once a page is
+                 in, the same control folds it back to the bounded slice, so the two
+                 controls at the foot of the list never read as the same word twice.
+                 A folded history offers the rows back without a second read: the
+                 pages it already carried are still in the list. -->
+            {@const showLessHistory = historyPaged && !historyFolded}
             <!-- The first docked group takes the rest of the column's height with
                it, so the docked block sits against the foot of the panel when the
                placed rows end high up the list, and falls back to following them
@@ -1457,9 +1472,16 @@
                     ? 'pb-5'
                     : ''}"
                   disabled={historyLoading}
-                  onclick={() => void onLoadHistoryPage()}
+                  onclick={() => {
+                    if (showLessHistory) onCollapseHistory()
+                    else void onShowMoreHistory()
+                  }}
                 >
-                  {historyLoading ? 'Loading history…' : 'Show more'}
+                  {historyLoading
+                    ? 'Loading history…'
+                    : showLessHistory
+                      ? 'Show less'
+                      : 'Show more'}
                 </button>
               {/if}
             </section>
@@ -1474,13 +1496,20 @@
             {/if}
             <!-- No section owns the tail here, so the older-history control falls
                back to the pane itself. -->
-            {#if !searchPanelActive && hasMoreHistory && listTailRevealed}
+            {#if !searchPanelActive && listTailRevealed && (hasMoreHistory || historyPaged)}
               <button
                 class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
                 disabled={historyLoading}
-                onclick={() => void onLoadHistoryPage()}
+                onclick={() => {
+                  if (historyPaged && !historyFolded) onCollapseHistory()
+                  else void onShowMoreHistory()
+                }}
               >
-                {historyLoading ? 'Loading history…' : 'Show more'}
+                {historyLoading
+                  ? 'Loading history…'
+                  : historyPaged && !historyFolded
+                    ? 'Show less'
+                    : 'Show more'}
               </button>
             {/if}
           {/each}

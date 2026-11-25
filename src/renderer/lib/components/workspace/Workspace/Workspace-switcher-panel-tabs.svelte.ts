@@ -364,7 +364,17 @@ export class WorkspaceSwitcherPanelTabs extends BoardUnit<Workspace> {
     return thread ? threadVisitKey(thread) : null
   })
 
-  unpinnedTimelineThreads = $derived(this.root.markThreadReadAndApply.timelineLists.statusListed)
+  unpinnedTimelineThreads = $derived.by(() => {
+    const listed = this.root.markThreadReadAndApply.timelineLists.statusListed
+    const paged = this.root.createThreadInProject
+    if (!paged.historyFolded || paged.historyLoadedIds.size === 0) return listed
+    // The thread being worked in always keeps its row: folding older history is a
+    // way to shorten the list, never a way to take the open thread off screen.
+    const activeThreadId = this.root.openThreadFromSwitcher.selectedThread?.id ?? null
+    return listed.filter(
+      (thread) => thread.id === activeThreadId || !paged.historyLoadedIds.has(thread.id)
+    )
+  })
 
   /** New thread inside the board's active scope bucket. */
   newThreadInScopeContext(): void {

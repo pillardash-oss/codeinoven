@@ -183,6 +183,8 @@ describe('chats list parity', () => {
           typingThreadKeys: new Set<string>(),
           hasMoreHistory: false,
           historyLoading: false,
+          historyPaged: false,
+          historyFolded: false,
           projectPageLoading: null,
           sidebar: new WorkspaceSidebarController(),
           projectDialogs: new WorkspaceProjectDialogs({
@@ -206,7 +208,8 @@ describe('chats list parity', () => {
           onOpenScopedThread: vi.fn(async () => {}),
           onSwitchScopedProject: vi.fn(async () => {}),
           onLoadProjectThreadsPage: vi.fn(async () => {}),
-          onLoadHistoryPage: vi.fn(async () => {}),
+          onShowMoreHistory: vi.fn(async () => {}),
+          onCollapseHistory: vi.fn(),
           projectHasMoreInDb: () => false,
           onSelectMode: () => {},
           panelActions: () => []
