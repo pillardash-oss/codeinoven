@@ -24,6 +24,7 @@
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
   import { ipcErrorMessage } from '$lib/ipc-errors'
+  import { captureFailure, reportFailure } from '$lib/stores/app-errors.svelte'
   import { pickCustomIconImage, type OptimizedCustomIcon } from '$lib/custom-icon-pipeline'
   import { randomOvenAppearance } from '$lib/oven-appearance'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
@@ -147,6 +148,21 @@
     return ipcErrorMessage(value, 'The Oven operation failed.')
   }
 
+  /**
+   * The sentence a failed Oven operation shows, and the exception the panel keeps.
+   *
+   * Every `catch` on this page funnels through here. The page keeps showing the
+   * cleaned sentence   `ipcErrorMessage` strips Electron's IPC wrapper, which is
+   * what makes it readable   while the Exceptions tab gets the stack, the build
+   * version and the platform it happened on. A catch that only set
+   * `error = message(failure)` threw the trace away.
+   */
+  function failureMessage(value: unknown, summary: string): string {
+    const detail = message(value)
+    captureFailure(value, summary, { description: detail })
+    return detail
+  }
+
   /** The live probe the unified check read for one remote Oven. */
   function probeFor(oven: Oven): OvenProbe | undefined {
     return oven.kind === 'local' ? undefined : (ovenPeeks.peek(oven.id)?.probe ?? undefined)
@@ -262,7 +278,7 @@
       await invoke('oven:setDefault', id)
       await load()
     } catch (failure) {
-      error = message(failure)
+      error = failureMessage(failure, 'An Oven could not be made the default')
     }
   }
 
@@ -299,7 +315,7 @@
             specs: health[oven.id]?.specs
           }
         }
-        toast.error(`${oven.name} could not be checked`, { description: detail })
+        reportFailure(failure, `${oven.name} could not be checked`, { description: detail })
       } finally {
         checking = ''
       }
@@ -383,7 +399,7 @@
       ovenState = await invoke('oven:reorder', next)
       ovens.adopt(ovenState)
     } catch (failure) {
-      error = message(failure)
+      error = failureMessage(failure, 'The Oven order could not be saved')
     } finally {
       busy = ''
     }
@@ -572,7 +588,7 @@
       await ovenPeeks.refresh(ovenId)
       toast.success(`${row.name} installed on this Oven`)
     } catch (failure) {
-      error = message(failure)
+      error = failureMessage(failure, `${row.name} could not be installed on this Oven`)
     } finally {
       harnessBusy = ''
     }
@@ -591,7 +607,9 @@
       // the one it had when the page opened.
       void ovenPeeks.refresh(oven.id)
     } catch (failure) {
-      toast.error(message(failure))
+      reportFailure(failure, `${oven.name} could not sync its clock`, {
+        description: message(failure)
+      })
     } finally {
       timezoneBusy = ''
     }
@@ -615,7 +633,7 @@
       ensureChecks(ovenState)
       void ovens.ensureInventory(LOCAL_OVEN_ID)
     } catch (failure) {
-      error = message(failure)
+      error = failureMessage(failure, 'The Oven list could not be read')
     }
   }
   onMount(() => {
@@ -701,12 +719,13 @@
         [local.id]: { ...result, specs: result.specs ?? health[local.id]?.specs }
       }
     } catch (failure) {
+      const detail = failureMessage(failure, `${local.name} could not be reached`)
       health = {
         ...health,
         [local.id]: {
           state: 'disconnected',
           checkedAt: Date.now(),
-          error: message(failure),
+          error: detail,
           specs: health[local.id]?.specs
         }
       }
@@ -741,7 +760,10 @@
     customSvg = oven?.customSvg
     void invoke('icon-library:list')
       .then((icons) => (customIcons = icons))
-      .catch((failure: unknown) => (modalError = message(failure)))
+      .catch(
+        (failure: unknown) =>
+          (modalError = failureMessage(failure, 'The icon library could not be read'))
+      )
     color = appearance.color
     const connection = oven?.connection
     const host = connection?.host.includes(':') ? `[${connection.host}]` : connection?.host
@@ -771,7 +793,7 @@
       pendingIcon = picked
       clearImage = false
     } catch (failure) {
-      modalError = message(failure)
+      modalError = failureMessage(failure, 'The Oven icon could not be read')
     }
   }
 
@@ -827,7 +849,7 @@
     try {
       input = { ...draftInput(), name: name.trim() || 'Connection test' }
     } catch (failure) {
-      modalError = message(failure)
+      modalError = failureMessage(failure, 'The Oven details are not valid')
       return
     }
     const requestId = crypto.randomUUID()
@@ -848,7 +870,8 @@
       connectionResult = result
       if (editing) health = { ...health, [editing.id]: result }
     } catch (failure) {
-      if (connectionTestId === requestId) modalError = message(failure)
+      if (connectionTestId === requestId)
+        modalError = failureMessage(failure, 'The connection test could not run')
     } finally {
       clearTimeout(timeout)
       if (connectionTestId === requestId) {
@@ -884,7 +907,7 @@
       await load()
       editorOpen = false
     } catch (failure) {
-      modalError = message(failure)
+      modalError = failureMessage(failure, 'The Oven could not be saved')
     } finally {
       busy = ''
     }
@@ -901,7 +924,8 @@
         identityValidation = 'Private-key file validated.'
       }
     } catch (failure) {
-      if (identityFile === candidate) identityValidation = message(failure)
+      if (identityFile === candidate)
+        identityValidation = failureMessage(failure, 'The SSH key file could not be validated')
     }
   }
 
@@ -912,7 +936,7 @@
       identityFile = path
       await validateIdentity()
     } catch (failure) {
-      identityValidation = message(failure)
+      identityValidation = failureMessage(failure, 'The key file could not be chosen')
     }
   }
 
@@ -941,7 +965,7 @@
       ovenPeeks.forget(pendingRemoval.id)
       pendingRemoval = null
     } catch (failure) {
-      error = message(failure)
+      error = failureMessage(failure, 'The Oven could not be removed')
     } finally {
       busy = ''
     }
@@ -955,7 +979,7 @@
       await invoke('oven:harness:update', ovenId, harnessId)
       await ovenPeeks.refresh(ovenId)
     } catch (failure) {
-      error = message(failure)
+      error = failureMessage(failure, 'A harness could not be updated on this Oven')
     } finally {
       harnessBusy = ''
     }
@@ -971,7 +995,7 @@
       await ovenPeeks.refresh(pending.ovenId)
       pendingHarnessRemoval = null
     } catch (failure) {
-      error = message(failure)
+      error = failureMessage(failure, 'A harness could not be removed from this Oven')
     } finally {
       harnessBusy = ''
     }
@@ -1023,7 +1047,7 @@
     } catch (failure) {
       const detail = message(failure)
       secretErrors = { ...secretErrors, [ovenId]: detail }
-      toast.error(`${ovenName(ovenId)} could not report its credential vault`, {
+      reportFailure(failure, `${ovenName(ovenId)} could not report its credential vault`, {
         description: detail
       })
     }
@@ -1056,8 +1080,9 @@
         )
       await refreshUtilitySecrets(oven.id, answer.enabled)
     } catch (failure) {
-      const detail = message(failure)
-      toast.error(`${oven.name} could not change its credential store`, { description: detail })
+      reportFailure(failure, `${oven.name} could not change its credential store`, {
+        description: message(failure)
+      })
       // The store may be off with its deletion unfinished, so show what is true now.
       await refreshUtilitySecrets(oven.id)
     } finally {
@@ -1081,8 +1106,9 @@
       )
       await refreshUtilitySecrets(oven.id, secretEnabled[oven.id])
     } catch (failure) {
-      const detail = message(failure)
-      toast.error(`${oven.name} could not forget its stored credentials`, { description: detail })
+      reportFailure(failure, `${oven.name} could not forget its stored credentials`, {
+        description: message(failure)
+      })
     } finally {
       secretBusy = ''
     }
@@ -1496,7 +1522,7 @@
                           </p>
                         {/if}
                         {#if vault}
-                          <p class="text-xs" class:text-danger={!vault.available} role="status">
+                          <p class="text-xs text-muted" role="status">
                             {utilityVaultNote(vault)}
                           </p>
                         {:else if secretFailure}
