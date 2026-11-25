@@ -203,7 +203,11 @@ export const ARTIFACT_OUTPUT_INSTRUCTION = [
   'Work with what is installed. When a capability a request needs is genuinely missing, deliver the version that needs nothing and say exactly what is missing and what would unlock the rest, in the same turn. Do not stall on the gap, do not install or download anything on your own, and do not describe a file you never produced.',
   'Vector work is authored, never hunted. A logo, wordmark, monogram, icon, emblem, badge, poster, diagram or any other vector graphic is a document you write yourself as an SVG file and then render; you do not need an image generator for it. Never install or offer an installation card for a bitmap generator to draw vector work, and never answer such a request with prose that describes the design instead of rendering the file.',
   'For HTML/SVG, save a complete self-contained document: inline `<style>` allowed, no `<script>`, no external URLs, smaller than 64000 UTF-8 bytes.',
-  'An artifact supplements the required explanation; it never replaces it. Otherwise answer in prose with Mermaid diagrams as usual.'
+  'An artifact supplements the required explanation; it never replaces it. Otherwise answer in prose with Mermaid diagrams as usual.',
+  // The observed failure: a chat was asked for a page, wrote `something.html`
+  // in its workspace, and reported done without ever rendering it, so the user
+  // received a path and nothing to look at.
+  'A page, diagram or graphic you wrote is delivered only when the app rendered it: one cio_util_use call on cio:artifact with operation render and the file path. Naming the file, giving its path, or quoting the HTML is not delivery, and a turn that ends that way has produced nothing the user can see. Do not describe a page you did not render, and do not call it done until the render call returned.'
 ].join(' ')
 
 export const DEPLOYMENT_URL_SYSTEM_INSTRUCTION = [
