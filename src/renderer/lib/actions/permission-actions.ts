@@ -19,19 +19,19 @@ export interface PermissionLevelDescriptor {
 export const PERMISSION_LEVELS: readonly PermissionLevelDescriptor[] = [
   {
     id: 'auto_review',
-    label: 'Auto Review',
+    label: 'Auto',
     description: 'Auto-run every permission unless it is explicitly denied',
     keywords: ['access', 'approval', 'security', 'review', 'deny']
   },
   {
     id: 'full_access',
-    label: 'Full Access',
+    label: 'Full',
     description: 'Run in yolo mode: every operation auto-approved',
     keywords: ['access', 'approval', 'security', 'yolo', 'unrestricted']
   },
   {
     id: 'oven_mode',
-    label: 'Oven Mode',
+    label: 'Oven',
     description: 'Run unrestricted on this external Oven: no protective check applies there',
     keywords: ['access', 'approval', 'security', 'oven', 'remote', 'machine', 'unrestricted']
   }

@@ -176,13 +176,18 @@ export interface PersistedBrowserTab extends BrowserAppearance {
   pinned: boolean
   pinnedAt: number | null
   /**
-   * The assistant conversation bound to this tab: a real thread in the reserved
-   * hidden browser project, or null while the tab has never asked the agent
-   * anything. It is stored on the tab because that is the lifetime the user
-   * agreed to: the conversation lives exactly as long as the tab that owns it,
-   * and a restart restores both.
+   * The assistant conversations this tab owns, oldest first: real threads in the
+   * reserved hidden browser project, empty while the tab has never asked the
+   * agent anything.
+   *
+   * A tab is one page, and a page can be asked more than one thing, so the tab
+   * owns a list rather than a single conversation: each conversation is a chat
+   * of its own, and the rail lists them as tabs. They are stored on the tab
+   * because that is the lifetime the user agreed to: the conversations live
+   * exactly as long as the tab that owns them, and a restart restores all of
+   * them.
    */
-  assistantThreadId: string | null
+  assistantThreadIds: string[]
 }
 
 /** The durable tab list: the tabs, their folds, their boxes, which tab was on
@@ -245,18 +250,25 @@ function browserTabId(value: unknown): string {
 }
 
 /**
- * The agent-chat thread id one browser tab owns.
+ * The agent-chat thread id one browser tab's conversations are built on.
  *
  * A tab's conversation is a real thread in the hidden browser project, and its
- * workspace is `browser-cwd/<thread id>`, so the id is derived from the tab id
- * rather than minted at random: the tab and its conversation then name one
- * directory, and a conversation recreated for the same tab lands in the same
- * place. A tab id carries a colon, which is not a legal path segment on Windows,
- * so every character outside the safe id set is replaced.
+ * workspace is `browser-cwd/<thread id>`, so the first conversation's id is
+ * derived from the tab id rather than minted at random: the tab and that
+ * conversation then name one directory, and a conversation recreated for the
+ * same tab lands in the same place. Every further conversation of the tab takes
+ * this as its prefix and adds its own, because one page can be asked several
+ * things and each answer is a conversation of its own. A tab id carries a colon,
+ * which is not a legal path segment on Windows, so every character outside the
+ * safe id set is replaced.
  */
 export function browserAssistantThreadId(tabId: string): string {
   return tabId.replace(/[^A-Za-z0-9._-]/gu, '-')
 }
+
+/** The most conversations one browser tab may own, so a runaway assistant cannot
+ *  grow a single tab's list without limit. */
+export const MAX_BROWSER_TAB_ASSISTANT_THREADS = 20
 
 /** A stored assistant thread id, or null when the field is absent or unusable.
  *  A repaired field here costs one conversation: the tab simply asks the agent
@@ -265,6 +277,28 @@ function assistantThreadId(value: unknown): string | null {
   if (typeof value !== 'string') return null
   if (value === '' || value.length > MAX_BROWSER_ASSISTANT_THREAD_ID_LENGTH) return null
   return ENTITY_ID_PATTERN.test(value) ? value : null
+}
+
+/**
+ * The conversations one stored tab owns, in stored order.
+ *
+ * `assistantThreadId` is the field a store written before a tab could own more
+ * than one conversation carries, so it is read as a one-entry list instead of
+ * being dropped: those conversations keep working across the change.
+ */
+function assistantThreadIds(record: Record<string, unknown>): string[] {
+  const stored = record['assistantThreadIds']
+  const ids: string[] = []
+  const seen = new Set<string>()
+  const add = (value: unknown): void => {
+    const id = assistantThreadId(value)
+    if (!id || seen.has(id) || ids.length >= MAX_BROWSER_TAB_ASSISTANT_THREADS) return
+    seen.add(id)
+    ids.push(id)
+  }
+  if (Array.isArray(stored)) for (const value of stored) add(value)
+  if (ids.length === 0) add(record['assistantThreadId'])
+  return ids
 }
 
 function groupId(value: unknown): string {
@@ -407,7 +441,7 @@ function parseTabs(
       hibernated: entry['hibernated'] === true,
       pinned,
       pinnedAt: pinned ? (optionalInteger(entry['pinnedAt']) ?? createdAt) : null,
-      assistantThreadId: assistantThreadId(entry['assistantThreadId']),
+      assistantThreadIds: assistantThreadIds(entry),
       ...parseAppearance(entry)
     })
   }

@@ -3,7 +3,7 @@ import {
   formatCoolifyTimestamp,
   parseDeploymentLog,
   deploymentLogToText
-} from '../../../../src/renderer/lib/cloud/deployment-log'
+} from '../../../../src/lib/cloud/deployment-log'
 
 describe('formatCoolifyTimestamp', () => {
   it('formats an ISO timestamp into a readable date-time string', () => {

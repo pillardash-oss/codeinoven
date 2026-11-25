@@ -216,6 +216,118 @@ describe('permission policy', () => {
     })
   })
 
+  it('follows a literal variable assignment the way the shell does', () => {
+    const scratch = resolve(projectRoot, '.cio')
+    const policy = new PermissionPolicy({
+      projectRoot,
+      mode: 'auto_review',
+      scratchPaths: [scratch]
+    })
+
+    // The staging idiom every agent writes: assign the scratch subdirectory,
+    // then work through it. Proving `.cio/tmp/stage` proves `"$S"`.
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: [
+          'cd .cio/tmp && S=stage && rm -rf "$S" && mkdir -p "$S"/apps && cp -R ../../apps "$S"/apps ; rm -rf "$S"'
+        ]
+      })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
+    // `$PWD` is the directory the chain is in at that point, so it cannot leave
+    // scratch by itself.
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: ['cd .cio/tmp/stage && rm -rf "$PWD"/build']
+      })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
+    // An assignment that points outside scratch proves nothing about the work
+    // that follows it.
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: ['cd .cio/tmp && S=/Users/me/Documents && rm -rf "$S"']
+      }).approved
+    ).toBe(false)
+    // A variable the chain never assigned, and command substitution, are still
+    // unreadable: those can name anything at the moment they run.
+    expect(
+      policy.evaluate({ permission: 'bash', commands: ['cd .cio/tmp && rm -rf "$NOPE"/x'] })
+        .approved
+    ).toBe(false)
+    expect(
+      policy.evaluate({ permission: 'bash', commands: ['cd .cio/tmp && rm -rf "$(pwd)"/x'] })
+        .approved
+    ).toBe(false)
+  })
+
+  it('treats a package task run as the project’s own work, not a wrapper', () => {
+    const scratch = resolve(projectRoot, '.cio')
+    const policy = new PermissionPolicy({
+      projectRoot,
+      mode: 'auto_review',
+      scratchPaths: [scratch]
+    })
+
+    // Staging a build in scratch and cleaning it up: the task is the project's
+    // own script, which Auto Review already runs without a card on its own.
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: [
+          'cd .cio/tmp && S=stage && rm -rf "$S" && mkdir -p "$S" && cp -R ../../apps "$S"/ && (cd "$S" && bun run build 2>&1 | tail -8); rm -rf "$S"'
+        ]
+      })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
+    expect(
+      policy.evaluate({ permission: 'bash', commands: ['bun run build && rm -rf .cio/tmp/stage'] })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
+    // Everything else an interpreter does is still a wrapper that disproves the
+    // chain: inline code, a script file, and a task that deletes outside.
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: ["cd .cio/tmp && rm -rf stage && bash -c 'rm -rf /'"]
+      }).approved
+    ).toBe(false)
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: ['cd .cio/tmp && rm -rf stage && bun .cio/tmp/stage/clean.ts']
+      }).approved
+    ).toBe(false)
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: ['cd .cio/tmp && bun run build && rm -rf /Users/me/Documents']
+      }).approved
+    ).toBe(false)
+  })
+
+  it('proves a delete glob by the directory it enumerates', () => {
+    const scratch = resolve(projectRoot, '.cio')
+    const policy = new PermissionPolicy({
+      projectRoot,
+      mode: 'auto_review',
+      scratchPaths: [scratch]
+    })
+
+    expect(
+      policy.evaluate({ permission: 'bash', commands: ['rm -rf .cio/tmp/stage/packages/*/dist'] })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
+    // A glob cannot climb out of the directory its prefix names, but a literal
+    // `..` would, and a pattern rooted outside scratch enumerates there.
+    expect(
+      policy.evaluate({ permission: 'bash', commands: ['rm -rf .cio/tmp/stage/*/../../src'] })
+        .approved
+    ).toBe(false)
+    expect(
+      policy.evaluate({ permission: 'bash', commands: ['rm -rf /Users/me/project/*/dist'] })
+        .approved
+    ).toBe(false)
+  })
+
   it('still asks when a scratch-rooted request can leave scratch', () => {
     const scratch = resolve(projectRoot, '.cio')
     const policy = new PermissionPolicy({

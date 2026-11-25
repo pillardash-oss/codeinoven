@@ -638,5 +638,11 @@ export const IPC_EVENT_CONTRACT = {
    */
   'orchestration:changed': [] as unknown as [
     change: import('../types/orchestration').OrchestrationDispatchChange
-  ]
+  ],
+  /**
+   * One live stage of a push in flight, as git reports it. A push is a single
+   * long round trip, so this is the only signal that a large one is moving; the
+   * panel shows the percentage and nothing else depends on it.
+   */
+  'git:pushProgress': [] as unknown as [progress: import('../types/git').GitPushProgress]
 }

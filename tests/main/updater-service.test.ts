@@ -3,7 +3,10 @@ import type { AppConfig } from '../../src/lib/types'
 import type { StorageEngine } from '../../src/main/storage/storage-engine'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../src/lib/agent-behavior'
 import { DEFAULT_SPEECH_SETTINGS } from '../../src/lib/speech/types'
-import { DEFAULT_MAX_CONFLICT_FILE_BYTES } from '../../src/lib/types'
+import {
+  DEFAULT_MAX_CONFLICT_FILE_BYTES,
+  DEFAULT_STEER_TO_START_WORK_MINUTES
+} from '../../src/lib/types'
 import {
   DEFAULT_BACKGROUND_WAKE_LEAD_MS,
   DEFAULT_BROWSER_HIBERNATION_MINUTES,
@@ -126,6 +129,7 @@ function defaultConfig(): AppConfig {
     imageDescriptorAskAgain: false,
     autoRetryAfterReset: true,
     resumeWorkOnRestart: true,
+    steerToStartWorkMinutes: DEFAULT_STEER_TO_START_WORK_MINUTES,
     defaultMergeMethod: 'squash',
     defaultPullStrategy: 'ask',
     maxDiffLines: 100,

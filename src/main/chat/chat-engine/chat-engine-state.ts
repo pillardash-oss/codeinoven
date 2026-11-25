@@ -704,6 +704,23 @@ export class ChatEngineState {
   sessionWatchdogs = new Map<string, ReturnType<typeof setTimeout>>()
 
   /**
+   * Per-session work-stall checks, keyed by sessionId.
+   *
+   * Each turn gets exactly one check, armed when the turn becomes active and
+   * never moved by streaming events or steers. The record keeps the turn it was
+   * armed for, so a turn that started without the previous one settling gets its
+   * own full window instead of inheriting the old timer.
+   */
+  workStallChecks = new Map<string, { timer: ReturnType<typeof setTimeout>; turnKey: string }>()
+
+  /**
+   * Sessions whose active turn already reached its verdict, mapped to that turn:
+   * the steer was sent, or a file action made it unnecessary. Cleared with the
+   * turn, so the next turn gets its own single check.
+   */
+  workStallSettledTurns = new Map<string, string>()
+
+  /**
    * Which harness still holds resources for which project, and how long each has
    * been quiet.
    *

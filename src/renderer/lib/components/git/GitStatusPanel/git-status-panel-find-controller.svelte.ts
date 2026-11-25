@@ -7,6 +7,7 @@ import type { GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
 import type {
   GitBranchInfo,
   GitCommitInfo,
+  GitFileChange,
   GitHubDeployment,
   GitHubWorkflowRun,
   GitStashEntry,
@@ -19,6 +20,7 @@ import {
   type GitFindRow,
   type GitFindScope
 } from '../git-panel-find'
+import { matchChangeFiles, splitChangePath } from '$lib/git-changes-tree'
 
 /**
  * What the find bar needs from the panel it searches.
@@ -32,7 +34,11 @@ export interface GitStatusPanelFindHost {
   readonly activeTab: GitPanelTabId
   readonly githubIdentity: { owner: string; repo: string } | null
   readonly prListState: PrState
+  /** The files the Changes view is showing: the working tree, or the open commit. */
+  readonly changedFiles: readonly GitFileChange[]
   openCommit(commit: GitCommitInfo): void
+  /** Bring a changed file into view and open its diff. */
+  revealFile(change: GitFileChange): void
   requestCheckout(branch: GitBranchInfo): void
   openPullRequest(pr: PullRequestSummary): void
   openRun(run: GitHubWorkflowRun): void
@@ -135,6 +141,21 @@ export class GitStatusPanelFindController {
    */
   async rowsFor(scope: GitFindScope, query: string): Promise<GitFindRow[]> {
     switch (scope) {
+      case 'files': {
+        // The list is already resident, so this is a filter, not a request: the
+        // bar answers as the reader types instead of spawning a log per keystroke.
+        return matchChangeFiles(this.host.changedFiles, query, this.limit).map((change) => {
+          const parts = splitChangePath(change.path)
+          return {
+            kind: 'file' as const,
+            key: `${change.staged ? 's:' : 'w:'}${change.path}`,
+            title: parts.name,
+            detail: parts.dir === '' ? 'repository root' : parts.dir,
+            badge: change.status,
+            file: change
+          }
+        })
+      }
       case 'commits': {
         const commits = await gitState.getLog(this.host.projectId, 50, 0, query)
         return commits.map((commit) => ({
@@ -321,6 +342,9 @@ export class GitStatusPanelFindController {
   selectRow(row: GitFindRow): void {
     this.close()
     switch (row.kind) {
+      case 'file':
+        this.host.revealFile(row.file)
+        return
       case 'commit':
         this.host.openCommit(row.commit)
         return

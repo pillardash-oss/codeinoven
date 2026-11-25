@@ -77,6 +77,13 @@ export class GitStatusPanelEffects extends BoardUnit<GitStatusPanel> {
      *  re-running it would flash the full-panel loading state on every scoped
      *  thread switch. */
     $effect(() => {
+      // The loaded history belongs to one repository. A panel aimed at another
+      // project keeps its state across the switch, so the list has to be dropped
+      // here: history is paged by an offset into a log, and appending a second
+      // repository's page to the first one's list is both wrong to read and, on
+      // a shared commit, a duplicate key in the list's keyed each block.
+      if (this.root.loadRepoState.historyProjectId !== this.root.props.projectId)
+        this.root.loadRepoState.resetHistory(this.root.props.projectId)
       this.root.loadRepoState.hasDeployments =
         cachedHasDeployments(this.root.props.projectId) ?? null
       void this.root.loadRepoState.loadRepoState()

@@ -1,8 +1,22 @@
 import { rm, stat } from 'fs/promises'
 import { resolve } from 'path'
 import { simpleGit } from 'simple-git'
-import type { SimpleGit } from 'simple-git'
+import type { SimpleGit, SimpleGitProgressEvent } from 'simple-git'
 import { Logger } from '../../system/logger'
+
+/**
+ * What a round trip can report while it runs, and how the caller can call it off.
+ *
+ * Both are simple-git plugins on the instance that spawns the process, so they
+ * reach exactly the commands that client runs: a progress plugin also adds
+ * `--progress` to that command, which is why it is only ever installed for a
+ * round trip that asked for it. An aborted signal kills the child, and the
+ * pending command rejects as any other failed git command would.
+ */
+export interface GitRoundTripHooks {
+  onProgress?: (event: SimpleGitProgressEvent) => void
+  signal?: AbortSignal
+}
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolveTimeout) => setTimeout(resolveTimeout, ms))
@@ -37,10 +51,16 @@ export async function validateRepositoryDirectory(projectPath: string): Promise<
   return absolutePath
 }
 
-export function createGitClient(directory: string, extraConfig: string[] = []): SimpleGit {
+export function createGitClient(
+  directory: string,
+  extraConfig: string[] = [],
+  hooks: GitRoundTripHooks = {}
+): SimpleGit {
   return simpleGit(directory, {
     config: extraConfig,
-    maxConcurrentProcesses: 1
+    maxConcurrentProcesses: 1,
+    progress: hooks.onProgress,
+    abort: hooks.signal
   })
 }
 
@@ -75,10 +95,16 @@ export function createGitClientWithoutEditor(directory: string): SimpleGit {
 }
 
 /** Transient auth header via per-command `-c` config   never persisted, never logged. */
-export function createAuthenticatedGitClient(directory: string, token: string): SimpleGit {
+export function createAuthenticatedGitClient(
+  directory: string,
+  token: string,
+  hooks: GitRoundTripHooks = {}
+): SimpleGit {
   return simpleGit(directory, {
     maxConcurrentProcesses: 1,
-    config: [`http.extraheader=Authorization: Bearer ${token}`]
+    config: [`http.extraheader=Authorization: Bearer ${token}`],
+    progress: hooks.onProgress,
+    abort: hooks.signal
   })
 }
 

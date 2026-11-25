@@ -356,7 +356,10 @@
 
   async function copyError(e: AppErrorEntry): Promise<void> {
     try {
-      await copyText(e.details ? `${e.message}\n\n${e.details}` : e.message, null)
+      // The build and host travel with the trace even when the entry has none of
+      // its own: a report without them cannot be matched to a release.
+      const text = [e.message, e.environment, e.details].filter(Boolean).join('\n\n')
+      await copyText(text, null)
       copiedId = e.id
       window.setTimeout(() => {
         if (copiedId === e.id) copiedId = null
@@ -653,7 +656,7 @@
 
 {#snippet appErrorRow(e: AppErrorEntry)}
   <div
-    class="group flex items-start gap-2 border-l-2 bg-surface px-3 py-2.5 transition-colors hover:bg-elevated {appErrorAccent(
+    class="group relative flex items-start gap-2 border-l-2 bg-surface px-3 py-2.5 transition-colors hover:bg-elevated {appErrorAccent(
       e.kind
     )}"
   >
@@ -665,7 +668,7 @@
       title={appErrorLabel(e.kind)}
     ></span>
     <div class="min-w-0 flex-1">
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 pr-14">
         <span
           class="shrink-0 text-[0.625rem] font-semibold uppercase tracking-wide {e.kind === 'error'
             ? 'text-danger'
@@ -685,9 +688,15 @@
       </p>
       {#if hasUsefulDetails(e.message, e.details) && e.details}
         {@render detailsBlock(`app:${e.id}`, e.details)}
+      {:else if e.environment}
+        <!-- Nothing to expand, but the build and host still belong on the row:
+             they are the first thing a report needs. -->
+        <p class="mt-0.5 select-text font-mono text-[0.625rem] text-dimmed">{e.environment}</p>
       {/if}
     </div>
-    <div class="flex shrink-0 items-center gap-0.5">
+    <div
+      class="absolute top-1 right-1.5 flex items-center gap-0.5 bg-surface transition-colors group-hover:bg-elevated"
+    >
       <button
         class="flex h-6 w-6 items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
         aria-label={hasUsefulDetails(e.message, e.details)

@@ -185,7 +185,11 @@ export type OvenUtilityTurnInput = Pick<
  * simply runs on the per-turn push, and says so instead of pretending.
  */
 export type OvenUtilitySecretBackend =
-  'macos-keychain' | 'windows-dpapi' | 'linux-secret-service' | 'unavailable'
+  | 'macos-keychain'
+  | 'windows-dpapi'
+  | 'linux-secret-service'
+  | 'linux-encrypted-file'
+  | 'unavailable'
 
 /** What this machine can do with a credential it is asked to keep. */
 export interface OvenUtilitySecretVault {

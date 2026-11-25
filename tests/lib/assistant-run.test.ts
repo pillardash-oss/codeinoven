@@ -122,12 +122,34 @@ describe('assistantRunPrompt', () => {
     )
   })
 
-  it('names a Getting started thread by the assistant, never by its authoring title', () => {
+  it('names a Getting started thread by the clock the user agreed, never its authoring title', () => {
     // The seed thread's fixed "Getting started" title is the authoring host, so
-    // a run of it must read as the assistant, not as another getting-started pass.
+    // a run of it must read as the roundup the clock actually is. Naming the run
+    // after the assistant made a scheduled roundup read as the assistant waking
+    // up on its own schedule for no reason.
     expect(
-      assistantRunPrompt({ title: 'Getting started', assistantGettingStarted: true }, 'Shower News')
+      assistantRunPrompt(
+        { title: 'Getting started', assistantGettingStarted: true },
+        'Amebo',
+        "Amebo's Roundup"
+      )
+    ).toBe("Run this scheduled task now: Amebo's Roundup")
+  })
+
+  it('names a Getting started thread by the assistant when its clock has no name', () => {
+    expect(
+      assistantRunPrompt(
+        { title: 'Getting started', assistantGettingStarted: true },
+        'Shower News',
+        '   '
+      )
     ).toBe('Run this scheduled task now: Shower News')
+  })
+
+  it('never renames a user task with the clock name', () => {
+    expect(assistantRunPrompt({ title: 'Triage PRs' }, 'Shower News', 'Product watch')).toBe(
+      'Run this scheduled task now: Triage PRs'
+    )
   })
 
   it('falls back to the bare prompt when neither label exists', () => {

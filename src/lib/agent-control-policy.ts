@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+
 /** Shared by local prompts, remote Oven prompts, and utility capability guidance. */
 export const BACKGROUND_AGENT_CONTROL_INSTRUCTION = [
   'BACKGROUND-FIRST AGENT CONTROL:',
@@ -71,7 +73,7 @@ export function unmanagedProcessKillReason(
   if (!command.trim()) return null
 
   const refused =
-    'Not executed: stopping a process from a shell command is refused in every form (by pid, port, name, signal or pattern, or by an interpreter, a script, or a nested shell that does it), because the command cannot prove it started that process and another project or the user may own it. CodeInOven owns process lifecycle: a process this session started is stopped by pid through the app with cio_process_stop, after listing your own with cio_process_list, and anything else is left running. If a port is busy, start your own server on another port. If a process must go, report it instead of guessing.'
+    'Not executed: stopping a process from a shell command is refused in every form (by pid, port, name, signal or pattern, or by an interpreter, a script, or a nested shell that does it), because the command cannot prove it started that process and another project or the user may own it. CodeInOven owns process lifecycle: call cio_process_list directly to see the processes this thread owns (it is an app tool, not a utility, so cio_util_find never lists it and it needs no activation), then call cio_process_stop with the pid you own, including a server you backgrounded from your own shell: it carries this session, so the app can prove it is yours. Start the next long-running command with cio_process_start instead of backgrounding it. Anything you do not own is left running: say which pid and port it is instead of guessing. If a port is busy, start your own server on another port.'
 
   /** Programs that terminate a process. `kill.exe` and friends reduce to these. */
   const stopPrograms = new Set([
@@ -187,20 +189,10 @@ export function unmanagedProcessKillReason(
     ) {
       return null
     }
-    const moduleProcess = (
-      globalThis as {
-        process?: { getBuiltinModule?: (specifier: string) => unknown; cwd?: () => string }
-      }
-    ).process
-    const fsModule = moduleProcess?.getBuiltinModule?.('node:fs')
-    const readFileSync = (
-      fsModule as { readFileSync?: (target: string, encoding: string) => string } | undefined
-    )?.readFileSync
-    if (!readFileSync) return null
-    const candidates = [path, `${moduleProcess?.cwd?.() ?? '.'}/${path}`]
+    const candidates = [path, `${process.cwd()}/${path}`]
     for (const candidate of candidates) {
       try {
-        return String(readFileSync.call(fsModule, candidate, 'utf8')).slice(0, 200_000)
+        return String(readFileSync(candidate, 'utf8')).slice(0, 200_000)
       } catch {
         // A path this process cannot read cannot be executed by it either.
       }
@@ -443,7 +435,7 @@ export function unmanagedProcessKillReason(
 export function unmanagedBrowserShellReason(
   toolName: string,
   input: Record<string, unknown>,
-  options?: { threadBrowserAvailable?: boolean }
+  options?: { threadBrowserAvailable?: boolean; cwd?: string }
 ): string | null {
   if (!['bash', 'powershell', 'cmd'].includes(toolName)) return null
   const command = typeof input['command'] === 'string' ? input['command'] : ''
@@ -457,7 +449,7 @@ export function unmanagedBrowserShellReason(
   if (!threadBrowserAvailable) return null
 
   const refused =
-    'Not executed: launching your own browser is refused while this thread has its in-app browser, which is the only browser that shows the page the app is serving, in the tab the user can watch. Use it first: find it with cio_util_find (query "browser"), activate it with cio_util_init, and drive the page with its operations   open a tab, navigate, read the console, click, type, and take a screenshot. Only when that browser genuinely cannot serve this thread may you fall back to a headless browser, and the app allows the fallback itself (an Oven thread, where the browser tab belongs to this machine, is already allowed). When you are refused here, that means the app has not marked this thread unavailable: use the in-app browser, or say what it could not do and report the check you could not run. A binary that happens to be on disk is not permission to use it.'
+    'Not executed: launching your own browser is refused while this thread has its in-app browser, which is the only browser that shows the page the app is serving, in the tab the user can watch. It is already installed, so do not search for it: call cio_util_init with utility_id "cio:browser" and drive the page with its operations   open, navigate, reload, run (a whole flow in one call), snapshot, query, screenshot, console, click, type, press, select, check, mouse, drag, scroll, viewport, upload, evaluate, wait. Only when that browser genuinely cannot serve this thread may you fall back to a headless browser, and the app allows the fallback itself (an Oven thread, where the browser tab belongs to this machine, is already allowed). When you are refused here, the app has not marked this thread unavailable: use the in-app browser, or say what it could not do and report the check you could not run. A binary that happens to be on disk is not permission to use it.'
 
   /** Programs that are a browser, or a launcher that drives one. */
   const browserPrograms = new Set([
@@ -541,6 +533,16 @@ export function unmanagedBrowserShellReason(
     /(?:^|[\s;&|])(?:rg|grep|ag|ack|git|ls|cat|find|head|tail|wc|stat|file|readlink|realpath)\b/u
   if (browserPath.test(command) && !readOnlyPrograms.test(command)) return refused
 
+  /**
+   * The characters a shell needs a backslash in front of.
+   *
+   * A backslash is only an escape before one of these. Reading it as an escape
+   * everywhere ate the separators of a Windows path, so `node C:\work\boot.mjs`
+   * reached the script check below as `C:workboot.mjs`, found no file, and the
+   * launch the check exists to catch went through.
+   */
+  const escapedByBackslash = /^["'`\s;&|()<>]$/u
+
   /** Split a command into words, remembering whether a word was quoted. */
   const tokenize = (text: string): { words: string[]; quoted: boolean[] }[] => {
     const commands: { words: string[]; quoted: boolean[] }[] = []
@@ -565,14 +567,20 @@ export function unmanagedBrowserShellReason(
       quoted = []
     }
     let escaped = false
-    for (const character of text) {
+    const characters = [...text]
+    for (let index = 0; index < characters.length; index++) {
+      const character = characters[index] ?? ''
       if (escaped) {
         word += character
         open = true
         escaped = false
         continue
       }
-      if (character === '\\' && quote !== "'") {
+      if (
+        character === '\\' &&
+        quote !== "'" &&
+        escapedByBackslash.test(characters[index + 1] ?? '')
+      ) {
         escaped = true
         continue
       }
@@ -610,25 +618,26 @@ export function unmanagedBrowserShellReason(
     return commands
   }
 
-  /** A file an executor was handed, read only when it is a real path. */
+  /**
+   * A file an executor was handed, read only when it is a real path.
+   *
+   * This is the check that catches the launch a command hides: a model that
+   * cannot get `npx playwright` past the gate writes `.cio/tmp/boot.mjs` and
+   * runs `node` on it. Reading it is therefore not optional, and the read is a
+   * plain `readFileSync` from the module's own import rather than a lookup on
+   * `process`: when the lookup quietly answered nothing, the guard let the
+   * launch through and the model looked obedient for the rest of the turn.
+   */
   const readScript = (candidate: string): string | null => {
     if (!candidate || /^[|&;<>]+$/u.test(candidate)) return null
     if (!/\.(?:[cm]?[jt]sx?|py|rb|pl|php|ps1)$/iu.test(candidate)) return null
-    const moduleProcess = (
-      globalThis as {
-        process?: { getBuiltinModule?: (specifier: string) => unknown; cwd?: () => string }
-      }
-    ).process
-    const fsModule = moduleProcess?.getBuiltinModule?.('node:fs')
-    const readFileSync = (
-      fsModule as { readFileSync?: (target: string, encoding: string) => string } | undefined
-    )?.readFileSync
-    if (!readFileSync) return null
-    const cwd = moduleProcess?.cwd?.() ?? '.'
-    const candidates = [candidate, `${cwd}/${candidate}`, `${cwd}\\${candidate}`]
+    const roots = [options?.cwd, process.cwd()].filter(
+      (root): root is string => typeof root === 'string' && root.length > 0
+    )
+    const candidates = [candidate, ...roots.map((root) => `${root}/${candidate}`)]
     for (const path of candidates) {
       try {
-        return readFileSync(path, 'utf8')
+        return String(readFileSync(path, 'utf8')).slice(0, 200_000)
       } catch {
         continue
       }

@@ -177,18 +177,6 @@ export class NativeSpeechCapture {
     }
   }
 
-  /** Best-effort CoreAudio warmup: spawns the resident worker and lets it build
-   *  and prepare a throwaway engine ahead of the first real recording, so a
-   *  press on the mic does not pay process and audio-unit init. Only ever called
-   *  when microphone access is already granted (see `microphoneAccessGranted`),
-   *  never before the TCC decision exists, because touching the input device is
-   *  what makes macOS show its permission prompt. Failures are ignored: a cold
-   *  start still works, just slower. */
-  async warm(): Promise<void> {
-    if (!(await this.available())) return
-    await this.request({ id: randomUUID(), operation: 'prepare' }).catch(() => undefined)
-  }
-
   /**
    * Spawn the worker ahead of any recording, without touching the microphone.
    *

@@ -503,6 +503,10 @@
           createError = pushed.message
           return
         }
+        // A push the user stopped never reached the remote, so there is nothing
+        // for GitHub to build the pull request from: end the attempt here
+        // instead of creating one from the wrong commits.
+        if (pushed.status === 'stopped') return
       }
       // 3. Create the pull request.
       await finishCreate()
@@ -618,6 +622,9 @@
         createError = pushed.message
         return
       }
+      // Stopped before it reached the remote: the pull request would describe
+      // commits GitHub has never seen.
+      if (pushed.status === 'stopped') return
       await finishCreate()
     } finally {
       recoverMode = null

@@ -386,6 +386,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
               ' and its id, no re-activation needed. If context compaction dropped its capability docs, re-list them with ' +
               UTILITY_DOCS_TOOL_NAME +
               ' (accepts only the utility id). MCP clients are reconnected per turn as needed, so direct reuse costs nothing until you actually invoke.',
+            'A result larger than the character budget (15000 by default) arrives as page 1 of N, behind a header naming the tool, the page and how many there are, the charSize in force, the characters returned, the characters left and a pageRef. Read the rest with {page, pageRef} on the same tool: that reads what the app already holds rather than running the tool again, so a page never repeats a mutation, and the reference keeps working in later turns of this thread. When you need the whole payload at once, pass charSize (up to 200000) on the call itself instead of paging.',
             ...(state.bank.size > 0
               ? [
                   `Thread utilities bank (registered in earlier turns; invoke directly with ${UTILITY_INVOKE_TOOL_NAME}): ${[

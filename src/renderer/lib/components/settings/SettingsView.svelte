@@ -54,9 +54,11 @@
     MAX_BACKGROUND_WAKE_LEAD_MS,
     MAX_CIO_CLEANUP_RETENTION_DAYS,
     MAX_MAX_CONFLICT_FILE_BYTES,
+    MAX_STEER_TO_START_WORK_MINUTES,
     MIN_BACKGROUND_WAKE_LEAD_MS,
     MIN_CIO_CLEANUP_RETENTION_DAYS,
     MIN_MAX_CONFLICT_FILE_BYTES,
+    MIN_STEER_TO_START_WORK_MINUTES,
     type AppConfig,
     type AppConfigPatch,
     type CioCleanupCategoryId,
@@ -453,6 +455,24 @@
     }
 
     void updateConfig({ agentQuestionCap: value })
+  }
+
+  /** Stall steering is stored in minutes and shown in whole minutes. */
+  function saveSteerToStartWork(event: Event): void {
+    const input = event.currentTarget
+    if (!(input instanceof HTMLInputElement)) return
+
+    const minutes = Number(input.value)
+    if (
+      !Number.isInteger(minutes) ||
+      minutes < MIN_STEER_TO_START_WORK_MINUTES ||
+      minutes > MAX_STEER_TO_START_WORK_MINUTES
+    ) {
+      input.value = String(config.steerToStartWorkMinutes)
+      return
+    }
+
+    void updateConfig({ steerToStartWorkMinutes: minutes })
   }
 
   function saveMaxDiffLines(event: Event): void {
@@ -1003,6 +1023,28 @@
                   aria-label="Toggle auto-resuming threads after a usage reset"
                   disabled={!settingsReady}
                 />
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Steer to start work</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    How long cio should wait before steering stalled agents to begin work
+                  </p>
+                </div>
+                <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
+                  <input
+                    class="w-20 border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    type="number"
+                    min={MIN_STEER_TO_START_WORK_MINUTES}
+                    max={MAX_STEER_TO_START_WORK_MINUTES}
+                    step="1"
+                    value={config.steerToStartWorkMinutes}
+                    disabled={!settingsReady}
+                    aria-label="Minutes before steering a stalled agent to start work"
+                    onchange={saveSteerToStartWork}
+                  />
+                  minutes
+                </label>
               </div>
             </div>
           </div>

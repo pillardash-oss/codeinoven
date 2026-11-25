@@ -392,9 +392,10 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     id: 'general-recovery',
     section: 'general',
     blockId: 'general-recovery',
-    title: 'Recovery',
-    description: 'Resume interrupted work and auto-resume after usage resets.',
-    keywords: ['resume', 'restart', 'auto-resume', 'rate limit'],
+    title: 'Work',
+    description:
+      'Resume interrupted work, auto-resume after usage resets, and steer stalled agents to start work.',
+    keywords: ['resume', 'restart', 'auto-resume', 'rate limit', 'stall', 'steer', 'nudge'],
     icon: CioTabSettings
   },
   {

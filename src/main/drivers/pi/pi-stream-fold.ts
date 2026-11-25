@@ -23,7 +23,8 @@ import {
   spawnDoneCustomEvent,
   spawnFailurePatch,
   subagentActivityFromPayload,
-  subagentTimeRange
+  subagentTimeRange,
+  TERMINAL_SUBAGENT_STATUSES
 } from './pi-subagent'
 import {
   mapPiCost,
@@ -457,8 +458,24 @@ export function mapPiRecord(
       const args = record(entry['args'])
       const existing = findSubagentPart(context, callId)
       const base = existing?.activity ?? cioSubagentPart(messageId, callId, args).activity
+      // A background spawn's execute returns before the worker finishes, so pi can
+      // flush one last tool-execution update after the call's result already
+      // closed the card. That update carries no structured payload (only the
+      // plain failure text), and restating `running` from it put a failed worker
+      // back to "Working" for good, which the trace header then counted as an
+      // active sub-agent on a finished turn.
       const payloadPatch =
         type === 'tool_execution_update' ? parseSubagentPayload(partialOutput) : undefined
+      const failurePatch =
+        type === 'tool_execution_update' && payloadPatch === undefined
+          ? spawnFailurePatch(partialOutput)
+          : undefined
+      const patch = payloadPatch ?? failurePatch
+      const settled = TERMINAL_SUBAGENT_STATUSES.has(base.status)
+      // Once the worker is over, no start or update can revive it: a terminal
+      // payload keeps its own terminal state, and a stale `running` one is
+      // ignored, so a settled part is simply restated.
+      const status: AgentToolStatus = settled ? base.status : (patch?.status ?? 'running')
       return {
         events: [
           {
@@ -471,10 +488,10 @@ export function mapPiRecord(
               callID: callId,
               activity: {
                 ...base,
-                ...(payloadPatch ?? {}),
-                status: payloadPatch?.status ?? 'running',
+                ...(settled ? {} : (patch ?? {})),
+                status,
                 background: base.background,
-                time: base.time ?? { start: Date.now() }
+                time: subagentTimeRange(base, status)
               }
             }
           }

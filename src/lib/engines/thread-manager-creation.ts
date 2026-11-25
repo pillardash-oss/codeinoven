@@ -50,8 +50,8 @@ export class AllThreadsProtectedError extends Error {
     readonly activeCount: number
   ) {
     super(
-      `Cannot create a thread: every active thread is pinned or in spec status (${activeCount}/${limit}). ` +
-        'Move a thread out of spec, unpin it, or delete an existing thread first.'
+      `Cannot create a thread: every active thread is pinned, unread, working, waiting on you, or in spec status (${activeCount}/${limit}). ` +
+        'Read, finish, or delete an existing thread first.'
     )
     this.name = 'AllThreadsProtectedError'
   }

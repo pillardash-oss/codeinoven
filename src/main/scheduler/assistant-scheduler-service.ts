@@ -135,7 +135,10 @@ export class AssistantSchedulerService {
     // Both startup reads go through the worker: launch already contends with
     // the checkpoint trim and the corpus sweep, and neither read may add a
     // main-thread query to that moment.
-    this.pruneStaleSkips(await this.deps.assistants.listAssistantTasksViaWorker(), this.now())
+    this.pruneStaleSkips(
+      await this.deps.assistants.listAssistantClockTargetsViaWorker(),
+      this.now()
+    )
     this.startedAt = this.now()
     // Detect misses that happened while the app was closed before ticking, so a
     // slot that comes due only after startup is fired, not mis-recorded.
@@ -175,7 +178,7 @@ export class AssistantSchedulerService {
    */
   hasTaskOnTheClock(): boolean {
     try {
-      return this.deps.assistants.listAssistantTasks().some((task) => this.canComeDue(task))
+      return this.deps.assistants.listAssistantClockTargets().some((task) => this.canComeDue(task))
     } catch (error) {
       Logger.error('Assistant schedule could not be read', error)
       return true
@@ -212,7 +215,7 @@ export class AssistantSchedulerService {
     const endOfToday = new Date(now)
     endOfToday.setHours(23, 59, 59, 999)
     return this.deps.assistants
-      .listAssistantTasksFor(assistantId)
+      .listAssistantClockTargetsFor(assistantId)
       .some((task) => this.unskippedSlotsThrough(task, now, endOfToday.getTime()).length > 0)
   }
 
@@ -221,7 +224,7 @@ export class AssistantSchedulerService {
     const assistant = this.requireSkippableAssistant(assistantId)
     const now = this.now()
     const candidate = this.deps.assistants
-      .listAssistantTasksFor(assistantId)
+      .listAssistantClockTargetsFor(assistantId)
       .map((task) => this.nextUnskippedSlot(task, now))
       .filter((run): run is Omit<SkippedRun, 'id'> => run !== null)
       .sort((a, b) => a.dueAt - b.dueAt)[0]
@@ -239,7 +242,7 @@ export class AssistantSchedulerService {
     const endOfToday = new Date(now)
     endOfToday.setHours(23, 59, 59, 999)
     const candidates = this.deps.assistants
-      .listAssistantTasksFor(assistantId)
+      .listAssistantClockTargetsFor(assistantId)
       .flatMap((task) => this.unskippedSlotsThrough(task, now, endOfToday.getTime()))
     if (candidates.length === 0) {
       throw new Error(`No scheduled runs remain today for ${assistant.name}.`)
@@ -322,7 +325,7 @@ export class AssistantSchedulerService {
     const missed = this.missed.listAll().find((entry) => entry.id === id)
     if (!missed) throw new Error(`Missed run not found: ${id}`)
     const task = this.deps.assistants
-      .listAssistantTasks()
+      .listAssistantClockTargets()
       .find((entry) => entry.id === missed.threadId)
     if (!task) {
       // The task is gone; settle the orphan so it stops badging.
@@ -398,7 +401,7 @@ export class AssistantSchedulerService {
     if (!assistant.knowledge.trim()) {
       throw new Error('This assistant has no knowledge yet. Describe it to the agent first.')
     }
-    const tasks = this.deps.assistants.listAssistantTasksFor(assistantId)
+    const tasks = this.deps.assistants.listAssistantClockTargetsFor(assistantId)
     if (tasks.length === 0) throw new Error('This assistant has no task to run.')
     return Promise.all(tasks.map((task) => this.runTaskNow(task)))
   }
@@ -417,7 +420,7 @@ export class AssistantSchedulerService {
    */
   async evaluateViaWorker(allowDispatch = true): Promise<void> {
     const tasks = await this.deps.assistants
-      .listAssistantTasksViaWorker()
+      .listAssistantClockTargetsViaWorker()
       .catch((error: unknown): Thread[] => {
         Logger.error('Assistant schedule could not be read from the worker', error)
         return this.readTasksForEvaluation()
@@ -432,7 +435,7 @@ export class AssistantSchedulerService {
     // slot. A secondary still serves "Run now", which is user-initiated and
     // does not go through this path.
     if (!instanceRegistry.isIncumbentInstance()) return []
-    return this.deps.assistants.listAssistantTasks()
+    return this.deps.assistants.listAssistantClockTargets()
   }
 
   /** One evaluation over an already-read task listing. */
@@ -454,7 +457,7 @@ export class AssistantSchedulerService {
    */
   nextDueAt(now: number): number | null {
     let soonest: number | null = null
-    for (const task of this.deps.assistants.listAssistantTasks()) {
+    for (const task of this.deps.assistants.listAssistantClockTargets()) {
       try {
         if (this.deps.assistants.isTaskPaused(task)) continue
         if (this.deps.assistants.resolveTaskKnowledge(task).trim() === '') continue
@@ -500,7 +503,9 @@ export class AssistantSchedulerService {
    * it, so such a record is misinformation rather than a pending run.
    */
   private pruneStaleMisses(): void {
-    const tasks = new Map(this.deps.assistants.listAssistantTasks().map((task) => [task.id, task]))
+    const tasks = new Map(
+      this.deps.assistants.listAssistantClockTargets().map((task) => [task.id, task])
+    )
     for (const run of this.missed.list()) {
       const task = tasks.get(run.threadId)
       if (!task) {

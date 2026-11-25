@@ -6,7 +6,6 @@
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
-  import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -22,6 +21,7 @@
   import GitStatusPanelContent from './GitStatusPanel/GitStatusPanelContent.svelte'
   import GitStatusPanelDialogs from './GitStatusPanelDialogs.svelte'
   import GitPullButton from './GitPullButton.svelte'
+  import GitPushControl from './GitPushControl.svelte'
   import GitSyncPeerDialog from './GitSyncPeerDialog.svelte'
   import GitPullRequestList from './GitPullRequestList.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
@@ -347,24 +347,16 @@
             />
           {/if}
           {#if board.loadRepoState.showsPush}
-            <button
-              type="button"
-              class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+            <GitPushControl
+              ahead={board.loadRepoState.commitsAhead}
+              busy={gitState.isBusy('push')}
+              blocked={board.confirmPrMerge.pushBlocked}
+              stoppable={board.loadRepoState.pushStoppable}
+              progress={board.loadRepoState.pushStage}
               title={board.loadRepoState.pushTitle}
-              disabled={board.confirmPrMerge.pushBlocked}
-              onclick={() => void board.loadRepoState.pushAction()}
-            >
-              {#if gitState.isBusy('push')}
-                <CioSpinner size={11} class="animate-spin" />
-              {:else}
-                <CioUpload size={11} />
-              {/if}
-              <span class="min-w-0 truncate">
-                Push{board.loadRepoState.commitsAhead > 0
-                  ? ` ${String(board.loadRepoState.commitsAhead)}`
-                  : ''}
-              </span>
-            </button>
+              onPush={() => void board.loadRepoState.pushAction()}
+              onStop={board.loadRepoState.stopPush}
+            />
           {/if}
         {/if}
       </div>
@@ -411,7 +403,7 @@
     loadingCommitDiffFile={board.confirmPrMerge.loadingCommitDiffFile}
     commitDiffErrors={board.confirmPrMerge.commitDiffErrors}
     bind:selectedPaths={board.handlePrListAction.workingTree.selectedPaths}
-    paneClass={board.state.paneClass}
+    bind:expandedDirs={board.handlePrListAction.workingTree.expandedDirs}
     commitHistory={board.loadRepoState.commitHistory}
     loadingHistory={board.loadRepoState.loadingHistory}
     loadingMoreHistory={board.loadRepoState.loadingMoreHistory}

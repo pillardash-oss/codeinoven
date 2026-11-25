@@ -354,6 +354,89 @@ function existingContentParts(
  * bytes would otherwise sit in the structured copy as well, and a script that
  * asked for a snapshot's elements would have to unwrap a layer nobody needs.
  */
+/** One text part holding one unit of a payload, so each unit is sized on its own. */
+function unitPart(value: unknown): GatewayTextPart {
+  return { type: 'text', text: JSON.stringify(value) ?? String(value) }
+}
+
+/** Whether a value is a JSON object a unit part can stand for. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * The parts a payload that summarised several units is rendered as, or null when
+ * the payload is one unit and stays one part.
+ *
+ * Gateway text is budgeted per part, so the shape here is what decides whether
+ * one verbose tool call can crowd out its siblings. Two shapes carry several
+ * units, and both are split at the unit:
+ *
+ *  - a batch, which settles one entry per call it was given (`{ results: [...] }`,
+ *    whichever of the three batch operations produced it). An entry that is itself
+ *    a capability payload is opened rather than bundled, so a batch of two
+ *    activations is each activation's parts and not two long documents;
+ *  - a capability activation, which hands back its instructions and then one
+ *    schema per operation it offers. A catalog is as long as the capability is
+ *    rich, and the design catalog alone is eighteen schemas.
+ *
+ * The payload itself is untouched: `structuredContent` still carries the whole
+ * value for a script, and only the model's rendering is divided.
+ */
+function payloadUnitParts(payload: unknown): GatewayTextPart[] | null {
+  if (!isRecord(payload)) return null
+  const results = payload['results']
+  if (Array.isArray(results) && results.length > 0 && results.every(isRecord)) {
+    const parts: GatewayTextPart[] = []
+    for (const entry of results) {
+      const settled = payloadUnitParts(entry['result'])
+      // An opened entry still says which call it was and whether it failed: the
+      // parts that follow are its payload, and two capabilities can offer an
+      // operation of the same name.
+      if (settled) parts.push(unitPart(callIdentity(entry)), ...settled)
+      else parts.push(unitPart(entry))
+    }
+    // Each entry is one call, so a batch whose entries stayed whole says how many
+    // of them arrived. A batch opened into its entries' own parts says it itself.
+    if (results.length > 1 && parts.length === results.length)
+      parts.unshift({
+        type: 'text',
+        text: `results: ${results.length} entries, one content part each`
+      })
+    return parts
+  }
+  const capability = payload['capability']
+  if (!isRecord(capability)) return null
+  const tools = capability['tools']
+  if (!Array.isArray(tools) || tools.length === 0 || !tools.every(isRecord)) return null
+  const instructions = capability['instructions']
+  // The id is what the agent calls the capability with, so it leads the parts.
+  const utility = payload['utility']
+  return [
+    ...(isRecord(utility) ? [unitPart({ utility })] : []),
+    ...(typeof instructions === 'string' && instructions.trim() !== ''
+      ? [{ type: 'text' as const, text: instructions }]
+      : []),
+    ...tools.map(unitPart)
+  ]
+}
+
+/**
+ * What a settled batch entry targeted and how it ended, without its payload.
+ *
+ * Every field but `result` is kept, because the batch operations tag an entry in
+ * their own way (`utility_id` and `operation`, a gateway `tool`, or `ok` for the
+ * `inputs` form) and a lead part that dropped the tag would leave the parts after
+ * it unattributed.
+ */
+function callIdentity(entry: Record<string, unknown>): Record<string, unknown> {
+  const identity: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(entry)) {
+    if (key !== 'result') identity[key] = value
+  }
+  return identity
+}
+
 export function gatewayStructuredResult(result: unknown): GatewayStructuredResult {
   if (isGatewayStructuredResult(result)) return result
   const record =
@@ -369,6 +452,8 @@ export function gatewayStructuredResult(result: unknown): GatewayStructuredResul
   const payload = isStructuredPayload(stripped) ? stripped : { result: stripped }
   const parts = record ? existingContentParts(record, images) : null
   if (parts) return { content: [...parts, ...images], structuredContent: payload }
+  const units = payloadUnitParts(stripped)
+  if (units) return { content: [...units, ...images], structuredContent: payload }
   const text = JSON.stringify(stripped) ?? String(stripped)
   return { content: [{ type: 'text', text }, ...images], structuredContent: payload }
 }

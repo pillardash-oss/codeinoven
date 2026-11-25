@@ -24,7 +24,7 @@ import type {
 import type { OvenConnectionStatus } from '../ovens'
 import type { OvenUtilitySecretVault } from '../oven-utility-host'
 import type { Contract } from './contract-helpers'
-import type { Thread } from '../types'
+import type { TaskManagerSnapshot, Thread } from '../types'
 
 export const invokeOvenContract = {
   'oven:hostTrust:respond': {} as Contract<[requestId: string, approved: boolean], void>,
@@ -65,6 +65,11 @@ export const invokeOvenContract = {
    */
   'oven:warm': {} as Contract<[id: string], void>,
   'oven:runs': {} as Contract<[id: string], OvenRun[]>,
+  /** One Oven's task manager: the processes its service runs, in the desktop shape. */
+  'oven:taskManagerList': {} as Contract<[id: string], TaskManagerSnapshot>,
+  'oven:taskManagerKillProcess': {} as Contract<[id: string, pid: number, force: boolean], void>,
+  /** Stop the run a task manager service row stands for. */
+  'oven:taskManagerStopService': {} as Contract<[id: string, serviceId: string], void>,
   'oven:workspace': {} as Contract<[id: string, input: OvenWorkspaceRequest], OvenWorkspaceResult>,
   'oven:reviewTransfer': {} as Contract<[input: OvenTransferInput], OvenTransferReview>,
   'oven:transfer': {} as Contract<[reviewId: string], OvenTransferReview>,

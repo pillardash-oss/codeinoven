@@ -681,7 +681,13 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
     )
     this.syncQueuedFromStore()
     this.idleAttentionHandled = false
-    void this.handleIdleAttention()
+    // A message parked behind a running turn has nothing to reconcile yet: the
+    // three gate reads could only come back empty, because the turn they would
+    // answer for is still going. The idle transition runs this again, and that
+    // is the moment the answer can differ. A message parked for any other reason
+    // (the device, a start-after dependency, a scope switch) has an idle thread
+    // behind it and asks now, so its card can say why it waits.
+    if (!this.root.switchProject.busy) void this.handleIdleAttention()
   }
 
   /**

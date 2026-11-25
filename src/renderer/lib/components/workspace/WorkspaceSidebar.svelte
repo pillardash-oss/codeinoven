@@ -666,6 +666,31 @@
    */
   const TIMELINE_PAGE_SIZE = THREAD_LIST_PAGE_SIZE
 
+  /**
+   * The one "Show more" at the foot of a section.
+   *
+   * The timeline loads bounded slices, so it usually holds more rows than it
+   * mounts: a press first reveals the next page of those. Only once every row
+   * the list already has is on screen does the same press read another page from
+   * the DB, and the rows it brings are revealed in that same press. Fetching
+   * without revealing left the reader clicking a control that changed nothing on
+   * screen, which is why the two affordances drifted apart in the first place.
+   */
+  async function showMoreInSection(sectionKey: string, revealLoadedRows: boolean): Promise<void> {
+    if (revealLoadedRows) {
+      const section = threadSections.find((candidate) => candidate.key === sectionKey)
+      if (section) sidebar.showMoreThreads(sectionKey, section.threads.length, TIMELINE_PAGE_SIZE)
+      return
+    }
+    const countInSection = (): number | undefined =>
+      threadSections.find((candidate) => candidate.key === sectionKey)?.threads.length
+    const before = countInSection() ?? 0
+    await onLoadHistoryPage()
+    const after = countInSection()
+    if (after === undefined || after <= before) return
+    sidebar.extendVisibleCount(sectionKey, after - before, after, TIMELINE_PAGE_SIZE)
+  }
+
   // Rows travel between containers, not inside one keyed list: a regrouping or a
   // project filter tears them out of one status group and builds them inside
   // another, so Svelte's per-list FLIP has nothing to measure. This pair takes
@@ -1344,7 +1369,24 @@
                heading read as a way to open that heading instead. -->
             {@const isLastSection = sectionIndex === drawnThreadSections.length - 1}
             {@const ownsHistoryTail = section.key === historyTailSectionKey && !section.folded}
-            {@const showLoadOlder = ownsHistoryTail && !searchPanelActive && hasMoreHistory}
+            <!-- One control at the foot of the section, and it always says the
+                 same thing. A press reveals the next page of rows the timeline
+                 already holds; once those are all on screen the same press reads
+                 another page from the DB. A count in the label ("Show 248 more")
+                 made the control look like a different action from the history
+                 loader below it, and the reader had to add up two numbers to know
+                 whether anything was left. -->
+            {@const sectionHasMoreRows = hiddenSectionCount > 0}
+            <!-- Once the section has grown past the page it opened with, the way
+                 back sits above the way forward: the reader who extended the list
+                 is looking at its end, so Show less belongs where their eye is,
+                 not underneath the control that would extend it further. Search
+                 results are never budgeted, so they never grow a Show less. -->
+            {@const sectionExpanded =
+              !searchPanelActive &&
+              sidebar.getVisibleCount(section.key, TIMELINE_PAGE_SIZE) > TIMELINE_PAGE_SIZE}
+            {@const canLoadHistory =
+              ownsHistoryTail && !searchPanelActive && hasMoreHistory && !sectionHasMoreRows}
             <!-- The first docked group takes the rest of the column's height with
                it, so the docked block sits against the foot of the panel when the
                placed rows end high up the list, and falls back to following them
@@ -1431,35 +1473,23 @@
                   </SidebarListRow>
                 {/each}
               </div>
-              {#if hiddenSectionCount > 0}
+              {#if sectionExpanded}
                 <button
-                  class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
-                  onclick={() =>
-                    sidebar.showMoreThreads(
-                      section.key,
-                      section.threads.length,
-                      TIMELINE_PAGE_SIZE
-                    )}
-                >
-                  Show {hiddenSectionCount} more
-                </button>
-              {:else if sidebar.getVisibleCount(section.key, TIMELINE_PAGE_SIZE) > TIMELINE_PAGE_SIZE}
-                <button
-                  class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
+                  class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
                   onclick={() => sidebar.showLessThreads(section.key, TIMELINE_PAGE_SIZE)}
                 >
                   Show less
                 </button>
               {/if}
-              {#if showLoadOlder && listTailRevealed}
+              {#if sectionHasMoreRows || (canLoadHistory && listTailRevealed)}
                 <button
                   class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait {section.group
                     ? 'pb-5'
                     : ''}"
-                  disabled={historyLoading}
-                  onclick={() => void onLoadHistoryPage()}
+                  disabled={!sectionHasMoreRows && historyLoading}
+                  onclick={() => void showMoreInSection(section.key, sectionHasMoreRows)}
                 >
-                  {historyLoading ? 'Loading history…' : 'Show more'}
+                  {!sectionHasMoreRows && historyLoading ? 'Loading history…' : 'Show more'}
                 </button>
               {/if}
             </section>
@@ -1474,7 +1504,7 @@
             {/if}
             <!-- No section owns the tail here, so the older-history control falls
                back to the pane itself. -->
-            {#if !searchPanelActive && hasMoreHistory && listTailRevealed}
+            {#if !searchPanelActive && listTailRevealed && hasMoreHistory}
               <button
                 class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
                 disabled={historyLoading}

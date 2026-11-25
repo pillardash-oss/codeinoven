@@ -1,4 +1,5 @@
 import { DEFAULT_SCOPE_BUCKET_ID, isManagedScopeRoot, type ScopeBoard, type Thread } from '../types'
+import { isThreadAwaitingUserStatus, isThreadBusyStatus } from '../thread-status-policy'
 import type { ThreadCapacityCandidate } from '../../main/database/repositories/thread-repo'
 
 /**
@@ -9,23 +10,37 @@ import type { ThreadCapacityCandidate } from '../../main/database/repositories/t
 export const REGULAR_BUCKET = '__regular_bucket__'
 
 /**
- * Threads that automatic cleanup never evicts: pinned, in `spec` status, or
- * driving an Assignment/Achievement orchestration.
+ * Threads that automatic cleanup never evicts, because deleting one would throw
+ * away work the user has not finished with:
  *
- * A coordinator is protected without a pin: the orchestration it owns lives on
- * its row, and the thread parks in `spec` between stages anyway, so evicting it
- * would destroy in-flight work. Workers and auditors are already kept out of the
- * candidate list, so only the coordinator needs the guard here.
+ * - `pinned`: the user asked for it to stay.
+ * - Unread: the result is waiting to be seen, so the dot the user was promised
+ *   would vanish before they ever opened it. A `completed` thread the user has
+ *   not read is exactly this case, and so is any other row still flagged unread.
+ * - Working: `planning`, `executing` and `working-paused` (waiting to retry) are
+ *   producing or about to produce work, so evicting one kills a live run.
+ * - Parked on the user: `awaiting_approval` is a permission, question or secret
+ *   card on screen. Nothing is running, but ending that thread silently discards
+ *   the decision the run is blocked on. A live run flag cannot answer this, so
+ *   the status policy is the authority.
+ * - `spec`: the artifact is finished and parked between stages.
+ * - An orchestration coordinator: the orchestration it owns lives on its row and
+ *   the thread parks in `spec` between stages anyway, so evicting it would
+ *   destroy in-flight work. Workers and auditors are already kept out of the
+ *   candidate list, so only the coordinator needs the guard here.
  *
  * An archived thread is invincible by a stronger rule than this predicate: the
  * candidate query never returns one (nor any thread whose subtree holds one),
  * so it cannot reach an eviction decision at all.
  */
 export function isProtectedFromAutomaticCleanup(
-  thread: Pick<Thread, 'pinned' | 'status' | 'assignmentRole' | 'achievementRole'>
+  thread: Pick<Thread, 'pinned' | 'read' | 'status' | 'assignmentRole' | 'achievementRole'>
 ): boolean {
   return (
     thread.pinned ||
+    thread.read === false ||
+    isThreadBusyStatus(thread.status) ||
+    isThreadAwaitingUserStatus(thread.status) ||
     thread.status === 'spec' ||
     thread.assignmentRole === 'coordinator' ||
     thread.achievementRole === 'coordinator'

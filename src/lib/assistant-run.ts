@@ -33,15 +33,20 @@ export function assistantRunTitle(at: number): string {
  *
  * It names what the run is running. An assistant's Getting started thread is its
  * authoring host, so its fixed "Getting started" title is not a job name: a run
- * of it is dispatched under the assistant's own name, or the run reads (and gets
- * answered) as another getting-started pass even though the knowledge is already
- * saved. A user's own task keeps its title, which is what that task is.
+ * of it is dispatched under the name the user gave the clock ("Amebo's Roundup",
+ * "Product watch"), which is what that run actually is. The assistant's own name
+ * is the fallback for a clock nobody named; naming the run after the assistant
+ * made a scheduled roundup read as the assistant waking up on its own. A user's
+ * own task keeps its title, which is what that task is.
  */
 export function assistantRunPrompt(
   task: Pick<Thread, 'title' | 'assistantGettingStarted'>,
-  assistantName: string | undefined
+  assistantName: string | undefined,
+  scheduleName?: string | undefined
 ): string {
-  const label = isAssistantSetupThread(task) ? (assistantName?.trim() ?? '') : task.title.trim()
+  const label = isAssistantSetupThread(task)
+    ? scheduleName?.trim() || assistantName?.trim() || ''
+    : task.title.trim()
   return label.length > 0 ? `Run this scheduled task now: ${label}` : 'Run this scheduled task now.'
 }
 

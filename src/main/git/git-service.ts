@@ -33,6 +33,7 @@ import { GitServiceCore } from './git/git-service-core'
 import { GitServiceMergeRebase } from './git/git-service-merge-rebase'
 import { GitServicePullRequests } from './git/git-service-pull-requests'
 import { GitServiceRanges, type GitRangeFile } from './git/git-service-ranges'
+import type { GitRoundTripHooks } from './git/git-service-runtime'
 import { GitServiceRemotes } from './git/git-service-remotes'
 import { GitServiceRepository } from './git/git-service-repository'
 import { GitServiceStashes } from './git/git-service-stashes'
@@ -340,9 +341,10 @@ export class GitService {
     projectPath: string,
     options: { setUpstream: boolean; remote?: string; branch?: string; token?: string } = {
       setUpstream: false
-    }
+    },
+    hooks: GitRoundTripHooks = {}
   ): Promise<GitStatus> {
-    return this.sync.push(projectPath, options)
+    return this.sync.push(projectPath, options, hooks)
   }
 
   async syncWith(

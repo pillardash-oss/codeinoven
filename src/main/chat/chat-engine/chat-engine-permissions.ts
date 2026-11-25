@@ -13,8 +13,7 @@ import { validateBoundedString, validateEntityId } from '../../ipc/ipc-validatio
 import { PermissionRequestGoneError } from '../../drivers/driver.interface'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import type { AgentEvent, PermissionReply, PermissionRequest } from '../../../lib/types'
-import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID, isAssistantThread } from '../../../lib/types'
-import type { BrowserActionReview } from '../../browser/browser-service/browser-action-policy'
+import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '../../../lib/types'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/ipc/browser'
 import {
   PROJECT_DATA_DIRECTORY,
@@ -164,14 +163,6 @@ export class ChatEnginePermissions {
   ): Promise<void> {
     if (this.host.state.pendingPermissions.get(pending.request.id) !== pending) return
     this.clearPermissionTimer(pending)
-
-    if (pending.settleBrowserAction) {
-      if (reply === 'always' && pending.policy.risk === 'critical') {
-        throw new Error('Critical permissions cannot be approved permanently')
-      }
-      await this.replyPermissionRaw(pending, reply, decidedBy, alternativeInstruction)
-      return
-    }
 
     const driver =
       pending.driver ??
@@ -720,9 +711,7 @@ export class ChatEnginePermissions {
   async handlePermissionAsked(
     driverId: string,
     event: Extract<AgentEvent, { type: 'permission.asked' }>,
-    sourceDriver?: HarnessDriver,
-    settleBrowserAction?: PendingPermissionInfo['settleBrowserAction'],
-    browserReview?: BrowserActionReview
+    sourceDriver?: HarnessDriver
   ): Promise<void> {
     const { sessionId, permission: request } = event
     const info = this.host.sessionRegistry.get(sessionId)
@@ -802,7 +791,7 @@ export class ChatEnginePermissions {
       ...(scratchPaths.length > 0 ? { scratchPaths } : {}),
       ...(agentCreatedPaths.length > 0 ? { agentCreatedPaths } : {}),
       ...(workspaceRoots.length > 0 ? { workspaceRoots } : {}),
-      ...(!settleBrowserAction && restrictToAllowed ? { restrictToAllowed } : {})
+      ...(restrictToAllowed ? { restrictToAllowed } : {})
     }).evaluate({
       permission: request.permission,
       paths: request.patterns.filter((pattern) => !commands.includes(pattern)),
@@ -859,37 +848,7 @@ export class ChatEnginePermissions {
         }
       }
     }
-    // Only an app-owned browser call may supply this decision. Harness metadata
-    // cannot turn an unclassified tool into an automatically approved action.
     const sensitiveFileApproval = request.permission === 'bundled-pi-sensitive-files'
-    if (!sensitiveFileApproval && settleBrowserAction && browserReview && level === 'auto_review') {
-      // An assistant runs unattended on the browser pages it opens
-      // itself, so a card it cannot answer would only park the run. The
-      // capability's own effect review still runs and is recorded, but it never
-      // escalates to the user for these threads. The browser assistant in the
-      // global browser's sidebar keeps asking, because it acts on the page the
-      // user is reading and a surprise mutation there is the user's to approve.
-      const unattended = thread !== null && isAssistantThread(thread)
-      const approved = unattended || browserReview.approved
-      const reason = unattended
-        ? 'Auto-approved: an assistant acting on a page it opened itself.'
-        : browserReview.reason
-      const decision = approved ? 'auto_review' : 'ask'
-      policy = {
-        ...policy,
-        approved,
-        decision,
-        risk: browserReview.risk,
-        reason,
-        approval: { required: !approved },
-        ledger: {
-          ...policy.ledger,
-          decision,
-          risk: browserReview.risk,
-          reason
-        }
-      }
-    }
     if (!policy.approved) {
       policy = {
         ...policy,
@@ -921,7 +880,6 @@ export class ChatEnginePermissions {
       session: info,
       request: enrichedRequest,
       policy,
-      settleBrowserAction,
       resumeStatus
     }
     this.host.state.pendingPermissions.set(request.id, pending)
@@ -932,14 +890,21 @@ export class ChatEnginePermissions {
     const refusedCommand = commands.find(
       (command) =>
         unmanagedProcessKillReason('bash', { command }) !== null ||
-        unmanagedBrowserShellReason('bash', { command }, { threadBrowserAvailable }) !== null
+        unmanagedBrowserShellReason(
+          'bash',
+          { command },
+          {
+            threadBrowserAvailable,
+            cwd: info.projectPath
+          }
+        ) !== null
     )
     if (refusedCommand !== undefined) {
       const processReason = unmanagedProcessKillReason('bash', { command: refusedCommand })
       const browserReason = unmanagedBrowserShellReason(
         'bash',
         { command: refusedCommand },
-        { threadBrowserAvailable }
+        { threadBrowserAvailable, cwd: info.projectPath }
       )
       await this.replyPermissionRaw(
         pending,
@@ -979,7 +944,6 @@ export class ChatEnginePermissions {
     if (
       info.projectId === GLOBAL_BROWSER_PROJECT_ID &&
       restrictToAllowed &&
-      !settleBrowserAction &&
       !policy.approved &&
       (commands.length > 0 ||
         /(?:read|edit|write|glob|grep|list|bash|shell|external.directory)/iu.test(
@@ -1038,35 +1002,6 @@ export class ChatEnginePermissions {
       }
       if (reply === 'always') throw new Error('Protected file access can only be approved once')
     }
-    if (pending.settleBrowserAction) {
-      if (this.host.state.pendingPermissions.get(pending.request.id) !== pending) return
-      await this.recordPermissionDecision(pending, reply, decidedBy)
-      if (this.host.state.pendingPermissions.get(pending.request.id) !== pending) return
-      const remaining = [...this.host.state.pendingPermissions.values()].some(
-        (other) => other !== pending && other.session.sessionId === pending.session.sessionId
-      )
-      try {
-        await this.host.threadManager.setStatus(
-          pending.session.projectId,
-          pending.session.threadId,
-          remaining ? 'awaiting_approval' : pending.resumeStatus
-        )
-      } catch (error) {
-        this.dropPendingPermission(pending)
-        pending.settleBrowserAction(false)
-        throw error
-      }
-      if (this.host.state.pendingPermissions.get(pending.request.id) !== pending) return
-      this.dropPendingPermission(pending)
-      this.host.broadcast({
-        type: 'permission.replied',
-        sessionId: pending.request.sessionId,
-        requestId: pending.request.id,
-        reply
-      })
-      pending.settleBrowserAction(reply !== 'reject', alternative)
-      return
-    }
     const driver =
       pending.driver ??
       this.host.units['turns-dispatch'].driverForRuntime(
@@ -1092,7 +1027,6 @@ export class ChatEnginePermissions {
       if (pending.request.sessionId === sessionId) {
         this.clearPermissionTimer(pending)
         this.host.state.pendingPermissions.delete(requestId)
-        pending.settleBrowserAction?.(false)
         this.host.broadcast({ type: 'permission.replied', sessionId, requestId, reply: 'reject' })
       }
     }

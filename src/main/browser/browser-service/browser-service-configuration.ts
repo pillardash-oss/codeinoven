@@ -11,7 +11,6 @@ import {
   type TabMarkRecogniser
 } from './browser-tab-mark'
 import type { BrowserService } from '../browser-service'
-import type { BrowserAgentActionApprover } from './browser-service-agent-approval'
 
 /**
  * The stylesheet that keeps a page from dragging the app window.
@@ -27,8 +26,8 @@ const PAGE_DRAG_ISOLATION_CSS = 'html,body{-webkit-app-region:no-drag!important}
  * The values the app pushes into the browser at boot.
  *
  * The browser owns no configuration of its own: the search engine, the scrollbar
- * theme, the design/composition recogniser and the permission-card approver all come
- * from the renderer or from bootstrap. Each setter is here, together with the small
+ * theme and the design/composition recogniser all come from the renderer or from
+ * bootstrap. Each setter is here, together with the small
  * amount of work it implies   the stylesheet a theme swap replaces, and the tab mark a
  * recogniser change re-applies to the tabs already open.
  */
@@ -40,7 +39,6 @@ const PAGE_DRAG_ISOLATION_CSS = 'html,body{-webkit-app-region:no-drag!important}
  * root cannot drift apart: a changed signature is a compile error here.
  */
 export interface ConfigurationHost {
-  agentActionApprover: BrowserService['agentActionApprover']
   readonly armCompositionQuietly: BrowserService['armCompositionQuietly']
   contextMenuSearchEngine: BrowserService['contextMenuSearchEngine']
   readonly inspector: BrowserService['inspector']
@@ -83,11 +81,6 @@ export class BrowserServiceConfiguration {
    */
   setTabMarkRecogniser(recogniser: TabMarkRecogniser | null): void {
     this.host.tabMarkRecogniser = recogniser
-  }
-
-  /** Register the permission-card approver for attached-page mutations. */
-  setAgentActionApprover(approver: BrowserAgentActionApprover | null): void {
-    this.host.agentActionApprover = approver
   }
 
   /**

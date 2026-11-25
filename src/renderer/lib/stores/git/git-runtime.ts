@@ -9,6 +9,7 @@ import type { PrBatchStepListener } from '../git-store-pr-operations.svelte'
 import { issueBundleKey } from '../git-store-helpers'
 import { GitLocalOperations } from '../git-store-local-operations.svelte'
 import type {
+  GitPushProgress,
   GitStatus,
   GitSyncPeerOption,
   GitHubAuthStatus,
@@ -27,7 +28,13 @@ import type { GitState } from '../git.svelte'
 
 /** GitState runtime: one concern, moved verbatim from the composition root. */
 export class GitStateRuntime {
-  constructor(private readonly host: GitState) {}
+  constructor(private readonly host: GitState) {
+    // Every push reports its own stages from main, whoever started it; the store
+    // keeps the last one and the panel reads it as the percentage on the button.
+    // Subscribing here reads no field: `host.local` is only touched when an
+    // event lands, long after the units were built.
+    subscribe('git:pushProgress', (progress) => this.host.local.applyPushProgress(progress))
+  }
 
   rememberScopeNotices(): void {
     if (!this.host.activeProjectId) return
@@ -378,6 +385,21 @@ export class GitStateRuntime {
 
   push(projectId: string, setUpstream: boolean, remote?: string, branch?: string) {
     return this.host.local.push(projectId, setUpstream, remote, branch)
+  }
+
+  /** Stop this checkout's push, as the panel's stop button asks it to. */
+  stopPush(projectId: string): Promise<boolean> {
+    return this.host.local.stopPush(projectId)
+  }
+
+  /** Percentage git reported for this checkout's push, or null while none is running. */
+  pushStageFor(projectId: string): GitPushProgress | null {
+    return this.host.local.pushStageFor(projectId)
+  }
+
+  /** Whether the running push is one the stop control can call off. */
+  canStopPush(projectId: string): boolean {
+    return this.host.local.canStopPush(projectId)
   }
 
   pullIntegrate(

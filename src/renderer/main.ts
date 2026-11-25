@@ -2,6 +2,7 @@ import { mount } from 'svelte'
 import App from './App.svelte'
 import './app.css'
 import { installRendererErrorCapture } from './lib/system/renderer-logger'
+import { requestLogEnvironment } from './lib/system/log-environment'
 import { installNotificationSound } from './lib/notification-sound'
 import { scheduleDeferredWork } from './lib/deferred-work'
 import { preloadSpotlightChunk } from './lib/page-preload'
@@ -12,6 +13,10 @@ import { warmOverlayHostOnFirstGesture } from './lib/overlay-host-warm'
 // console.error output) from the first renderer statement and forward them to
 // the main-process durable log so client crashes are diagnosable on disk.
 installRendererErrorCapture()
+
+// Ask for the build and host facts the Exceptions panel stamps on a stack trace
+// before anything can fail, so the first captured trace already names its build.
+requestLogEnvironment()
 
 /**
  * Alerts are split by surface. While the app is in the background the main

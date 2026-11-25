@@ -28,6 +28,7 @@
   import Switch from '$lib/components/ui/Switch.svelte'
   import TaskManagerNode from './TaskManagerNode.svelte'
   import TaskManagerSortMenu from './TaskManagerSortMenu.svelte'
+  import { localTaskManagerSource, type TaskManagerSource } from './task-manager-source'
   import {
     compareSortRows,
     DEFAULT_TASK_SORT,
@@ -59,6 +60,10 @@
   interface Props {
     open: boolean
     onClose: () => void
+    /** Heading; an Oven's task manager names its machine. */
+    title?: string
+    /** Which machine this lists. Defaults to this one. */
+    source?: TaskManagerSource
   }
 
   /** Identity of one foldable owner node: a project, or a thread inside one. */
@@ -84,7 +89,7 @@
     cpuPercent: number
   }
 
-  let { open, onClose }: Props = $props()
+  let { open, onClose, title = 'Task Manager', source = localTaskManagerSource }: Props = $props()
 
   let processes = $state<TaskManagerProcess[]>([])
   let services = $state<TaskManagerService[]>([])
@@ -515,7 +520,7 @@
     checking = true
     error = ''
     try {
-      const snapshot = await invoke('taskManager:list')
+      const snapshot = await source.list()
       processes = snapshot.processes
       services = snapshot.services
       // An older main process sends no surfaces at all, which must show as
@@ -537,7 +542,7 @@
     if (polling || checking) return
     polling = true
     try {
-      const snapshot = await invoke('taskManager:list')
+      const snapshot = await source.list()
       processes = snapshot.processes
       services = snapshot.services
       surfaces = snapshot.surfaces ?? []
@@ -860,8 +865,8 @@
     dropRows(pids, serviceIds)
     try {
       const results = await Promise.allSettled([
-        ...pids.map((pid) => invoke('taskManager:killProcess', pid, false)),
-        ...serviceIds.map((serviceId) => invoke('taskManager:stopService', serviceId))
+        ...pids.map((pid) => source.killProcess(pid, false)),
+        ...serviceIds.map((serviceId) => source.stopService(serviceId))
       ])
       const failure = results.find((result) => result.status === 'rejected')
       if (failure?.status === 'rejected') {
@@ -912,7 +917,7 @@
     )
     try {
       const results = await Promise.allSettled(
-        targets.map((process) => invoke('taskManager:killProcess', process.pid, true))
+        targets.map((process) => source.killProcess(process.pid, true))
       )
       const failure = results.find((result) => result.status === 'rejected')
       if (failure?.status === 'rejected') {
@@ -956,7 +961,7 @@
     dropRows([], serviceIds)
     try {
       const results = await Promise.allSettled(
-        serviceIds.map((serviceId) => invoke('taskManager:stopService', serviceId))
+        serviceIds.map((serviceId) => source.stopService(serviceId))
       )
       const failure = results.find((result) => result.status === 'rejected')
       if (failure?.status === 'rejected') {
@@ -974,7 +979,7 @@
 
 <Modal
   {open}
-  title="Task Manager"
+  {title}
   {onClose}
   size="xl"
   fill

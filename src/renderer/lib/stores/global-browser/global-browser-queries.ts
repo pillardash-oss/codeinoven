@@ -112,26 +112,24 @@ export class GlobalBrowserStateQueries {
   }
 
   /**
-   * Resolve (creating on the very first open) the assistant conversation bound to
-   * one browser tab, and hand main the page it answers about.
+   * Resolve (creating on the very first open) the assistant conversation the page
+   * on screen should show, and hand main the page it answers about.
    *
-   * The conversation and the tab point at each other: the thread id is written
-   * into the tab's durable row, so a restart restores the link, and main is told
-   * which browser tab the thread is looking at, which is what lets the agent's
-   * browser capability read the page the user is on rather than a page of its own.
+   * The conversations and the tab point at each other: the thread ids are written
+   * into the tab's durable row, so a restart restores the whole list, and main is
+   * told which browser tab each thread is looking at, which is what lets the
+   * agent's browser capability read the page the user is on rather than a page of
+   * its own.
    */
   async ensureAssistantChat(tab: GlobalBrowserTab): Promise<void> {
     try {
       const chat = await browserAssistant.ensureChat({
         browserTabId: tab.id,
-        existingThreadId: tab.assistantThreadId,
+        existingThreadIds: tab.assistantThreadIds,
         title: browserAssistantChatTitle(tab),
         settings: defaultSettingsFor('chat')
       })
-      if (tab.assistantThreadId !== chat.threadId) {
-        tab.assistantThreadId = chat.threadId
-        this.persist()
-      }
+      this.syncAssistantChats(tab)
       void invoke('browser:bindAssistantPage', chat.threadId, tab.id).catch(() => {})
     } catch (error) {
       reportError(error, 'The assistant conversation could not be started.')
@@ -139,19 +137,70 @@ export class GlobalBrowserStateQueries {
   }
 
   /**
-   * Tear down one browser tab's agent conversation: the thread that holds its
-   * transcript is deleted with the tab that owned it.
+   * Start another assistant conversation for the page on screen, which is the only
+   * thing the assistant rail's "+" does.
    *
-   * The link is read from the store first and from the tab's own durable field
-   * second, so a conversation this session never opened (a tab restored from a
-   * previous launch) is still cleaned up instead of being left behind as a
-   * thread nothing can reach.
+   * The page does not change: a second conversation is a second chat about the same
+   * page, so main is pointed at the same tab for it and the rail shows it as its
+   * own tab.
    */
-  closeAssistantChatFor(tabId: string, linkedThreadId: string | null): void {
-    const threadId = browserAssistant.releaseTab(tabId) ?? linkedThreadId
-    if (!threadId) return
-    void invoke('thread:delete', GLOBAL_BROWSER_PROJECT_ID, threadId).catch(() => {})
-    void invoke('browser:unbindAssistantPage', threadId).catch(() => {})
+  async newAssistantChat(tab: GlobalBrowserTab): Promise<void> {
+    try {
+      const chat = await browserAssistant.newChat({
+        browserTabId: tab.id,
+        title: browserAssistantChatTitle(tab),
+        settings: defaultSettingsFor('chat')
+      })
+      browserAssistant.selectChat(tab.id, chat.threadId)
+      this.syncAssistantChats(tab)
+      void invoke('browser:bindAssistantPage', chat.threadId, tab.id).catch(() => {})
+    } catch (error) {
+      reportError(error, 'Another assistant conversation could not be started.')
+    }
+  }
+
+  /**
+   * Write the conversations a tab now owns back onto its durable row.
+   *
+   * The store is the live mirror and the row is what survives a restart, so this
+   * is the one place the two are reconciled. A tab that owns no conversation any
+   * more stores an empty list rather than a stale link.
+   */
+  syncAssistantChats(tab: GlobalBrowserTab): void {
+    const ids = browserAssistant.threadIdsForTab(tab.id)
+    if (
+      ids.length === tab.assistantThreadIds.length &&
+      ids.every((id, index) => id === tab.assistantThreadIds[index])
+    ) {
+      return
+    }
+    tab.assistantThreadIds = ids
+    this.persist()
+  }
+
+  /** Reconcile one tab's durable row by id, for a surface that does not hold the
+   *  tab row itself (the rail closes a conversation, not a page). */
+  syncAssistantChatsForTab(tabId: string): void {
+    const tab = this.host.tabById(tabId)
+    if (tab) this.syncAssistantChats(tab)
+  }
+
+  /**
+   * Tear down every assistant conversation one browser tab owned: the threads that
+   * hold their transcripts are deleted with the tab that owned them.
+   *
+   * The links are read from the store first and from the tab's own durable field
+   * second, so a conversation this session never opened (a tab restored from a
+   * previous launch) is still cleaned up instead of being left behind as a thread
+   * nothing can reach.
+   */
+  closeAssistantChatsFor(tabId: string, linkedThreadIds: readonly string[]): void {
+    const released = browserAssistant.releaseTab(tabId)
+    const threadIds = [...new Set([...released, ...linkedThreadIds])]
+    for (const threadId of threadIds) {
+      void invoke('thread:delete', GLOBAL_BROWSER_PROJECT_ID, threadId).catch(() => {})
+      void invoke('browser:unbindAssistantPage', threadId).catch(() => {})
+    }
   }
 
   /** A box was deleted: erase it and take its Chromium profile with it. Nothing can

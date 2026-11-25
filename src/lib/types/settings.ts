@@ -322,6 +322,15 @@ export interface MediaGenerationConfig {
   providerId: MediaProviderId | null
 }
 
+/**
+ * Bounds for `AppConfig.steerToStartWorkMinutes`: how long a turn may run
+ * without changing a single file before the app steers the agent to start
+ * working. Kept well under an hour so the nudge still lands in a live turn.
+ */
+export const MIN_STEER_TO_START_WORK_MINUTES = 1
+export const MAX_STEER_TO_START_WORK_MINUTES = 120
+export const DEFAULT_STEER_TO_START_WORK_MINUTES = 10
+
 /** Bounds for `AppConfig.browserHibernationMinutes`. */
 export const MIN_BROWSER_HIBERNATION_MINUTES = 5
 export const MAX_BROWSER_HIBERNATION_MINUTES = 120
@@ -455,6 +464,14 @@ export interface AppConfig {
   /** Resume regular and Sr. Engineer threads that were interrupted by an app
    *  closure or unknown issue when the app restarts. */
   resumeWorkOnRestart: boolean
+  /**
+   * Minutes a turn may run without changing a file before the app steers the
+   * agent with an invisible nudge to stop reading and start working. The clock
+   * starts with the turn (a fresh thread or a resume) and restarts on every
+   * real file change; one nudge is sent per turn. Bounded to
+   * `MIN/MAX_STEER_TO_START_WORK_MINUTES`.
+   */
+  steerToStartWorkMinutes: number
   /** Default PR merge method used by the Git panel, pre-selected when merging. */
   defaultMergeMethod: PrMergeMethod
   /** Pull strategy used by the Git panel. `ask` opens the strategy chooser. */
@@ -622,6 +639,7 @@ export type AppConfigPatch = Partial<
     | 'imageDescriptorAskAgain'
     | 'autoRetryAfterReset'
     | 'resumeWorkOnRestart'
+    | 'steerToStartWorkMinutes'
     | 'defaultMergeMethod'
     | 'defaultPullStrategy'
     | 'maxDiffLines'

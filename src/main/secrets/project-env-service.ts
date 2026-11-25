@@ -2,7 +2,9 @@ import { chmod, mkdir, readFile, writeFile } from 'fs/promises'
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'path'
 import {
   compareEnvFileNames,
+  formatProjectEnvLine,
   parseProjectEnvFile,
+  PROJECT_ENV_DISABLED_PREFIX,
   projectEnvReference,
   validateEnvFileName,
   type ProjectEnvApplyTextResult,
@@ -132,7 +134,35 @@ export class ProjectEnvService {
       ownerId: input.projectId,
       label: `${group || '.'} · ${fileName} · ${name}`
     })
-    upsertEntry(file, { name, secretRef, updatedAt: Date.now() })
+    upsertEntry(file, {
+      name,
+      secretRef,
+      updatedAt: Date.now(),
+      // Replacing a value never turns a key back on behind the user's back.
+      ...(existing?.disabled ? { disabled: true } : {})
+    })
+    await this.dependencies.store.writeProject(input.projectId, files)
+    return this.listProjectEnv(input.projectId)
+  }
+
+  /**
+   * Turn one key on or off without touching its value.
+   *
+   * A turned-off key stays in the file and keeps its secret, so the user can save a
+   * value they do not want injected right now and switch it on again later.
+   */
+  async setProjectEnvEntryDisabled(
+    input: EnvFileKeyInput & { name: string; disabled: boolean }
+  ): Promise<ProjectEnvFile[]> {
+    const group = normalizeGroup(input.group)
+    const fileName = validateEnvFileName(input.fileName)
+    const files = await this.dependencies.store.readProject(input.projectId)
+    const file = requireFile(files, group, fileName)
+    const entry = file.entries.find((candidate) => candidate.name === input.name)
+    if (!entry) throw new Error('That key is no longer in this env file')
+    if (input.disabled) entry.disabled = true
+    else delete entry.disabled
+    file.updatedAt = Date.now()
     await this.dependencies.store.writeProject(input.projectId, files)
     return this.listProjectEnv(input.projectId)
   }
@@ -169,7 +199,7 @@ export class ProjectEnvService {
     )
     const lines = parseProjectEnvFile(input.text)
     const skipped: { line: number; reason: string }[] = []
-    const typed = new Map<string, { value: string | null; line: number }>()
+    const typed = new Map<string, { value: string | null; line: number; disabled: boolean }>()
 
     for (const [index, line] of lines.entries()) {
       if (line.kind === 'blank' || line.kind === 'comment') continue
@@ -187,7 +217,11 @@ export class ProjectEnvService {
         })
         continue
       }
-      typed.set(name, { value: line.value.length > 0 ? line.value : null, line: index + 1 })
+      typed.set(name, {
+        value: line.value.length > 0 ? line.value : null,
+        line: index + 1,
+        disabled: line.disabled
+      })
     }
 
     if (!file) {
@@ -206,8 +240,17 @@ export class ProjectEnvService {
         continue
       }
       if (entry.value === null) {
-        if (existing) kept.push(name)
-        else {
+        if (existing) {
+          // A turned-off line may carry no value: its switch still applies, and the
+          // value already stored for the name is kept exactly as it was.
+          if ((existing.disabled === true) !== entry.disabled) {
+            if (entry.disabled) existing.disabled = true
+            else delete existing.disabled
+            existing.updatedAt = Date.now()
+            file.updatedAt = Date.now()
+          }
+          kept.push(name)
+        } else {
           skipped.push({
             line: entry.line,
             reason: `${name} has no value yet, so nothing was stored for it`
@@ -220,7 +263,12 @@ export class ProjectEnvService {
         ownerId: input.projectId,
         label: `${group || '.'} · ${fileName} · ${name}`
       })
-      upsertEntry(file, { name, secretRef, updatedAt: Date.now() })
+      upsertEntry(file, {
+        name,
+        secretRef,
+        updatedAt: Date.now(),
+        ...(entry.disabled ? { disabled: true } : {})
+      })
       stored.push(name)
     }
 
@@ -260,7 +308,13 @@ export class ProjectEnvService {
     const relativePath = group ? `${group}/${fileName}` : fileName
     const absolute = resolveProjectFile(projectRoot, relativePath)
     const content = `${file.entries
-      .map((entry) => `${entry.name}=${projectEnvReference(entry.secretRef)}`)
+      .map((entry) =>
+        formatProjectEnvLine(
+          entry.name,
+          projectEnvReference(entry.secretRef),
+          entry.disabled === true
+        )
+      )
       .join('\n')}\n`
     const existing = await readFile(absolute, 'utf8').catch(() => null)
     if (existing === content) {
@@ -398,7 +452,7 @@ export class ProjectEnvService {
     const names: string[] = []
     const created: string[] = []
     const replaced: string[] = []
-    const plan: { name: string; value: string }[] = []
+    const plan: { name: string; value: string; disabled: boolean }[] = []
 
     for (const [index, line] of lines.entries()) {
       if (line.kind === 'invalid') {
@@ -423,7 +477,7 @@ export class ProjectEnvService {
       if (file.entries.some((entry) => entry.name === name)) replaced.push(name)
       else created.push(name)
       names.push(name)
-      plan.push({ name, value: line.value })
+      plan.push({ name, value: line.value, disabled: line.disabled })
     }
 
     if (!input.apply) {
@@ -454,7 +508,12 @@ export class ProjectEnvService {
         label: `${group || '.'} · ${fileName} · ${entry.name}`
       })
       references.set(entry.name, secretRef)
-      upsertEntry(file, { name: entry.name, secretRef, updatedAt: Date.now() })
+      upsertEntry(file, {
+        name: entry.name,
+        secretRef,
+        updatedAt: Date.now(),
+        ...(entry.disabled ? { disabled: true } : {})
+      })
     }
     file.importedFrom = input.path
     file.updatedAt = Date.now()
@@ -547,6 +606,7 @@ export class ProjectEnvService {
 
     const environment: Record<string, string> = {}
     const entries: ProjectEnvLaunchPreviewEntry[] = []
+    const disabled: ProjectEnvLaunchPreviewEntry[] = []
     const skipped: { name: string; reason: string }[] = []
 
     for (const [name, winner] of winners) {
@@ -556,6 +616,18 @@ export class ProjectEnvService {
         skipped.push({
           name,
           reason: error instanceof Error ? error.message : 'Name is not allowed'
+        })
+        continue
+      }
+      // A turned-off key is an explicit no. It wins over a shallower file that has
+      // the same name on, because switching a key off in the nearest file is the
+      // user saying this process must not receive it.
+      if (winner.entry.disabled === true) {
+        disabled.push({
+          name,
+          group: winner.group,
+          fileName: winner.fileName,
+          scope: winner.scope
         })
         continue
       }
@@ -574,7 +646,10 @@ export class ProjectEnvService {
       }
     }
 
-    return { environment, preview: { entries: sortPreview(entries), skipped } }
+    return {
+      environment,
+      preview: { entries: sortPreview(entries), disabled: sortPreview(disabled), skipped }
+    }
   }
 
   private async describeFile(file: StoredProjectEnvFile): Promise<ProjectEnvFile> {
@@ -596,7 +671,8 @@ export class ProjectEnvService {
       name: entry.name,
       secretRef: entry.secretRef,
       updatedAt: entry.updatedAt,
-      ...(exists ? {} : { missing: true })
+      ...(exists ? {} : { missing: true }),
+      ...(entry.disabled === true ? { disabled: true } : {})
     }
   }
 
@@ -763,7 +839,8 @@ function buildRewrittenFile(
       if (line.kind !== 'assignment') return line.text
       const reference = references.get(line.name)
       if (!reference) return line.text
-      return `${line.name}=${projectEnvReference(reference)}`
+      const marker = line.disabled ? `${PROJECT_ENV_DISABLED_PREFIX} ` : ''
+      return `${marker}${line.name}=${projectEnvReference(reference)}`
     })
     .join('\n')
 }

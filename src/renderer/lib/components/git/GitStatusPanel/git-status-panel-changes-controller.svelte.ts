@@ -1,6 +1,7 @@
 import { gitState } from '$lib/stores/git.svelte'
 import type { GitDiff, GitFileChange, GitRestoreTarget } from '$shared/types'
 import { fileDiffKey } from '../git-status-panel-format'
+import { ancestorDirPaths, CHANGE_SECTION_TITLES, dirExpansionKey } from '$lib/git-changes-tree'
 
 /**
  * What the working-tree controls need from the panel around them: the repository
@@ -12,6 +13,10 @@ export interface GitStatusPanelChangesHost {
   readonly changes: GitFileChange[]
   readonly staged: GitFileChange[]
   refreshStatus(): Promise<void>
+  /** Paint a staging the reader asked for, before git answers. */
+  beginStageIntent(paths: readonly string[], staged: boolean): number
+  /** Drop that intent once git has answered (or refused). */
+  settleStageIntent(paths: readonly string[], request: number): void
   /** Hand the caret to the commit message box, which lives in the composer. */
   requestCommitMessageFocus(): void
 }
@@ -27,6 +32,19 @@ export class GitStatusPanelChangesController {
   loadingDiff = $state<Record<string, boolean>>({})
   diffErrors = $state<Record<string, string | null>>({})
   selectedPaths = $state<Record<string, boolean>>({})
+  /**
+   * Which folder rows are open, keyed by section as well as path.
+   *
+   * The same directory appears in Staged, Unstaged and Untracked whenever the
+   * same tree is touched on both sides of the index, so the key carries the
+   * section: keyed by the path alone, opening `apps` under Untracked also opened
+   * the staged run of `apps`, and folding one folded the other.
+   *
+   * It lives here rather than in the tree because a search result has to be able
+   * to open the folders above the file it found, and the tree is not the only
+   * thing that needs to know what is open.
+   */
+  expandedDirs = $state<Record<string, boolean>>({})
   discardConfirm = $state<string[] | null>(null)
   restoreWorktreeConfirm = $state<{ source: string; path: string } | null>(null)
   /**
@@ -62,13 +80,25 @@ export class GitStatusPanelChangesController {
     }
   }
 
+  /**
+   * Move the file in the list now, and ask git in the background.
+   *
+   * The row is what the reader is watching; the index is what git owns. Doing
+   * the second first is what made a toggle wait a second for a round trip. The
+   * intent is painted immediately and settled when git answers: a refusal clears
+   * it, which puts the row back where git says it belongs, with the store's
+   * error explaining why.
+   */
   async toggleStage(change: GitFileChange): Promise<void> {
-    if (change.staged) {
-      await gitState.unstage(this.host.projectId, [change.path])
-      return
+    const staged = !change.staged
+    const request = this.host.beginStageIntent([change.path], staged)
+    try {
+      if (staged) await gitState.stage(this.host.projectId, [change.path])
+      else await gitState.unstage(this.host.projectId, [change.path])
+    } finally {
+      this.host.settleStageIntent([change.path], request)
     }
-    await gitState.stage(this.host.projectId, [change.path])
-    if (!gitState.error) this.host.requestCommitMessageFocus()
+    if (staged && !gitState.error) this.host.requestCommitMessageFocus()
   }
 
   async stageAll(): Promise<void> {
@@ -83,7 +113,12 @@ export class GitStatusPanelChangesController {
       (path) => !(gitState.status?.conflicted ?? []).includes(path)
     )
     if (allPaths.length === 0) return
-    await gitState.stage(this.host.projectId, allPaths)
+    const request = this.host.beginStageIntent(allPaths, true)
+    try {
+      await gitState.stage(this.host.projectId, allPaths)
+    } finally {
+      this.host.settleStageIntent(allPaths, request)
+    }
     if (!gitState.error) this.host.requestCommitMessageFocus()
   }
 
@@ -94,14 +129,21 @@ export class GitStatusPanelChangesController {
       (path) => !(gitState.status?.conflicted ?? []).includes(path)
     )
     if (allPaths.length === 0) return
-    await gitState.unstage(this.host.projectId, allPaths)
+    const request = this.host.beginStageIntent(allPaths, false)
+    try {
+      await gitState.unstage(this.host.projectId, allPaths)
+    } finally {
+      this.host.settleStageIntent(allPaths, request)
+    }
   }
 
   async stagePaths(paths: string[], staged: boolean): Promise<void> {
-    if (staged) {
-      await gitState.unstage(this.host.projectId, paths)
-    } else {
-      await gitState.stage(this.host.projectId, paths)
+    const request = this.host.beginStageIntent(paths, !staged)
+    try {
+      if (staged) await gitState.unstage(this.host.projectId, paths)
+      else await gitState.stage(this.host.projectId, paths)
+    } finally {
+      this.host.settleStageIntent(paths, request)
     }
   }
 
@@ -131,6 +173,30 @@ export class GitStatusPanelChangesController {
 
   clearSelection(): void {
     this.selectedPaths = {}
+  }
+
+  toggleDirKey(key: string): void {
+    this.expandedDirs = { ...this.expandedDirs, [key]: !(this.expandedDirs[key] ?? false) }
+  }
+
+  /**
+   * Bring a changed file into view: open the folders above it, then its diff.
+   *
+   * Every section is opened, not just the one this entry came from, because a
+   * half-staged file is listed twice and the reader should not have to guess
+   * which side the hit was on. Opening the diff is what makes the answer useful:
+   * a row that is merely visible still has to be clicked.
+   */
+  async revealFile(change: GitFileChange): Promise<void> {
+    const ancestors = ancestorDirPaths(change.path)
+    if (ancestors.length > 0) {
+      const next = { ...this.expandedDirs }
+      for (const section of CHANGE_SECTION_TITLES) {
+        for (const dir of ancestors) next[dirExpansionKey(section, dir)] = true
+      }
+      this.expandedDirs = next
+    }
+    if (!this.expanded[fileDiffKey(change)]) await this.toggleDiff(change)
   }
 
   async stageSelectedAction(stage: boolean): Promise<void> {

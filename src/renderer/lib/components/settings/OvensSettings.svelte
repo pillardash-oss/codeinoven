@@ -9,6 +9,7 @@
   import CioCpu from '@pdslng/cio-icon/CioCpu.svelte'
   import CioDisk from '@pdslng/cio-icon/CioDisk.svelte'
   import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
+  import CioGrip from '@pdslng/cio-icon/CioGrip.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
@@ -23,6 +24,7 @@
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
   import { ipcErrorMessage } from '$lib/ipc-errors'
+  import { captureFailure, reportFailure } from '$lib/stores/app-errors.svelte'
   import { pickCustomIconImage, type OptimizedCustomIcon } from '$lib/custom-icon-pipeline'
   import { randomOvenAppearance } from '$lib/oven-appearance'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
@@ -59,6 +61,8 @@
   import type { MenuItem } from '../shared/ThreadDropdown.svelte'
   import ThreadDropdown from '../shared/ThreadDropdown.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
+  import { feature } from '$lib/feature-registry'
+  import { ovenTaskManagerSource } from '../workspace/task-manager-source'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
 
@@ -128,6 +132,8 @@
   let pendingSecretDisable = $state<Oven | null>(null)
   /** The Oven whose stored credentials are about to be forgotten. */
   let pendingSecretForget = $state<Oven | null>(null)
+  /** The remote Oven whose task manager is open. */
+  let taskManagerOven = $state<Oven | null>(null)
   const hasAppearance = $derived(
     Boolean(
       color !== baselineColor ||
@@ -144,6 +150,21 @@
 
   function message(value: unknown): string {
     return ipcErrorMessage(value, 'The Oven operation failed.')
+  }
+
+  /**
+   * The sentence a failed Oven operation shows, and the exception the panel keeps.
+   *
+   * Every `catch` on this page funnels through here. The page keeps showing the
+   * cleaned sentence   `ipcErrorMessage` strips Electron's IPC wrapper, which is
+   * what makes it readable   while the Exceptions tab gets the stack, the build
+   * version and the platform it happened on. A catch that only set
+   * `error = message(failure)` threw the trace away.
+   */
+  function failureMessage(value: unknown, summary: string): string {
+    const detail = message(value)
+    captureFailure(value, summary, { description: detail })
+    return detail
   }
 
   /** The live probe the unified check read for one remote Oven. */
@@ -236,6 +257,12 @@
       })
     items.push({ label: 'Edit Oven', icon: CioPencil, onClick: () => openEditor(oven) })
     if (oven.id !== LOCAL_OVEN_ID) {
+      // The local Oven is this machine, which the rail's task manager covers.
+      items.push({
+        label: 'Task manager',
+        icon: feature('task-manager').icon,
+        onClick: () => (taskManagerOven = oven)
+      })
       items.push({ label: 'separator:clock', divider: true })
       items.push({
         label: 'Match your time zone',
@@ -261,7 +288,7 @@
       await invoke('oven:setDefault', id)
       await load()
     } catch (failure) {
-      error = message(failure)
+      error = failureMessage(failure, 'An Oven could not be made the default')
     }
   }
 
@@ -298,7 +325,7 @@
             specs: health[oven.id]?.specs
           }
         }
-        toast.error(`${oven.name} could not be checked`, { description: detail })
+        reportFailure(failure, `${oven.name} could not be checked`, { description: detail })
       } finally {
         checking = ''
       }
@@ -367,28 +394,59 @@
     dropTarget = null
   }
 
-  /** Persist the order the drag produced and republish it to every surface. */
-  async function dropOven(event: DragEvent): Promise<void> {
-    event.preventDefault()
-    const dragged = dragOvenId
-    const target = dropTarget
-    endOvenDrag()
-    if (!dragged || !target || !ovenState || busy) return
-    const before = ovenState.ovens.filter((oven) => oven.kind === 'ssh').map((oven) => oven.id)
-    const next = before.filter((id) => id !== dragged)
-    const at = next.indexOf(target.id)
-    if (at < 0) return
-    next.splice(target.position === 'before' ? at : at + 1, 0, dragged)
+  /** The remote Ovens in the order the list shows them, local excluded. */
+  function remoteOvenIds(): string[] {
+    return ovenState?.ovens.filter((oven) => oven.kind === 'ssh').map((oven) => oven.id) ?? []
+  }
+
+  /** Persist a new remote-Oven order and republish it to every surface. */
+  async function persistOvenOrder(next: string[]): Promise<void> {
+    const before = remoteOvenIds()
+    if (!ovenState || busy) return
     if (next.every((id, index) => id === before[index])) return
     busy = 'reorder'
     try {
       ovenState = await invoke('oven:reorder', next)
       ovens.adopt(ovenState)
     } catch (failure) {
-      error = message(failure)
+      error = failureMessage(failure, 'The Oven order could not be saved')
     } finally {
       busy = ''
     }
+  }
+
+  /** Persist the order the drag produced. */
+  async function dropOven(event: DragEvent): Promise<void> {
+    event.preventDefault()
+    const dragged = dragOvenId
+    const target = dropTarget
+    endOvenDrag()
+    if (!dragged || !target) return
+    const next = remoteOvenIds().filter((id) => id !== dragged)
+    const at = next.indexOf(target.id)
+    if (at < 0) return
+    next.splice(target.position === 'before' ? at : at + 1, 0, dragged)
+    await persistOvenOrder(next)
+  }
+
+  /**
+   * Move an Oven one place with the arrow keys.
+   *
+   * The grip is the only drag handle a row has, so without this the order would
+   * be reachable by pointer alone and a keyboard reader could never change it.
+   */
+  function moveOvenWithKeyboard(event: KeyboardEvent, oven: Oven): void {
+    const step = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0
+    if (step === 0) return
+    const order = remoteOvenIds()
+    const from = order.indexOf(oven.id)
+    const to = from + step
+    if (from < 0 || to < 0 || to >= order.length) return
+    event.preventDefault()
+    const next = [...order]
+    next.splice(from, 1)
+    next.splice(to, 0, oven.id)
+    void persistOvenOrder(next)
   }
 
   /**
@@ -540,7 +598,7 @@
       await ovenPeeks.refresh(ovenId)
       toast.success(`${row.name} installed on this Oven`)
     } catch (failure) {
-      error = message(failure)
+      error = failureMessage(failure, `${row.name} could not be installed on this Oven`)
     } finally {
       harnessBusy = ''
     }
@@ -559,7 +617,9 @@
       // the one it had when the page opened.
       void ovenPeeks.refresh(oven.id)
     } catch (failure) {
-      toast.error(message(failure))
+      reportFailure(failure, `${oven.name} could not sync its clock`, {
+        description: message(failure)
+      })
     } finally {
       timezoneBusy = ''
     }
@@ -583,7 +643,7 @@
       ensureChecks(ovenState)
       void ovens.ensureInventory(LOCAL_OVEN_ID)
     } catch (failure) {
-      error = message(failure)
+      error = failureMessage(failure, 'The Oven list could not be read')
     }
   }
   onMount(() => {
@@ -669,12 +729,13 @@
         [local.id]: { ...result, specs: result.specs ?? health[local.id]?.specs }
       }
     } catch (failure) {
+      const detail = failureMessage(failure, `${local.name} could not be reached`)
       health = {
         ...health,
         [local.id]: {
           state: 'disconnected',
           checkedAt: Date.now(),
-          error: message(failure),
+          error: detail,
           specs: health[local.id]?.specs
         }
       }
@@ -709,7 +770,10 @@
     customSvg = oven?.customSvg
     void invoke('icon-library:list')
       .then((icons) => (customIcons = icons))
-      .catch((failure: unknown) => (modalError = message(failure)))
+      .catch(
+        (failure: unknown) =>
+          (modalError = failureMessage(failure, 'The icon library could not be read'))
+      )
     color = appearance.color
     const connection = oven?.connection
     const host = connection?.host.includes(':') ? `[${connection.host}]` : connection?.host
@@ -739,7 +803,7 @@
       pendingIcon = picked
       clearImage = false
     } catch (failure) {
-      modalError = message(failure)
+      modalError = failureMessage(failure, 'The Oven icon could not be read')
     }
   }
 
@@ -795,7 +859,7 @@
     try {
       input = { ...draftInput(), name: name.trim() || 'Connection test' }
     } catch (failure) {
-      modalError = message(failure)
+      modalError = failureMessage(failure, 'The Oven details are not valid')
       return
     }
     const requestId = crypto.randomUUID()
@@ -816,7 +880,8 @@
       connectionResult = result
       if (editing) health = { ...health, [editing.id]: result }
     } catch (failure) {
-      if (connectionTestId === requestId) modalError = message(failure)
+      if (connectionTestId === requestId)
+        modalError = failureMessage(failure, 'The connection test could not run')
     } finally {
       clearTimeout(timeout)
       if (connectionTestId === requestId) {
@@ -852,7 +917,7 @@
       await load()
       editorOpen = false
     } catch (failure) {
-      modalError = message(failure)
+      modalError = failureMessage(failure, 'The Oven could not be saved')
     } finally {
       busy = ''
     }
@@ -869,7 +934,8 @@
         identityValidation = 'Private-key file validated.'
       }
     } catch (failure) {
-      if (identityFile === candidate) identityValidation = message(failure)
+      if (identityFile === candidate)
+        identityValidation = failureMessage(failure, 'The SSH key file could not be validated')
     }
   }
 
@@ -880,7 +946,7 @@
       identityFile = path
       await validateIdentity()
     } catch (failure) {
-      identityValidation = message(failure)
+      identityValidation = failureMessage(failure, 'The key file could not be chosen')
     }
   }
 
@@ -909,7 +975,7 @@
       ovenPeeks.forget(pendingRemoval.id)
       pendingRemoval = null
     } catch (failure) {
-      error = message(failure)
+      error = failureMessage(failure, 'The Oven could not be removed')
     } finally {
       busy = ''
     }
@@ -923,7 +989,7 @@
       await invoke('oven:harness:update', ovenId, harnessId)
       await ovenPeeks.refresh(ovenId)
     } catch (failure) {
-      error = message(failure)
+      error = failureMessage(failure, 'A harness could not be updated on this Oven')
     } finally {
       harnessBusy = ''
     }
@@ -939,7 +1005,7 @@
       await ovenPeeks.refresh(pending.ovenId)
       pendingHarnessRemoval = null
     } catch (failure) {
-      error = message(failure)
+      error = failureMessage(failure, 'A harness could not be removed from this Oven')
     } finally {
       harnessBusy = ''
     }
@@ -950,6 +1016,7 @@
     if (backend === 'macos-keychain') return 'the login keychain'
     if (backend === 'windows-dpapi') return 'Windows DPAPI'
     if (backend === 'linux-secret-service') return 'the secret service'
+    if (backend === 'linux-encrypted-file') return 'encrypted files only this account can read'
     return 'no vault'
   }
 
@@ -991,7 +1058,7 @@
     } catch (failure) {
       const detail = message(failure)
       secretErrors = { ...secretErrors, [ovenId]: detail }
-      toast.error(`${ovenName(ovenId)} could not report its credential vault`, {
+      reportFailure(failure, `${ovenName(ovenId)} could not report its credential vault`, {
         description: detail
       })
     }
@@ -1024,8 +1091,9 @@
         )
       await refreshUtilitySecrets(oven.id, answer.enabled)
     } catch (failure) {
-      const detail = message(failure)
-      toast.error(`${oven.name} could not change its credential store`, { description: detail })
+      reportFailure(failure, `${oven.name} could not change its credential store`, {
+        description: message(failure)
+      })
       // The store may be off with its deletion unfinished, so show what is true now.
       await refreshUtilitySecrets(oven.id)
     } finally {
@@ -1049,8 +1117,9 @@
       )
       await refreshUtilitySecrets(oven.id, secretEnabled[oven.id])
     } catch (failure) {
-      const detail = message(failure)
-      toast.error(`${oven.name} could not forget its stored credentials`, { description: detail })
+      reportFailure(failure, `${oven.name} could not forget its stored credentials`, {
+        description: message(failure)
+      })
     } finally {
       secretBusy = ''
     }
@@ -1101,11 +1170,8 @@
           class="relative"
           id={`oven-row-${oven.id}`}
           role="listitem"
-          draggable={canDragOven(oven)}
-          ondragstart={(event) => startOvenDrag(event, oven)}
           ondragover={(event) => hoverOven(event, oven)}
           ondrop={(event) => void dropOven(event)}
-          ondragend={endOvenDrag}
         >
           {#if dropTarget?.id === oven.id}
             <span
@@ -1117,6 +1183,24 @@
           <SettingsEntry expanded={!folded[oven.id]}>
             <div class="grid grid-cols-1 items-center gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
               <div class="flex min-w-0 items-center gap-3">
+                <!-- The row is a drop target, never a drag source: a draggable
+                     row turns every press inside it into a drag, so nothing in
+                     the entry can be selected or copied. Only this grip moves
+                     an Oven, and the arrow keys move it without a pointer. -->
+                {#if canDragOven(oven)}
+                  <button
+                    type="button"
+                    class="flex h-6 w-4 shrink-0 cursor-grab items-center justify-center text-dimmed hover:text-foreground focus-visible:text-foreground"
+                    draggable="true"
+                    title={`Reorder ${oven.name}: drag the grip, or press the up and down arrows`}
+                    aria-label={`Reorder ${oven.name}`}
+                    ondragstart={(event) => startOvenDrag(event, oven)}
+                    ondragend={endOvenDrag}
+                    onkeydown={(event) => moveOvenWithKeyboard(event, oven)}
+                  >
+                    <CioGrip size={12} aria-hidden="true" />
+                  </button>
+                {/if}
                 {#if oven.id === LOCAL_OVEN_ID}
                   <CioDisplay size={20} class="shrink-0 text-muted" />
                 {:else}
@@ -1449,7 +1533,7 @@
                           </p>
                         {/if}
                         {#if vault}
-                          <p class="text-xs" class:text-danger={!vault.available} role="status">
+                          <p class="text-xs text-muted" role="status">
                             {utilityVaultNote(vault)}
                           </p>
                         {:else if secretFailure}
@@ -1495,6 +1579,19 @@
     </div>
   {/if}
 </div>
+
+<!-- Loaded only when opened, like the rail's own task manager. -->
+{#if taskManagerOven}
+  {@const oven = taskManagerOven}
+  {#await loadCachedPanelModule('module:lib/components/workspace/TaskManagerModal.svelte', () => import('$lib/components/workspace/TaskManagerModal.svelte')) then { default: TaskManagerModal }}
+    <TaskManagerModal
+      open
+      title={`${oven.name} task manager`}
+      source={ovenTaskManagerSource(oven.id)}
+      onClose={() => (taskManagerOven = null)}
+    />
+  {/await}
+{/if}
 
 <Modal open={editorOpen} title={editing ? 'Edit Oven' : 'New Oven'} onClose={closeEditor} size="lg">
   <form

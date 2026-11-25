@@ -74,6 +74,38 @@ describe('AssistantSchedulerService', () => {
     return { task: grouped, assistant }
   }
 
+  /**
+   * An assistant whose own knowledge thread is the only thing its clock can run:
+   * no task thread, the schedule on the assistant, the knowledge and the model in
+   * the Getting started thread. This is Amebo, and the shape that went silent.
+   */
+  async function makeKnowledgeOnlyAssistant(schedule: Assistant['schedule']): Promise<{
+    setup: Thread
+    assistant: Assistant
+  }> {
+    const moment = clock
+    const inception = moment - 2 * 60 * 60 * 1000
+    clock = inception
+    const assistant = assistants.createAssistant({
+      name: 'Amebo',
+      schedule,
+      scheduleName: "Amebo's Roundup",
+      knowledge: 'Collect the morning roundup and report it.'
+    })
+    clock = moment
+    const setup = await threads.createThread({
+      projectId: ASSISTANT_SPACE_ID,
+      providerId: 'pi',
+      title: 'Getting started',
+      assistantId: assistant.id,
+      assistantGettingStarted: true
+    })
+    // Pin the authoring host to the assistant's inception, exactly as
+    // `makeScheduledTask` does for a task, so the due slot is a real fire.
+    new ThreadRepo(db).upsert({ ...setup, createdAt: inception, lastActivity: inception })
+    return { setup: assistants.knowledgeThread(assistant.id) ?? setup, assistant }
+  }
+
   function service(): AssistantSchedulerService {
     return new AssistantSchedulerService(storage, {
       assistants,
@@ -305,6 +337,40 @@ describe('AssistantSchedulerService', () => {
     assistants.assignTask(task.id, assistant.id)
     const scheduler = service()
     await scheduler.start()
+    expect(scheduler.listMissedRuns()).toHaveLength(0)
+    scheduler.dispose()
+  })
+
+  it('fires an assistant whose only thread is its knowledge thread', async () => {
+    const { setup, assistant } = await makeKnowledgeOnlyAssistant({
+      cadence: 'hourly',
+      times: []
+    })
+    const scheduler = service()
+    await scheduler.start()
+    scheduler.evaluate()
+    await scheduler.flush()
+    expect(dispatched).toHaveLength(1)
+    expect(dispatched[0].task.id).toBe(setup.id)
+    expect(dispatched[0].run.assistantTaskId).toBe(setup.id)
+    expect(dispatched[0].assistant?.id).toBe(assistant.id)
+    scheduler.dispose()
+  })
+
+  it('keeps firing an assistant whose knowledge thread is hidden', async () => {
+    const { setup, assistant } = await makeKnowledgeOnlyAssistant({
+      cadence: 'hourly',
+      times: []
+    })
+    // Hiding the Getting started row is a sidebar choice. It must never be what
+    // stops the assistant: that is how Amebo lost thirteen days of runs.
+    assistants.setKnowledgeHidden(assistant.id, true)
+    const scheduler = service()
+    await scheduler.start()
+    scheduler.evaluate()
+    await scheduler.flush()
+    expect(dispatched).toHaveLength(1)
+    expect(dispatched[0].task.id).toBe(setup.id)
     expect(scheduler.listMissedRuns()).toHaveLength(0)
     scheduler.dispose()
   })

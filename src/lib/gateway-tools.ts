@@ -114,6 +114,59 @@ export function gatewayPerItemInstruction(codeMode: boolean): string {
     : `One utility invocation per item is the most expensive shape a turn can take: when the same inspect-only operation must run for many inputs (a validator over every changed file, a documentation read for several topics), make ONE ${UTILITY_INVOKE_TOOL_NAME} call with \`inputs\` set to the list (up to ${UTILITY_INVOKE_BATCH_LIMIT} per call), put the independent tool calls in one assistant message, use one gateway \`batch\` for the app tools and activated-utility operations you need, or drive local work from ONE shell command. Never invoke a utility once per item, and never call the gateway through the shell.`
 }
 
+/**
+ * The app-owned process tools a capability search must hand back.
+ *
+ * These are gateway tools, not utilities, so `cio_util_find` used to answer a
+ * process question with unrelated utilities and no mention of them. A model
+ * believed that answer, could not stop a dev server it had started itself, and
+ * left it running. A search that is about a process now names the tools that
+ * already exist and says they are called directly.
+ */
+export interface DirectProcessTool {
+  id: string
+  kind: 'tool'
+  name: string
+  callDirectly: true
+  description: string
+}
+
+export function processDirectToolsForQuery(query: string): DirectProcessTool[] {
+  if (
+    !/(?:process|server|daemon|watcher|kill|stop|shut ?down|port|lifecycle|background)/iu.test(
+      query
+    )
+  ) {
+    return []
+  }
+  return [
+    {
+      id: PROCESS_LIST_TOOL_NAME,
+      kind: 'tool',
+      name: "List this thread's processes",
+      callDirectly: true,
+      description:
+        'App-owned tool, already available: call it directly. Lists the processes this thread owns with their pids, commands and ports. It is not a utility, so it never needs activation.'
+    },
+    {
+      id: PROCESS_START_TOOL_NAME,
+      kind: 'tool',
+      name: 'Start a long-running process',
+      callDirectly: true,
+      description:
+        'App-owned tool, already available: call it directly. Starts a dev server, probe or watcher as an app-owned process and returns its pid, so it outlives the tool call and can be stopped later. It is not a utility, so it never needs activation.'
+    },
+    {
+      id: PROCESS_STOP_TOOL_NAME,
+      kind: 'tool',
+      name: 'Stop one process this thread owns',
+      callDirectly: true,
+      description:
+        "App-owned tool, already available: call it directly. Stops one pid this thread owns, including a server backgrounded from this session's own shell; the app re-verifies ownership, so another project's server is refused. It is not a utility, so it never needs activation."
+    }
+  ]
+}
+
 export function initialGatewayTools(
   tools: readonly GatewayToolDefinition[]
 ): GatewayToolDefinition[] {
@@ -208,6 +261,56 @@ export interface GatewayToolDefinition {
 const GATEWAY_OPERATION_RESULT_SCHEMA: Record<string, unknown> = {
   type: 'object',
   additionalProperties: true
+}
+
+/**
+ * The fields any call that answers with a payload may carry, on top of its own.
+ *
+ * A result larger than one page is answered as page 1 of N with the counts and a
+ * reference, and these three fields are how the caller reads the rest: `page` for
+ * the next one, `charSize` to take a bigger page in one round trip rather than
+ * six, and `pageRef` so a later page is a read of what the app already holds
+ * instead of a second run of a call that may have changed something.
+ *
+ * Declared on every tool that declares an output schema, because a harness
+ * rejects an argument its tool's schema does not name. The gateway strips them
+ * before dispatch, so a utility never receives one.
+ */
+export const GATEWAY_PAGER_PROPERTIES: Record<string, unknown> = {
+  page: {
+    type: 'number',
+    minimum: 1,
+    description:
+      'Page of a paged result to read, one-based. Page 2 and later also need the pageRef the first page returned.'
+  },
+  charSize: {
+    type: 'number',
+    minimum: 2_000,
+    maximum: 200_000,
+    description:
+      'Characters this call may return, when the default page is too small for what you need. Raising it returns the payload in one round trip; the app caps it at 200000.'
+  },
+  pageRef: {
+    type: 'string',
+    description:
+      'Reference a paged result returned. Pass it with page (or with charSize and page 1) to read more of that same result without running the tool again.'
+  }
+}
+
+/** Add the pager fields to one tool's schema, leaving every other field alone. */
+function withPagerFields(tool: GatewayToolDefinition): GatewayToolDefinition {
+  const schema = tool.inputSchema
+  const properties = schema['properties']
+  if (tool.outputSchema === undefined) return tool
+  if (typeof properties !== 'object' || properties === null || Array.isArray(properties))
+    return tool
+  return {
+    ...tool,
+    inputSchema: {
+      ...schema,
+      properties: { ...(properties as Record<string, unknown>), ...GATEWAY_PAGER_PROPERTIES }
+    }
+  }
 }
 
 /**
@@ -627,4 +730,4 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
     route: '/process-stop',
     sentWhen: 'A process you started is still running and is no longer needed'
   }
-]
+].map(withPagerFields)

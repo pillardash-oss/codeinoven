@@ -62,6 +62,12 @@ import {
   budgetGatewayOutput,
   type GatewayOutputMeasurement
 } from '../utility-orchestration/utility-gateway-output'
+import {
+  GatewayPageStore,
+  heldPageResult,
+  pageOversizedResult,
+  readPageRequest
+} from '../utility-orchestration/utility-gateway-pager'
 import { acquireCuaSnapshotLease } from '../cua-snapshot-lease'
 import {
   cuaRefusal,
@@ -128,6 +134,17 @@ export class UtilityOrchestrationServiceOrchestration {
    * proof dies with the turn that produced it.
    */
   private readonly rosterReadTurns = new WeakSet<TurnState>()
+
+  /**
+   * The payloads held for paging.
+   *
+   * One store for the app rather than one per turn: a page is usually asked for
+   * after time has passed, and a reference that died with its turn would refuse
+   * exactly the read it was made for. The store bounds itself by document count
+   * and total characters, and refuses a reference outside the thread it was held
+   * for.
+   */
+  private readonly pagedText = new GatewayPageStore()
 
   constructor(private readonly host: UtilityOrchestrationService) {}
 
@@ -802,18 +819,39 @@ export class UtilityOrchestrationServiceOrchestration {
       typeof input === 'object' && input !== null && !Array.isArray(input)
         ? (input as Record<string, unknown>)
         : {}
-    const result = await handler(state, body)
+    // The pager fields belong to the gateway, never to the tool: they are read
+    // here and stripped, so a utility never receives an argument its schema does
+    // not declare.
+    const { request: page, rest } = readPageRequest(body)
+    if (page.pageRef !== null) {
+      const held = this.pagedText.read(state.request.threadId, page.pageRef)
+      if (!held)
+        throw new Error(
+          'That page reference is not held any more, or belongs to another thread. Call the tool again for a new first page.'
+        )
+      // A later page is a read, never a second dispatch: a preview, a checkpoint
+      // or any other mutation must not run again because its answer was long.
+      return heldPageResult(held, page)
+    }
+    const result = await handler(state, rest)
     // A tool that declares an output schema is answered with the payload both
     // ways: content parts for a model, the same data for a script. Every other
     // route keeps the exact body it has always returned.
+    const shaped = this.host.structuredRoutes.has(route) ? gatewayStructuredResult(result) : result
+    const presented = pageOversizedResult(
+      shaped,
+      state.request.threadId,
+      direct.name,
+      page,
+      this.pagedText
+    )
     let measurement: GatewayOutputMeasurement | undefined
-    const prepared = await budgetGatewayOutput(
-      this.host.structuredRoutes.has(route) ? gatewayStructuredResult(result) : result,
-      state.request.projectPath,
-      (value) => {
+    const prepared = await budgetGatewayOutput(presented, state.request.projectPath, {
+      limit: page.charSize,
+      observe: (value) => {
         measurement = value
       }
-    )
+    })
     if (measurement) {
       await this.audit(state, 'gateway.output_budgeted', {
         ...measurement,

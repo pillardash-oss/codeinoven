@@ -18,6 +18,8 @@ import {
   APP_VIDEO_UTILITY_ID
 } from '../../../lib/utility-ids'
 import { FOLLOW_UP_OPERATIONS } from '../../../lib/follow-up'
+import { processDirectToolsForQuery } from '../../../lib/gateway-tools'
+import { browserSearchEntry, matchesBrowserSearchIntent } from '../../../lib/browser-discovery'
 import type { ThreadSearchOptions } from '../../database/repositories/thread-repo'
 import {
   APP_BROWSER_UTILITY_ID,
@@ -395,7 +397,13 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
     // Lexical mismatch is not proof of semantic irrelevance. Candidate results
     // are intentionally left for the calling agent to evaluate against the
     // user's task; only an empty eligible set is an unambiguous absence verdict.
-    const notFound = ranked.length === 0
+    const directTools = processDirectToolsForQuery(query ?? '')
+    // A page question always names the in-app browser, even when the lexical
+    // ranking would answer with something else: a model that could not find it
+    // once opened its own chromium and a second dev server instead.
+    const browserEntry = query && matchesBrowserSearchIntent(query) ? browserSearchEntry() : null
+    // A process question is never "not found": the app owns those tools itself.
+    const notFound = ranked.length === 0 && directTools.length === 0 && browserEntry === null
     const matchType = notFound ? 'none' : fallback ? 'candidates' : 'direct'
     state.searched = true
     await this.host.units['orchestration'].audit(state, 'utility.searched', {
@@ -403,11 +411,15 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
       fallback,
       notFound,
       matchType,
-      resultIds: utilities.map(({ id }) => id)
+      resultIds: [...utilities.map(({ id }) => id), ...directTools.map(({ id }) => id)]
     })
     return {
       utilities,
-      fallback,
+      ...(directTools.length > 0 ? { directTools } : {}),
+      ...(browserEntry
+        ? { browser: { ...browserEntry, active: state.activated.has(browserEntry.id) } }
+        : {}),
+      fallback: directTools.length > 0 ? false : fallback,
       notFound,
       matchType,
       ...(fallback

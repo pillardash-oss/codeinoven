@@ -375,12 +375,6 @@ export interface PendingPermissionInfo {
   timer?: ReturnType<typeof setTimeout>
   /** When the untouched card closes, epoch ms. Absent while the user is active. */
   expiresAt?: number
-  /**
-   * Set for an app-owned browser action on the page the user is viewing. The
-   * gateway tool call that asked is still open, so it settles here instead of
-   * being answered through a harness.
-   */
-  settleBrowserAction?: (approved: boolean, alternative?: string) => void
 }
 
 export interface PendingQuestionInfo {

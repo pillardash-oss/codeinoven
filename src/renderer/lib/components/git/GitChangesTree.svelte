@@ -1,5 +1,7 @@
 <script lang="ts">
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioChevronsDown from '@pdslng/cio-icon/CioChevronsDown.svelte'
+  import CioChevronsUp from '@pdslng/cio-icon/CioChevronsUp.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
   import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
@@ -7,7 +9,19 @@
   import CioMerge from '@pdslng/cio-icon/CioMerge.svelte'
   import Switch from '../ui/Switch.svelte'
   import { ContextMenu } from 'bits-ui'
+  import type { Attachment } from 'svelte/attachments'
   import type { GitDiff, GitFileChange, TurnCheckpointFileDiff } from '$shared/types'
+  import {
+    buildChangeTree,
+    compressDirChain,
+    dirExpansionKey,
+    filesForNode,
+    pathsForNode,
+    splitChangePath,
+    subtreeDirKeys,
+    sortTreeDirs,
+    type GitChangeTreeNode
+  } from '$lib/git-changes-tree'
   import FileDiffView from '../files/DeferredFileDiffView.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -30,6 +44,17 @@
     onDiscardPaths: (paths: string[]) => void
     /** Opens the dedicated conflict-resolution panel for a conflicted file. */
     onResolveConflict?: (path: string) => void
+    /**
+     * Which folder rows are open, keyed by section and path.
+     *
+     * The panel's changes controller owns it so a search result can open the way
+     * to the file it found, and so the folds survive a switch between the list
+     * and the tree.
+     */
+    expandedDirs?: Record<string, boolean>
+    /** Measures a section body's content height, supplied by the column that
+     *  sizes the sections. */
+    measureCard?: Attachment<HTMLElement>
   }
 
   let {
@@ -48,62 +73,45 @@
     onOpenDirectory,
     onIgnorePaths,
     onDiscardPaths,
-    onResolveConflict
+    onResolveConflict,
+    expandedDirs = $bindable({}),
+    measureCard = () => {}
   }: Props = $props()
 
-  interface TreeNode {
-    name: string
-    path: string
-    dirs: Map<string, TreeNode>
-    files: GitFileChange[]
+  /**
+   * The guide columns a row at this depth draws, one per ancestor.
+   *
+   * Indentation alone leaves a deep file floating under nothing; a hairline per
+   * level is what makes a tree read as a tree, and drawing it per row (rather
+   * than a background) keeps it honest when a row is selected or hovered.
+   */
+  function guideLevels(depth: number): number[] {
+    return Array.from({ length: depth }, (_, index) => index)
   }
 
-  let expandedDirs = $state<Record<string, boolean>>({})
+  /** The width the toggle occupies, so a conflicted row without one still lines
+   *  its name up with every other row. */
+  const SWITCH_COLUMN = 'w-7'
 
-  function buildTree(sectionFiles: GitFileChange[]): TreeNode {
-    const root: TreeNode = { name: '', path: '', dirs: new Map(), files: [] }
-    for (const change of sectionFiles) {
-      const segments = change.path.split('/')
-      let node = root
-      for (let i = 0; i < segments.length - 1; i++) {
-        const seg = segments[i] ?? ''
-        let child = node.dirs.get(seg)
-        if (!child) {
-          child = {
-            name: seg,
-            path: segments.slice(0, i + 1).join('/'),
-            dirs: new Map(),
-            files: []
-          }
-          node.dirs.set(seg, child)
-        }
-        node = child
-      }
-      node.files.push(change)
-    }
-    return root
+  function toggleDir(key: string): void {
+    expandedDirs = { ...expandedDirs, [key]: !(expandedDirs[key] ?? false) }
   }
 
-  function sortDirs(dirs: Map<string, TreeNode>): TreeNode[] {
-    return [...dirs.values()].sort((a, b) => a.name.localeCompare(b.name))
+  /** Open or fold a folder and everything under it, from that level down. */
+  function toggleSubtree(node: GitChangeTreeNode, sectionKey: string, open: boolean): void {
+    const next = { ...expandedDirs }
+    for (const key of subtreeDirKeys(node, sectionKey)) next[key] = open
+    expandedDirs = next
   }
 
-  function filesFor(node: TreeNode): GitFileChange[] {
-    const files = [...node.files]
-    for (const child of node.dirs.values()) files.push(...filesFor(child))
-    return files
+  /** Whether anything at or under this folder is open, which decides whether the
+   *  control offers "expand all" or "fold all". */
+  function subtreeHasOpen(node: GitChangeTreeNode, sectionKey: string): boolean {
+    return subtreeDirKeys(node, sectionKey).some((key) => expandedDirs[key] === true)
   }
 
-  function allPathsFor(node: TreeNode): string[] {
-    return filesFor(node).map((change) => change.path)
-  }
-
-  function toggleDir(path: string): void {
-    expandedDirs = { ...expandedDirs, [path]: !(expandedDirs[path] ?? false) }
-  }
-
-  function onToggleSelectDir(node: TreeNode, additive: boolean): void {
-    const paths = allPathsFor(node)
+  function onToggleSelectDir(node: GitChangeTreeNode, additive: boolean): void {
+    const paths = pathsForNode(node)
     const allSelected = paths.length > 0 && paths.every((path) => selectedPaths[path])
     const remove = additive && allSelected
     const next = { ...selectedPaths }
@@ -172,7 +180,7 @@
   }
 </script>
 
-{#snippet dirActions(node: TreeNode)}
+{#snippet dirActions(node: GitChangeTreeNode)}
   <ContextMenu.Item
     class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
     onSelect={() => onOpenDirectory(node.path)}
@@ -183,14 +191,14 @@
   <ContextMenu.Separator class="my-1 h-px bg-border" />
   <ContextMenu.Item
     class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-    onSelect={() => onStagePaths(allPathsFor(node), false)}
+    onSelect={() => onStagePaths(pathsForNode(node), false)}
   >
     <CioCheck size={12} class="text-success" />
     Stage all
   </ContextMenu.Item>
   <ContextMenu.Item
     class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-    onSelect={() => onStagePaths(allPathsFor(node), true)}
+    onSelect={() => onStagePaths(pathsForNode(node), true)}
   >
     <span class="inline-block w-3 text-center text-[0.625rem] text-danger">−</span>
     Unstage all
@@ -198,7 +206,7 @@
   <ContextMenu.Separator class="my-1 h-px bg-border" />
   <ContextMenu.Item
     class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-    onSelect={() => onStashPaths(allPathsFor(node))}
+    onSelect={() => onStashPaths(pathsForNode(node))}
   >
     <span class="inline-block w-3 text-center text-[0.625rem]">↓</span>
     Stash directory…
@@ -212,7 +220,7 @@
   </ContextMenu.Item>
   <ContextMenu.Item
     class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated"
-    onSelect={() => onDiscardPaths(allPathsFor(node))}
+    onSelect={() => onDiscardPaths(pathsForNode(node))}
   >
     <span class="inline-block w-3 text-center text-[0.625rem]">⌫</span>
     Discard changes
@@ -281,7 +289,7 @@
   {/if}
 {/snippet}
 
-{#snippet fileRow(change: GitFileChange)}
+{#snippet fileRow(change: GitFileChange, depth: number)}
   {@const key = fileKey(change)}
   {@const viewDiff = viewDiffFor(change, diffs[key] ?? null)}
   <ContextMenu.Root>
@@ -292,7 +300,7 @@
     >
       <div
         class={[
-          'group flex h-7 w-full cursor-pointer items-center gap-1.5 pr-1.5 text-left transition-colors',
+          'group flex h-7 w-full cursor-pointer items-center gap-1.5 pl-1 pr-1.5 text-left transition-colors',
           selectedPaths[change.path] ? 'bg-primary/10' : 'hover:bg-elevated/50'
         ]}
         role="button"
@@ -338,7 +346,12 @@
               activeClass="border-primary bg-primary"
             />
           </span>
+        {:else}
+          <span class="{SWITCH_COLUMN} shrink-0" aria-hidden="true"></span>
         {/if}
+        {#each guideLevels(depth) as level (level)}
+          <span class="h-7 w-3 shrink-0 border-l border-border" aria-hidden="true"></span>
+        {/each}
         <span
           class={[
             'w-4 shrink-0 text-center font-mono text-[0.625rem] font-semibold',
@@ -348,8 +361,10 @@
           {statusLetter(change)}
         </span>
         <FileTypeIcon path={change.path} size={13} class="shrink-0" />
-        <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted">
-          {change.path.split('/').pop()}
+        <!-- Inside the tree the folders are the rows above, so the file row is
+             its name alone, in the same weight a folder row uses. -->
+        <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-foreground">
+          {splitChangePath(change.path).name}
         </span>
         {#if diffs[key] && !diffs[key].binary}
           <span class="shrink-0 font-mono text-[0.5625rem] tabular-nums text-success">
@@ -401,33 +416,44 @@
   {/if}
 {/snippet}
 
-{#snippet dirRow(node: TreeNode, depth: number)}
-  {@const isOpen = expandedDirs[node.path] ?? false}
-  {@const indent = 3 + depth * 2}
-  {@const dirFiles = filesFor(node)}
+{#snippet dirRow(node: GitChangeTreeNode, depth: number, label: string, sectionKey: string)}
+  {@const stateKey = dirExpansionKey(sectionKey, node.path)}
+  {@const isOpen = expandedDirs[stateKey] ?? false}
+  {@const dirFiles = filesForNode(node)}
   {@const dirSelected =
     dirFiles.every((change) => selectedPaths[change.path]) && dirFiles.length > 0}
   <ContextMenu.Root>
     <ContextMenu.Trigger
       class="block w-full"
-      aria-label={`Actions for ${node.path}/`}
-      title={`Actions for ${node.path}/`}
+      aria-label={`Actions for ${label}/`}
+      title={`Actions for ${label}/`}
     >
-      <button
-        type="button"
+      <!--
+        A div with the button role, not a button element: the row contains the
+        selection Switch and the subtree control, and a button inside a button is
+        invalid markup that browsers resolve by dropping one of them.
+      -->
+      <div
+        role="button"
+        tabindex="0"
         class={[
-          'flex h-7 w-full cursor-pointer items-center gap-1.5 px-2 text-left transition-colors',
+          'flex h-7 w-full cursor-pointer items-center gap-1.5 pl-1 pr-2 text-left transition-colors',
           dirSelected ? 'bg-primary/10' : 'hover:bg-elevated/50'
         ]}
-        style="padding-left: {indent}px"
         aria-expanded={isOpen}
+        aria-label={`${label}/`}
         onclick={(event: MouseEvent) => {
           if (event.metaKey || event.ctrlKey) {
             event.preventDefault()
             onToggleSelectDir(node, true)
             return
           }
-          toggleDir(node.path)
+          toggleDir(stateKey)
+        }}
+        onkeydown={(event: KeyboardEvent) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          event.preventDefault()
+          toggleDir(stateKey)
         }}
       >
         <span
@@ -442,11 +468,14 @@
           <Switch
             checked={dirSelected}
             onchange={() => onToggleSelectDir(node, true)}
-            title={dirSelected ? `Deselect ${node.path}/` : `Select ${node.path}/`}
-            aria-label={dirSelected ? `Deselect ${node.path}/` : `Select ${node.path}/`}
+            title={dirSelected ? `Deselect ${label}/` : `Select ${label}/`}
+            aria-label={dirSelected ? `Deselect ${label}/` : `Select ${label}/`}
             activeClass="border-primary bg-primary"
           />
         </span>
+        {#each guideLevels(depth) as level (level)}
+          <span class="h-7 w-3 shrink-0 border-l border-border" aria-hidden="true"></span>
+        {/each}
         {#if isOpen}
           <CioChevronDown size={12} class="shrink-0 text-dimmed" />
           <CioFolderOpen size={13} class="shrink-0 text-warning" />
@@ -454,13 +483,46 @@
           <CioForward size={12} class="shrink-0 text-dimmed" />
           <CioFolder size={13} class="shrink-0 text-warning" />
         {/if}
+        <!--
+          The chain a folded row names (`apps/application/src/lib`) is one path,
+          so it is written as one: the separators are dimmed only, never removed,
+          because `/` is what makes it a path rather than one folder with slashes
+          in its name.
+        -->
         <span class="min-w-0 flex-1 truncate text-[0.625rem] font-medium text-foreground">
-          {node.name}
+          {#each label.split('/') as segment, segmentIndex (segmentIndex)}
+            {#if segmentIndex > 0}<span class="text-dimmed">/</span>{/if}{segment}
+          {/each}
         </span>
         <span class="shrink-0 text-[0.5625rem] tabular-nums text-dimmed">
-          {filesFor(node).length}
+          {filesForNode(node).length}
         </span>
-      </button>
+        {#if node.dirs.size > 0}
+          {@const anyOpen = subtreeHasOpen(node, sectionKey)}
+          <button
+            type="button"
+            class={[
+              'flex h-5 w-5 shrink-0 items-center justify-center transition-colors hover:bg-elevated hover:text-foreground',
+              anyOpen ? 'text-foreground' : 'text-dimmed'
+            ]}
+            title={anyOpen ? `Fold everything under ${label}` : `Expand everything under ${label}`}
+            aria-label={anyOpen
+              ? `Fold everything under ${label}`
+              : `Expand everything under ${label}`}
+            onclick={(event: MouseEvent) => {
+              event.stopPropagation()
+              event.preventDefault()
+              toggleSubtree(node, sectionKey, !anyOpen)
+            }}
+          >
+            {#if anyOpen}
+              <CioChevronsUp size={11} />
+            {:else}
+              <CioChevronsDown size={11} />
+            {/if}
+          </button>
+        {/if}
+      </div>
     </ContextMenu.Trigger>
     <ContextMenu.Portal>
       <ContextMenu.Content
@@ -477,21 +539,27 @@
 
   {#if isOpen}
     {#each node.files as change (change.path)}
-      {@render fileRow(change)}
+      {@render fileRow(change, depth + 1)}
     {/each}
-    {#each sortDirs(node.dirs) as subdir (subdir.path)}
-      {@render dirRow(subdir, depth + 1)}
+    {#each sortTreeDirs(node.dirs) as subdir (subdir.path)}
+      {@const branch = compressDirChain(subdir)}
+      {@render dirRow(branch.node, depth + 1, branch.label, sectionKey)}
     {/each}
   {/if}
 {/snippet}
 
 {#each sections as section (section.title)}
-  {@const tree = buildTree(section.files)}
+  {@const tree = buildChangeTree(section.files)}
   {@const isConflicts = section.title === 'Conflicts'}
   {@const sectionAllSelected =
     section.files.length > 0 && section.files.every((f) => selectedPaths[f.path])}
-  <div class="overflow-hidden border border-border bg-surface">
-    <div class="flex items-center gap-1.5 bg-elevated/50 px-2.5 py-1">
+  <div
+    class="flex min-h-0 flex-1 flex-col overflow-hidden border border-border bg-surface"
+    data-card-title={section.title}
+  >
+    <!-- The header keeps the row's own gutter so the section toggle sits on the
+         same column as every switch below it, and the count ends the line. -->
+    <div class="flex items-center gap-1.5 bg-elevated/50 py-1 pl-1 pr-2">
       {#if !isConflicts}
         <span
           class="shrink-0"
@@ -518,16 +586,27 @@
       <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
         {section.title}
       </span>
-      <span class="text-[0.5rem] tabular-nums text-dimmed">{section.files.length}</span>
+      <span
+        class="ml-auto text-[0.5rem] tabular-nums text-dimmed"
+        title={`${String(section.files.length)} files in ${section.title}`}
+        >{section.files.length}</span
+      >
     </div>
 
     {#if tree.dirs.size > 0 || tree.files.length > 0}
-      <div class="py-1">
-        {#each sortDirs(tree.dirs) as dir (dir.path)}
-          {@render dirRow(dir, 0)}
+      <!-- The body is the part that scrolls when the section is taller than its
+           share of the column; the header above it stays put. -->
+      <div
+        class="min-h-0 overflow-y-auto py-1"
+        data-card-body={section.title}
+        {@attach measureCard}
+      >
+        {#each sortTreeDirs(tree.dirs) as dir (dir.path)}
+          {@const branch = compressDirChain(dir)}
+          {@render dirRow(branch.node, 0, branch.label, section.title)}
         {/each}
         {#each tree.files as change (change.path)}
-          {@render fileRow(change)}
+          {@render fileRow(change, 0)}
         {/each}
       </div>
     {/if}

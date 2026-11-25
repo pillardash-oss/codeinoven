@@ -564,6 +564,16 @@ export class GlobalBrowserState {
   closeAgentSidebar(): void {
     return this.units['runtime'].closeAgentSidebar()
   }
+  /** Start another assistant conversation for the page on screen. */
+  newAssistantChat(): void {
+    const tab = this.activeTab
+    if (tab) void this.units['queries'].newAssistantChat(tab)
+  }
+  /** Write a tab's conversation list back onto its durable row after one of them
+   *  closed; the rail closes a conversation and does not hold the page's row. */
+  syncAssistantChatsForTab(tabId: string): void {
+    this.units['queries'].syncAssistantChatsForTab(tabId)
+  }
 
   /** Whether the rail is currently showing the active tab's agent chat. */
   get agentSidebarShown(): boolean {

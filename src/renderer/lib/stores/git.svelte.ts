@@ -39,6 +39,7 @@ import {
   type GitHubWorkflowRunDetail,
   type GitHubWorkflowRunPage,
   type GitIdentity,
+  type GitPushProgress,
   type GitRemoteInfo,
   type GitRemoteIssue,
   type GitStashEntry,
@@ -703,6 +704,21 @@ export class GitState {
   }
   push(projectId: string, setUpstream: boolean, remote?: string, branch?: string) {
     return this.units['runtime'].push(projectId, setUpstream, remote, branch)
+  }
+  /**
+   * Stop the push running in this checkout. Resolves to whether one was still in
+   * flight, so a click that arrives after it finished settles the control.
+   */
+  stopPush(projectId: string): Promise<boolean> {
+    return this.units['runtime'].stopPush(projectId)
+  }
+  /** The last stage git reported for this checkout's push, or null when none is running. */
+  pushStageFor(projectId: string): GitPushProgress | null {
+    return this.units['runtime'].pushStageFor(projectId)
+  }
+  /** Whether the running push is one the panel's stop control can call off. */
+  canStopPush(projectId: string): boolean {
+    return this.units['runtime'].canStopPush(projectId)
   }
   pullIntegrate(
     projectId: string,

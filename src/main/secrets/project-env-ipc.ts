@@ -3,6 +3,7 @@ import { validateEntityId } from '../ipc/ipc-validation'
 import {
   type ProjectEnvApplyTextRequest,
   type ProjectEnvEntryRequest,
+  type ProjectEnvEntryToggleRequest,
   type ProjectEnvFileRequest,
   type ProjectEnvImportRequest,
   type ProjectEnvPreviewRequest,
@@ -60,6 +61,14 @@ function valueRequest(value: unknown): ProjectEnvValueRequest {
 function entryRequest(value: unknown): ProjectEnvEntryRequest {
   const input = record(value, 'Env entry request')
   return { ...fileRequest(input), name: text(input['name'], 'Env key', NAME_LIMIT) }
+}
+
+function entryToggleRequest(value: unknown): ProjectEnvEntryToggleRequest {
+  const input = record(value, 'Env key switch request')
+  if (typeof input['disabled'] !== 'boolean') {
+    throw new TypeError('Env key switch needs disabled to be boolean')
+  }
+  return { ...entryRequest(input), disabled: input['disabled'] }
 }
 
 function applyTextRequest(value: unknown): ProjectEnvApplyTextRequest {
@@ -136,6 +145,9 @@ export function registerProjectEnvIpc(service: ProjectEnvService): void {
   )
   ipcMain.handle('secrets:envRemoveEntry', (_, request: unknown) =>
     service.removeProjectEnvEntry(entryRequest(request))
+  )
+  ipcMain.handle('secrets:envSetEntryDisabled', (_, request: unknown) =>
+    service.setProjectEnvEntryDisabled(entryToggleRequest(request))
   )
   ipcMain.handle('secrets:envCreateFile', (_, request: unknown) =>
     service.createProjectEnvFile(fileRequest(request))

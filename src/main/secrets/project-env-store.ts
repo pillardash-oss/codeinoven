@@ -6,6 +6,8 @@ export interface StoredProjectEnvEntry {
   name: string
   secretRef: string
   updatedAt: number
+  /** True when the key is kept but switched off, so it is never injected. */
+  disabled?: boolean
 }
 
 /** One stored manifest: a directory group plus a file name. */
@@ -118,7 +120,8 @@ function sanitizeEntry(entry: unknown): StoredProjectEnvEntry[] {
     {
       name,
       secretRef,
-      updatedAt: typeof record['updatedAt'] === 'number' ? record['updatedAt'] : 0
+      updatedAt: typeof record['updatedAt'] === 'number' ? record['updatedAt'] : 0,
+      ...(record['disabled'] === true ? { disabled: true } : {})
     }
   ]
 }

@@ -1,0 +1,59 @@
+import { describe, expect, it } from 'vitest'
+import {
+  formatProjectEnvLine,
+  parseProjectEnvFile,
+  PROJECT_ENV_DISABLED_PREFIX
+} from '../../src/lib/project-env'
+
+/** Only the assignment lines, which is what an editor turns into key rows. */
+function assignments(text: string): { name: string; value: string; disabled: boolean }[] {
+  return parseProjectEnvFile(text).flatMap((line) =>
+    line.kind === 'assignment'
+      ? [{ name: line.name, value: line.value, disabled: line.disabled }]
+      : []
+  )
+}
+
+describe('parseProjectEnvFile', () => {
+  it('reads only the app marker as a turned-off key', () => {
+    const text = [
+      '# plain note',
+      '#cio-cmt FEATURE_FLAG=on',
+      '#cio-cmt-notes FEATURE_FLAG=on',
+      '#cio-cmtx FEATURE_FLAG=on',
+      '#cio-cmt',
+      'PORT=3000'
+    ].join('\n')
+
+    expect(assignments(text)).toEqual([
+      { name: 'FEATURE_FLAG', value: 'on', disabled: true },
+      { name: 'PORT', value: '3000', disabled: false }
+    ])
+    expect(parseProjectEnvFile(text).filter((line) => line.kind === 'comment')).toHaveLength(4)
+  })
+
+  it('keeps every comment and blank line exactly as written', () => {
+    const text = '#   spaced\n\n  # indented\nPORT=3000\n'
+    expect(parseProjectEnvFile(text).map((line) => line.text)).toEqual([
+      '#   spaced',
+      '',
+      '  # indented',
+      'PORT=3000',
+      ''
+    ])
+  })
+})
+
+describe('formatProjectEnvLine', () => {
+  it('comments a turned-off key with the marker and round-trips through the parser', () => {
+    const on = formatProjectEnvLine('PORT', '3000')
+    const off = formatProjectEnvLine('MAIL_KEY', 'a b#c', true)
+
+    expect(on).toBe('PORT=3000')
+    expect(off).toBe(`${PROJECT_ENV_DISABLED_PREFIX} MAIL_KEY="a b#c"`)
+    expect(assignments(`${on}\n${off}\n`)).toEqual([
+      { name: 'PORT', value: '3000', disabled: false },
+      { name: 'MAIL_KEY', value: 'a b#c', disabled: true }
+    ])
+  })
+})

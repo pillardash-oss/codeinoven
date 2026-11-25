@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import {
   OVEN_PROTOCOL_VERSION,
   type OvenProbe,
+  type OvenProcessSnapshot,
   type OvenRun,
   type OvenRunEvent,
   type StartOvenRunInput
@@ -21,6 +22,7 @@ import { mirrorLocalGitIdentity, OVEN_GIT_NETWORK_CHANNELS } from './oven-local-
 import { syncLocalGitHostTrust } from './oven-local-git-trust'
 import {
   failedAnswerError,
+  isServiceLoadCrash,
   isStaleServiceFault,
   serviceBundleRevision
 } from './oven-service-bundle'
@@ -148,6 +150,19 @@ function ovenClientId(dataRoot: string): string {
       .slice(0, 40) || 'client'
   const digest = createHash('sha256').update(`${host}\u0000${dataRoot}`).digest('hex').slice(0, 8)
   return `${host}/${digest}`
+}
+
+/**
+ * How long a run may sit untouched before its owner counts as gone. A client
+ * that is still there reads its run's events, which resets the clock; three Pi
+ * runs left by an installation that no longer exists blocked every update of an
+ * Oven for days because "another client's run" was never stopped.
+ */
+const ORPHANED_RUN_AFTER_MS = 6 * 60 * 60 * 1000
+
+/** True when nobody has touched this run for long enough that its owner is gone. */
+function orphanedRun(run: OvenRun, now: number): boolean {
+  return now - (run.lastActivityAt ?? run.createdAt) > ORPHANED_RUN_AFTER_MS
 }
 
 /** How many runs a probe answer says the Oven is working on. */
@@ -305,6 +320,16 @@ export class OvenService {
     if (!(await this.refreshService(id, 'The Oven runs a different service revision.')))
       return probe
     return this.parseProbe(await this.request(id, input))
+  }
+
+  /** The Oven's task manager listing: the service's process tree and its live runs. */
+  async processes(id: string): Promise<OvenProcessSnapshot> {
+    return this.decode<OvenProcessSnapshot>(await this.request(id, { method: 'processes' }))
+  }
+
+  /** End one process the Oven's service runs. The Oven refuses any other pid. */
+  async killProcess(id: string, pid: number, force: boolean): Promise<void> {
+    this.decode(await this.request(id, { method: 'kill-process', input: { pid, force } }))
   }
 
   async runs(id: string): Promise<OvenRun[]> {
@@ -471,10 +496,16 @@ export class OvenService {
     const started = this.startedRuns.get(id) ?? new Set<string>()
     for (const run of runs.value) if (run.status !== 'running') started.delete(run.id)
     const running = runs.value.filter((run) => run.status === 'running')
-    // Another client's run is never stopped. The Oven records the owner beside
-    // every run it starts, and its owner is watching it; the update waits.
+    // Another client's live run is never stopped; the update waits for it. A run
+    // nobody has touched for hours has no owner left to watch it, so it
+    // is stopped like this client's own leftovers instead of blocking forever.
+    const now = Date.now()
     const foreign = running.filter(
-      (run) => !started.has(run.id) && run.clientId !== undefined && run.clientId !== this.clientId
+      (run) =>
+        !started.has(run.id) &&
+        run.clientId !== undefined &&
+        run.clientId !== this.clientId &&
+        !orphanedRun(run, now)
     )
     if (foreign.length > 0) {
       const owners = [...new Set(foreign.map((run) => run.clientId))].join(', ')
@@ -782,7 +813,9 @@ export class OvenService {
   /** A stopped or outdated service, from either a thrown error or a JSON answer. */
   private serviceFaultOf(result: Attempt<string>): Error | null {
     const message = result.ok ? failedAnswerError(result.value) : messageOf(result.error)
-    if (!message || (!isStaleServiceFault(message) && !serviceNotRunning(message))) return null
+    if (!message) return null
+    const loadCrash = !result.ok && isServiceLoadCrash(message)
+    if (!loadCrash && !isStaleServiceFault(message) && !serviceNotRunning(message)) return null
     return result.ok ? new Error(message) : toError(result.error)
   }
 

@@ -12,6 +12,8 @@ import {
   resolveCurrentConflictsWithAgent
 } from '../git-status-panel-agent-actions'
 import type { GitCommitInfo, GitFileChange, GitPullStrategy } from '$shared/types'
+import { applyStageIntents, type StageIntents } from '$lib/git-optimistic-staging'
+import { mergeHistoryPage } from '$lib/git-history-paging'
 import { toast } from 'svelte-sonner'
 import { GitStatusPanelBranchesController } from '../GitStatusPanel/git-status-panel-branches-controller.svelte'
 import { gitPullJobs } from '$lib/stores/git-pull-jobs.svelte'
@@ -112,7 +114,49 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
 
   status = $derived(gitState.status)
 
-  changes = $derived(this.status?.changes ?? [])
+  /**
+   * Stage and unstage the reader asked for, painted before git answers.
+   *
+   * Staging is a round trip, and waiting for it before moving a row is what made
+   * a toggle feel like it took a second. The intent is applied to the last status
+   * git reported, so the row moves at once; a refusal reaches the reader through
+   * the store's error, and dropping the intent is the rollback, because the real
+   * status underneath never moved.
+   */
+  stageIntents = $state<StageIntents>({})
+
+  /** The changes the panel draws: git's last answer with the reader's pending
+   *  staging applied on top. */
+  changes = $derived(applyStageIntents(this.status?.changes ?? [], this.stageIntents))
+
+  /**
+   * Paint an intended staging now, and answer with the request that owns it.
+   *
+   * The request is what lets two quick toggles on one path settle in order: the
+   * older answer is not allowed to clear an intent the newer one set.
+   */
+  beginStageIntent(paths: readonly string[], staged: boolean): number {
+    const request = ++this.stageIntentRequest
+    const next = { ...this.stageIntents }
+    for (const path of paths) next[path] = { staged, request }
+    this.stageIntents = next
+    return request
+  }
+
+  /** Drop an intent once git has answered (or refused), leaving the paths whose
+   *  intent a newer request has since taken over. */
+  settleStageIntent(paths: readonly string[], request: number): void {
+    const next = { ...this.stageIntents }
+    let changed = false
+    for (const path of paths) {
+      if (next[path]?.request !== request) continue
+      delete next[path]
+      changed = true
+    }
+    if (changed) this.stageIntents = next
+  }
+
+  private stageIntentRequest = 0
 
   staged = $derived(
     this.changes.filter((change) => change.staged && change.status !== 'conflicted')
@@ -260,8 +304,9 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
     try {
       const page = await gitState.getLog(this.root.props.projectId, this.HISTORY_PAGE_SIZE)
       if (request !== this.historyRequestId) return
-      this.commitHistory = page
-      this.historyHasMore = page.length === this.HISTORY_PAGE_SIZE
+      const merged = mergeHistoryPage([], page, this.HISTORY_PAGE_SIZE)
+      this.commitHistory = merged.commits
+      this.historyHasMore = merged.hasMore
     } finally {
       // A superseded or failed request must never leave the spinner stuck.
       if (request === this.historyRequestId) this.loadingHistory = false
@@ -280,12 +325,35 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
         this.commitHistory.length
       )
       if (request !== this.historyRequestId) return
-      this.commitHistory = [...this.commitHistory, ...page]
-      this.historyHasMore = page.length === this.HISTORY_PAGE_SIZE
+      const merged = mergeHistoryPage(this.commitHistory, page, this.HISTORY_PAGE_SIZE)
+      this.commitHistory = merged.commits
+      this.historyHasMore = merged.hasMore
     } finally {
       if (request === this.historyRequestId) this.loadingMoreHistory = false
     }
   }
+
+  /**
+   * Drop the loaded history because the panel now stands in another repository.
+   *
+   * `loadHistory` fills itself only when the list is empty, so without this a
+   * project switch kept the previous project's commits on screen and appended
+   * the new repository's second page to them: two repositories in one list, and
+   * a duplicate-hash risk on commits that happen to be shared. The in-flight
+   * request is dropped along with the list, and both paging flags are cleared so
+   * the spinner cannot survive a reset.
+   */
+  resetHistory(projectId: string): void {
+    this.historyProjectId = projectId
+    this.historyRequestId += 1
+    this.commitHistory = []
+    this.historyHasMore = true
+    this.loadingHistory = false
+    this.loadingMoreHistory = false
+  }
+
+  /** The project the loaded history belongs to, so a switch can be detected. */
+  historyProjectId = $state('')
 
   /**
    * The drift this panel has with its upstream, plus the worktree it belongs to.
@@ -614,6 +682,20 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
     }
     await this.performPush(remote)
   }
+
+  /** Stop the push in flight, from the stop control beside the Push button. */
+  async stopPush(): Promise<void> {
+    await gitState.stopPush(this.root.props.projectId)
+  }
+
+  /**
+   * The last stage git reported for the push in flight, or null before it says
+   * anything. Read from the store, which hears every stage from main.
+   */
+  pushStage = $derived(gitState.pushStageFor(this.root.props.projectId))
+
+  /** Whether this checkout's push is one the stop control can call off. */
+  pushStoppable = $derived(gitState.canStopPush(this.root.props.projectId))
 
   async confirmPushUpstream(): Promise<void> {
     this.pushConfirm = false

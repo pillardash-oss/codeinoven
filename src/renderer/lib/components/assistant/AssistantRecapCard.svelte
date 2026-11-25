@@ -2,6 +2,7 @@
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioListChecks from '@pdslng/cio-icon/CioListChecks.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import { slide } from 'svelte/transition'
   import Modal from '../ui/Modal.svelte'
   import CardButton from '../shared/CardButton.svelte'
@@ -58,6 +59,14 @@
     saving: boolean
     onSave: () => void
     onKeepEditing: () => void
+    /**
+     * Throw the drafted revision away and keep what is saved. The first setup has
+     * nothing saved behind the draft, so it cannot be discarded: the button is
+     * drawn but disabled, since dropping the only behavior the assistant would
+     * ever have leaves nothing to edit.
+     */
+    canDiscard: boolean
+    onDiscard: () => void
     /** Another card sits directly above this one, so its top rule is the broken
      *  line that separates two stacked surfaces. */
     stackedAbove?: boolean
@@ -78,6 +87,8 @@
     saving,
     onSave,
     onKeepEditing,
+    canDiscard,
+    onDiscard,
     stackedAbove = false,
     joinsBelow = false,
     threadId
@@ -111,6 +122,12 @@
     update
       ? 'The agent revised this assistant. Check what changes below, then save it. Everything it does not name stays as it is.'
       : 'The agent drafted this assistant. Check what will be saved below, then save it when you are happy.'
+  )
+
+  const discardTitle = $derived(
+    canDiscard
+      ? 'Discard this revision and keep the saved behavior'
+      : 'The first behavior has nothing saved to keep: save it, or keep editing'
   )
 
   const saveTitle = $derived(
@@ -162,6 +179,16 @@
 
       <CardFoot>
         {#snippet left()}
+          <!-- Destructive, so it sits ahead of the quiet cancel and is confirmed
+               before anything is thrown away. -->
+          <CardButton
+            label="Discard"
+            title={discardTitle}
+            icon={CioTrash}
+            variant="ghost-danger"
+            disabled={saving || !canDiscard}
+            onclick={onDiscard}
+          />
           <CardButton
             label="Keep editing"
             title="Keep working on the assistant with the agent"

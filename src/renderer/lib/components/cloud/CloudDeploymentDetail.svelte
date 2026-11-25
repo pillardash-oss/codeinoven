@@ -24,7 +24,8 @@
   import { cloudDeployState, CloudDeployState } from '$lib/stores/cloud-deploy.svelte'
   import StatusPill from '../ui/StatusPill.svelte'
   import type { CloudDeploymentContainer, CloudDeploymentDeployment } from '$shared/types'
-  import { deploymentLogToText, type DeploymentLogLine } from '$lib/cloud/deployment-log'
+  import { deploymentLogToText, type DeploymentLogLine } from '$shared/cloud/deployment-log'
+  import type { RemediationLogTarget } from '$lib/cloud/remediation-log-target'
   import ContainerLinksMenu from './ContainerLinksMenu.svelte'
   import EnumSelect from '../ui/EnumSelect.svelte'
   import {
@@ -40,8 +41,8 @@
     onBack: () => void
     /** Push an updated status snapshot back into the panel/Store cache. */
     onUpdated: (container: CloudDeploymentContainer) => void
-    /** Hand the failing deployment to an agent, given its readable log text. */
-    onRemediate: (logText: string) => void
+    /** Hand the failing deployment to an agent, with the log it has open. */
+    onRemediate: (logText: string, target: RemediationLogTarget) => void
   }
 
   let { projectId, container, onBack, onUpdated, onRemediate }: Props = $props()
@@ -546,7 +547,11 @@
           class="flex h-7 cursor-pointer items-center gap-1 border border-border px-2.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Diagnose this failed deployment with an agent"
           aria-label="Diagnose this failed deployment with an agent"
-          onclick={() => onRemediate(readableLog)}
+          onclick={() =>
+            onRemediate(readableLog, {
+              deploymentId: selectedDeploymentId,
+              serviceName: logSourceId
+            })}
         >
           <CioSubagent size={12} />
           Diagnose

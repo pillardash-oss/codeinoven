@@ -41,6 +41,12 @@ export const OVEN_ROOT_GIT_CHANNELS = new Set<string>([
   'git:syncWith',
   'git:syncPeers',
   'git:push',
+  /**
+   * Stopping a push follows the same Oven root as the push itself: the process
+   * that has to be killed runs on the machine the checkout lives on, and its
+   * slots are keyed per checkout there.
+   */
+  'git:cancelPush',
   'git:merge',
   'git:rebase',
   'git:preparePrResolve',
@@ -135,6 +141,7 @@ export const OVEN_ROOT_SCOPE_ARGUMENTS: Readonly<Record<string, number>> = {
   'git:syncWith': 2,
   'git:syncPeers': 1,
   'git:push': 2,
+  'git:cancelPush': 1,
   'git:merge': 2,
   'git:rebase': 2,
   'git:preparePrResolve': 2,

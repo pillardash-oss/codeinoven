@@ -275,11 +275,11 @@
         {/if}
       </div>
 
-      <!-- Reject is the only falsy answer. "Provide alternative" steers the run
-         instead of refusing it, so it sits on the truthy side attached to "Allow
-         always", and the editor's Cancel keeps that slot when it opens. Least
-         privilege keeps the primary slot: the least a grant needs is one
-         allowance. -->
+      <!-- Reject and the alternative are the answers that refuse or redirect the
+         request, so they sit together on the falsy side; the two grants sit on
+         the truthy side, least privilege last-to-first as the primary slot.
+         Splitting them this way keeps the row short enough that no button is
+         ever squeezed over another. -->
       <CardFoot>
         {#snippet left()}
           <CardButton
@@ -289,6 +289,15 @@
             disabled={working}
             onclick={() => void reject()}
           />
+          {#if !showingAlternative}
+            <CardButton
+              label="Provide alternative"
+              title="Provide an alternative instead"
+              variant="ghost"
+              disabled={working}
+              onclick={showAlternative}
+            />
+          {/if}
         {/snippet}
         {#snippet right()}
           {#if showingAlternative}
@@ -308,13 +317,6 @@
               onclick={() => void submitAlternative()}
             />
           {:else}
-            <CardButton
-              label="Provide alternative"
-              title="Provide an alternative instead"
-              variant="secondary"
-              disabled={working}
-              onclick={showAlternative}
-            />
             <CardButton
               label="Allow always"
               title={permanentGrantBlocked

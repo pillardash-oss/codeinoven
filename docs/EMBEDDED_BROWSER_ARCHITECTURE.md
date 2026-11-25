@@ -59,13 +59,16 @@ material way, and the difference is deliberate.
   degrades to an empty, process-local storage whenever another app instance already
   holds the profile's storage database, so a second instance read no tabs, saved none,
   and the next launch restored nothing without a single error being raised.
-- **A browser tab's agent conversation is a real chat thread, not a side chat.** It
-  lives in the reserved hidden `browser-global` project, one thread per tab, linked by
-  `PersistedBrowserTab.assistantThreadId`, so its transcript, title, harness session and
-  model persist exactly as any other thread's do. It is created when the user first
-  opens the agent on that tab and deleted when the conversation (or the tab that owns
-  it) is closed, and the rail shows it through the ordinary conversation surface with a
-  controller that keeps it a panel rather than the primary conversation.
+- **A browser tab's agent conversations are real chat threads, not side chats.** They
+  live in the reserved hidden `browser-global` project, linked by
+  `PersistedBrowserTab.assistantThreadIds` as a list: a page can be asked more than
+  one thing, so a tab owns one thread per conversation and the rail lists them as
+  tabs, with its `+` starting another for the same page. Each transcript, title,
+  harness session and model persists exactly as any other thread's does. They are
+  created when the user opens the agent on that tab (or asks for another conversation)
+  and deleted when the conversation (or the tab that owns it) is closed, and the rail
+  shows each through the ordinary conversation surface with a controller that keeps it
+  a panel rather than the primary conversation.
   - Every thread list filters that container out at the repository boundary, and the
     renderer refuses its `thread:updated` broadcasts too
     (`src/renderer/lib/stores/scope-threads.svelte.ts`), so a browser chat can never

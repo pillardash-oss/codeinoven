@@ -120,6 +120,28 @@ interface InstanceEntry {
    * app share it; a packaged app and a development launch do not.
    */
   instanceKey?: string
+  /**
+   * Whether this process's window holds the keyboard, and when it last took it.
+   *
+   * Two instances cannot both be the window the user is working in, and the
+   * region-screenshot chord is claimed system-wide by exactly one process while
+   * the capture has to land in the window the user is looking at. `focused` is
+   * the current answer and `focusedAt` the moment it last became true, which is
+   * what names the most recently used instance while the app sits behind another
+   * application.
+   */
+  focused?: boolean
+  focusedAt?: number
+  /**
+   * The global chord this process holds for region screenshots, when it holds one.
+   *
+   * `globalShortcut` registers per system, so one live instance wins the chord and
+   * every sibling's registration fails with "in use". Announcing the winner here
+   * is what tells a sibling's failure apart from a chord another application owns:
+   * the former is a working shortcut that will reach the user's window, the latter
+   * is a dead one the user must be told about.
+   */
+  screenshotChord?: { accelerator: string; at: number }
   /** Latest durable-state invalidation emitted by this process. */
   checkpointEvent?: CrossInstanceCheckpointEvent
   /** Bounded replay for coalesced filesystem notifications. */
@@ -176,6 +198,14 @@ function oldestEntry(entries: InstanceEntry[]): InstanceEntry | undefined {
  * Each entry also carries the latest invalidations the process published (a
  * settled checkpoint, changed thread rows, mirror and draft slot), so a sibling
  * re-reads the shared state it cannot see being written.
+ *
+ * Two facts about the *window* rather than its data ride along as well, because
+ * they are the same question asked of every instance: which window holds the
+ * keyboard (so the system-wide screenshot chord answers in the window the user is
+ * in, not the one that registered it), and which process holds that chord (so a
+ * sibling's failed registration can tell "my sibling owns it" from "another app
+ * does"). Both are ordinary entry fields, announced the same way and read with the
+ * same liveness rules as everything else here.
  */
 export class InstanceRegistry {
   private readonly selfEntry: InstanceEntry
@@ -618,6 +648,109 @@ export class InstanceRegistry {
   onTurnActivityChanged(listener: () => void): () => void {
     this.turnActivityListeners.add(listener)
     return () => this.turnActivityListeners.delete(listener)
+  }
+
+  /**
+   * Announce whether this process's window currently holds the keyboard.
+   *
+   * Written the moment it changes rather than on the next heartbeat: a chord
+   * pressed right after the user switched windows has to be answered by the
+   * window they are in now, and a thirty second beat would answer with the one
+   * they left. Losing focus keeps `focusedAt`, so the last instance the user
+   * worked in stays known while the app is behind another application.
+   */
+  publishWindowFocus(focused: boolean): void {
+    if (this.selfEntry.focused === focused) return
+    this.selfEntry.focused = focused
+    if (focused) this.selfEntry.focusedAt = Date.now()
+    try {
+      this.writeEntry()
+    } catch {
+      // Best effort: the next heartbeat republishes what this one could not.
+    }
+  }
+
+  /**
+   * The process the user is looking at: the focused one, or the most recently
+   * focused one when the app is behind another application.
+   *
+   * Read from the directory instead of the shared reading cache. The question is
+   * where the user is *now*, and a chord pressed a moment after a window switch
+   * must not be routed by a reading taken a second before it.
+   *
+   * A fresh focus wins over a stale one, and between two fresh ones the newest
+   * wins: a process that was focused when it crashed keeps `focused: true` in its
+   * entry until its heartbeat goes stale, and it must never outrank the window
+   * the user is actually using.
+   */
+  focusedInstancePid(): number | null {
+    let entries: InstanceEntry[]
+    try {
+      this.invalidateLiveEntriesCache()
+      entries = this.liveEntries()
+    } catch {
+      return null
+    }
+    let best: InstanceEntry | null = null
+    let bestFocusedAt = 0
+    for (const entry of entries) {
+      const focusedAt = entry.focusedAt
+      if (typeof focusedAt !== 'number') continue
+      if (!best) {
+        best = entry
+        bestFocusedAt = focusedAt
+        continue
+      }
+      const focused = entry.focused === true
+      const bestFocused = best.focused === true
+      if (focused !== bestFocused) {
+        if (focused) {
+          best = entry
+          bestFocusedAt = focusedAt
+        }
+        continue
+      }
+      if (focusedAt > bestFocusedAt) {
+        best = entry
+        bestFocusedAt = focusedAt
+      }
+    }
+    return best?.pid ?? null
+  }
+
+  /**
+   * Announce the global screenshot chord this process holds, or `null` once it
+   * holds none.
+   */
+  publishScreenshotChord(accelerator: string | null): void {
+    const current = this.selfEntry.screenshotChord?.accelerator ?? null
+    if (current === accelerator) return
+    if (accelerator) this.selfEntry.screenshotChord = { accelerator, at: Date.now() }
+    else delete this.selfEntry.screenshotChord
+    try {
+      this.writeEntry()
+    } catch {
+      // Best effort: a failed announcement only costs one honest warning.
+    }
+  }
+
+  /**
+   * The live sibling that announced it holds this accelerator, or null.
+   *
+   * `this` process is never the answer: the caller asking is the one whose own
+   * registration just failed.
+   */
+  screenshotChordHolder(accelerator: string): number | null {
+    try {
+      this.invalidateLiveEntriesCache()
+      for (const entry of this.liveEntries()) {
+        if (entry.pid === this.selfEntry.pid) continue
+        if (entry.screenshotChord?.accelerator === accelerator) return entry.pid
+      }
+    } catch {
+      // An unreadable registry is not evidence that a sibling holds the chord.
+    }
+    return null
   }
 
   /**

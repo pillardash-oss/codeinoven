@@ -12,6 +12,9 @@
   import { copyText } from '$lib/copy-text'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { browserAgentClaims } from '$lib/stores/browser-agent-claims.svelte'
+  import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { browserBookmarks } from '$lib/stores/browser-bookmarks.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { harnessName } from '$lib/components/shared/model-picker-helpers'
@@ -91,10 +94,23 @@
    *  answering without opening the panel. It is drawn as the harness mark beside
    *  the model provider's mark, exactly as every model control in the app draws
    *  it: the conversation is a conversation like any other, and its identity is
-   *  the pair that runs it. */
-  const agentChat = $derived(
-    globalBrowser.agentSidebarShown && active ? globalBrowser.agentChatFor(tab.id) : null
-  )
+   *  the pair that runs it.
+   *
+   *  A page an agent opened for a conversation has no assistant sidebar of its
+   *  own, so it takes the same indicator from main's claim: while that
+   *  conversation is working, the tab it opened says which agent holds it,
+   *  exactly as the tab the conversation lives on does. */
+  const agentChat = $derived.by(() => {
+    if (globalBrowser.agentSidebarShown && active) {
+      const own = globalBrowser.agentChatFor(tab.id)
+      if (own) return own
+    }
+    const claim = browserAgentClaims.claimFor(tab.id)
+    if (!claim) return null
+    const chat = browserAssistant.chatForThread(claim.threadId)
+    if (!chat) return null
+    return agentRuns.isBusy(chat.thread.projectId, chat.thread.id) ? chat : null
+  })
   const agentModel = $derived.by(() => {
     const thread = agentChat?.thread
     const harnessId = thread?.settings?.harnessId

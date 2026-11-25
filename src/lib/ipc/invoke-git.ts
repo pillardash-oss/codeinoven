@@ -267,6 +267,13 @@ export const invokeGitContract = {
     ],
     GitInvocation<GitStatus>
   >,
+  /**
+   * Stop the push running in this checkout, the way the panel's Stop asks it
+   * to. Resolves to whether one was still in flight: a push that already
+   * finished is not an error, so the caller can settle its own control either
+   * way without treating a late click as a failure.
+   */
+  'git:cancelPush': {} as Contract<[projectId: string, scopeBucketId?: string], boolean>,
   'git:getCredentialStatus': {} as Contract<[projectId: string], GitCredentialStatus>,
   'git:setCredential': {} as Contract<[projectId: string, token: string], GitCredentialStatus>,
   'git:removeCredential': {} as Contract<[projectId: string], GitCredentialStatus>,
@@ -897,6 +904,24 @@ export const invokeGitContract = {
       /** Pass back as `before` for the preceding page; null at the head. */
       cursor: string | null
     }
+  >,
+  /**
+   * Write a container's log, in full, as a text attachment in a chat, so an agent
+   * can read the whole thing instead of the page a view happens to have loaded.
+   * The file is written in main from the same payload the log view pages through.
+   */
+  'cloudDeploy:logAttachment': {} as Contract<
+    [
+      projectId: string,
+      providerKind: import('../types').CloudDeploymentProviderKind,
+      containerId: string,
+      /** The chat whose attachment folder receives the file. */
+      threadId: string,
+      deploymentId?: string,
+      accountId?: string,
+      serviceName?: string
+    ],
+    { path: string; lines: number; characters: number }
   >,
   /** Everything the PR detail view needs, fetched in parallel in one round trip. */
   'pr:bundle': {} as Contract<

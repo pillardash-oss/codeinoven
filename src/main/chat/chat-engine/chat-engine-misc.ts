@@ -1,4 +1,3 @@
-import { randomUUID } from 'crypto'
 import { Logger } from '../../system/logger'
 import { supportsIsolatedSessions } from '../../drivers/isolated-session'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
@@ -18,7 +17,6 @@ import type {
   AgentMessage,
   AgentQuestion,
   AutoAnswerEntry,
-  PermissionRequest,
   ThreadSettings
 } from '../../../lib/types'
 import { type TurnStepTimer } from '../turn-dispatch-timer'
@@ -38,48 +36,6 @@ import type { ChatEngine } from '../chat-engine'
 /** ChatEngine misc: one concern, moved verbatim from the composition root. */
 export class ChatEngineMisc {
   constructor(private readonly host: ChatEngine) {}
-
-  /** App-owned browser calls share the same policy, queue and attention events as harness calls. */
-  async requestBrowserActionApproval(
-    request: import('../../browser/browser-service').BrowserAgentActionApproval
-  ): Promise<import('../../browser/browser-service').BrowserAgentActionDecision> {
-    const info = request.sessionId ? this.host.sessionRegistry.get(request.sessionId) : undefined
-    if (!info || info.projectId !== request.projectId || info.threadId !== request.threadId) {
-      throw new Error('The browser action has no active conversation session')
-    }
-    let settle!: (approved: boolean, alternative?: string) => void
-    const decision = new Promise<
-      import('../../browser/browser-service').BrowserAgentActionDecision
-    >((resolve) => {
-      settle = (approved, alternative) => resolve({ approved, alternative })
-    })
-    const permission: PermissionRequest = {
-      id: randomUUID(),
-      sessionId: info.sessionId,
-      permission: 'browser_action',
-      patterns: [],
-      metadata: {
-        surface: `browser.${request.operation}`,
-        description: request.action,
-        origin: request.origin,
-        pageUrl: request.pageUrl
-      }
-    }
-    try {
-      await this.host.units['permissions'].handlePermissionAsked(
-        info.driverId,
-        { type: 'permission.asked', sessionId: info.sessionId, permission },
-        undefined,
-        settle,
-        request.review
-      )
-    } catch (error) {
-      this.host.state.pendingPermissions.delete(permission.id)
-      settle(false)
-      throw error
-    }
-    return decision
-  }
 
   /**
    * Time one unit of turn preparation, when the caller passed a dispatch timer.

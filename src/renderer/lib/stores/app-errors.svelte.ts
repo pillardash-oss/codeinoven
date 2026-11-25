@@ -1,6 +1,7 @@
 import { toast } from 'svelte-sonner'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { copyText } from '$lib/copy-text'
+import { logEnvironmentLine, onLogEnvironment } from '$lib/system/log-environment'
 import { isBenignRendererErrorMessage } from '$shared/renderer-error-classification'
 
 export type AppErrorKind = 'error' | 'warning'
@@ -17,12 +18,25 @@ export interface AppErrorEntry {
   timestamp: number
   count: number
   details?: string
+  /** The build and host the entry was recorded on, e.g. `CodeInOven
+   *  0.5.72-nightly.3 (dev) · macOS · arm64`. Its own field, so the stamp
+   *  survives even for an entry that carries no stack trace. */
+  environment?: string
   projectId?: string
   threadId?: string
 }
 
 export interface CaptureOptions {
   details?: string
+  thread?: AppErrorThreadRef
+}
+
+/** What a caught failure adds to its headline when it is recorded. */
+export interface FailureOptions {
+  /** The cleaned sentence the caller's surface shows (a banner, a toast body).
+   *  Kept in the entry so the panel reads as the user's own words even when the
+   *  failure carried no stack of its own. */
+  description?: string
   thread?: AppErrorThreadRef
 }
 
@@ -72,10 +86,29 @@ class AppErrorState {
     return this._entries.length
   }
 
+  /**
+   * Stamp diagnostic text with the build and host it came from.
+   *
+   * A stack trace alone cannot be acted on: the same frames mean different
+   * things on a nightly beside a stable build, or on another OS and CPU. The
+   * line goes above the text, so a trace copied out of the panel carries it.
+   *
+   * Text that is not there stays absent rather than becoming an
+   * environment-only block: an entry with nothing to expand is a truer record
+   * than one that opens onto a single line of boilerplate.
+   */
+  private static stamped(details: string | undefined): string | undefined {
+    const trimmed = details?.trim()
+    if (!trimmed) return undefined
+    const environment = logEnvironmentLine()
+    return environment ? `${environment}\n\n${trimmed}` : trimmed
+  }
+
   /** Record an error/warning. In-memory only; never persisted. */
   capture(kind: AppErrorKind, message: string, options?: CaptureOptions): void {
     const normalized = message.trim()
     if (!normalized) return
+    const details = AppErrorState.stamped(options?.details)
     const existing = this._entries.find((e) => e.kind === kind && e.message === normalized)
     if (existing) {
       this._entries = this._entries.map((e) =>
@@ -83,7 +116,7 @@ class AppErrorState {
           ? {
               ...e,
               count: e.count + 1,
-              details: e.details ?? options?.details,
+              details: e.details ?? details,
               projectId: e.projectId ?? options?.thread?.projectId,
               threadId: e.threadId ?? options?.thread?.threadId
             }
@@ -97,9 +130,10 @@ class AppErrorState {
       message: normalized,
       timestamp: Date.now(),
       count: 1,
-      details: options?.details,
+      details,
       projectId: options?.thread?.projectId,
-      threadId: options?.thread?.threadId
+      threadId: options?.thread?.threadId,
+      environment: logEnvironmentLine()
     }
     this._entries = [entry, ...this._entries].slice(0, MAX_ENTRIES)
   }
@@ -111,9 +145,36 @@ class AppErrorState {
   dismissAll(): void {
     this._entries = []
   }
+
+  /**
+   * Stamp the entries recorded before the logger's facts arrived.
+   *
+   * The Logger resolves its build and host facts during startup, which can land
+   * after the renderer's first capture. Those entries were recorded without a
+   * build, so they are stamped here rather than keeping a blank where the
+   * version and the OS belong; an entry that already carries one is left alone,
+   * so nothing is stamped twice.
+   */
+  backfillEnvironment(): void {
+    const environment = logEnvironmentLine()
+    if (!environment) return
+    this._entries = this._entries.map((e) =>
+      e.environment
+        ? e
+        : {
+            ...e,
+            environment,
+            details: e.details ? `${environment}\n\n${e.details}` : undefined
+          }
+    )
+  }
 }
 
 export const appErrorState = new AppErrorState()
+
+// Entries can be recorded before the logger answers with its facts; stamp them
+// the moment the answer lands instead of leaving them without a build.
+onLogEnvironment(() => appErrorState.backfillEnvironment())
 
 type ToastData = Parameters<typeof toast.error>[1]
 type ToastFn = (message: string, data?: ToastData) => string | number
@@ -176,7 +237,10 @@ function withCopyButton(message: string, data: ToastData, details?: string): Toa
  *  guess a thread link for them here. */
 function captureToast(kind: AppErrorKind, message: string, data: ToastData): void {
   const thread = data?.action ? undefined : currentThreadRef()
-  appErrorState.capture(kind, message, { thread })
+  // The toast's body is the narrowed sentence its caller wrote, so the panel
+  // keeps it rather than showing the title alone.
+  const description = typeof data?.description === 'string' ? data.description : undefined
+  appErrorState.capture(kind, message, { details: description, thread })
 }
 
 function captureWith(kind: AppErrorKind, original: ToastFn): ToastFn {
@@ -285,6 +349,62 @@ export function reportError(error: unknown, fallback: string, thread?: AppErrorT
     thread: thread ?? currentThreadRef()
   })
   originalError(message, withCopyButton(message, undefined, details))
+}
+
+/**
+ * The diagnostic text one caught failure leaves behind: its serialized stack,
+ * or the cleaned sentence when the failure carried none (an IPC rejection
+ * arriving as a bare string, a rejected value, a caller's own throw).
+ */
+function failureDetails(failure: unknown, description: string | undefined): string | undefined {
+  const serialized = serializeError(failure)
+  if (serialized?.trim()) return serialized
+  const trimmed = description?.trim()
+  return trimmed ? trimmed : undefined
+}
+
+/**
+ * Record a caught failure with its stack trace, without showing a toast.
+ *
+ * A surface that draws its own banner, its own row status or its own inline
+ * message passes the cleaned sentence it shows as `description`. Before this
+ * existed, a `catch` that set `error = ipcErrorMessage(failure, …)` discarded
+ * the failure entirely: the page said what broke and the Exceptions tab never
+ * learned a stack, a version or a platform.
+ */
+export function captureFailure(failure: unknown, headline: string, options?: FailureOptions): void {
+  recordFailure(failure, headline, options)
+}
+
+/** Record the failure and hand back the diagnostic text it left behind. */
+function recordFailure(
+  failure: unknown,
+  headline: string,
+  options?: FailureOptions
+): string | undefined {
+  const details = failureDetails(failure, options?.description)
+  appErrorState.capture('error', headline, {
+    details,
+    thread: options?.thread ?? currentThreadRef()
+  })
+  return details
+}
+
+/**
+ * Record a caught failure, then show its cleaned sentence as an error toast.
+ *
+ * The pairing is deliberate: the capture owns the stack, the toast owns the
+ * sentence, and neither doubles the other. A caller reaching for `toast.error`
+ * directly only sends the title, which is why a caught failure used to reach
+ * the panel as a sentence with no trace behind it.
+ */
+export function reportFailure(failure: unknown, headline: string, options?: FailureOptions): void {
+  const details = recordFailure(failure, headline, options)
+  const description = options?.description
+  originalError(
+    headline,
+    withCopyButton(headline, description ? { description } : undefined, details)
+  )
 }
 
 /** Surface a preformatted error message (e.g. from the main process) with optional details. */

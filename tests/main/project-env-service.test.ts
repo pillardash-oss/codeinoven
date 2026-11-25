@@ -8,6 +8,7 @@ import {
 } from '../../src/main/secrets/project-env-service'
 import { ProjectEnvStore } from '../../src/main/secrets/project-env-store'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
+import { parseProjectEnvFile } from '../../src/lib/project-env'
 
 /** Windows has no POSIX mode bits: chmod only toggles the read-only flag there. */
 async function expectOwnerOnly(path: string): Promise<void> {
@@ -459,5 +460,138 @@ describe('ProjectEnvService import', () => {
     expect(await service.listProjectEnv(PROJECT_ID)).toEqual([
       { group: '', fileName: '.env', entries: [], updatedAt: expect.any(Number) }
     ])
+  })
+})
+
+describe('ProjectEnvService turned-off keys', () => {
+  it('switches a key off and on again without losing its value', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.applyEnvText({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: 'PORT=3000\n'
+    })
+
+    const off = await service.setProjectEnvEntryDisabled({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'PORT',
+      disabled: true
+    })
+    expect(off[0]?.entries[0]).toMatchObject({ name: 'PORT', disabled: true })
+    expect(secrets.values.size).toBe(1)
+
+    const launch = await service.environmentForLaunch({ projectId: PROJECT_ID, cwd: projectRoot })
+    expect(launch.environment).toEqual({})
+    expect(launch.preview.entries).toEqual([])
+    expect(launch.preview.disabled).toEqual([
+      { name: 'PORT', group: '', fileName: '.env', scope: 'project' }
+    ])
+
+    const on = await service.setProjectEnvEntryDisabled({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'PORT',
+      disabled: false
+    })
+    expect(on[0]?.entries[0]?.disabled).toBeUndefined()
+    const again = await service.environmentForLaunch({ projectId: PROJECT_ID, cwd: projectRoot })
+    expect(again.environment).toEqual({ PORT: '3000' })
+    expect(again.preview.disabled).toEqual([])
+  })
+
+  it('reads a commented key as turned off while leaving other comments alone', async () => {
+    const result = await service.applyEnvText({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: '# just a note\n#cio-cmt FEATURE_FLAG=on\nPORT=3000\n'
+    })
+
+    expect(result.stored).toEqual(['FEATURE_FLAG', 'PORT'])
+    const files = await service.listProjectEnv(PROJECT_ID)
+    expect(files[0]?.entries.map((entry) => [entry.name, entry.disabled])).toEqual([
+      ['FEATURE_FLAG', true],
+      ['PORT', undefined]
+    ])
+
+    const launch = await service.environmentForLaunch({ projectId: PROJECT_ID, cwd: projectRoot })
+    expect(launch.environment).toEqual({ PORT: '3000' })
+    expect(launch.preview.disabled.map((entry) => entry.name)).toEqual(['FEATURE_FLAG'])
+  })
+
+  it('switches an existing key off from a commented line that carries no value', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.applyEnvText({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: 'PORT=3000\n'
+    })
+
+    const result = await service.applyEnvText({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: '#cio-cmt PORT=\n',
+      keep: []
+    })
+
+    expect(result.kept).toEqual(['PORT'])
+    expect(secrets.values.size).toBe(1)
+    const files = await service.listProjectEnv(PROJECT_ID)
+    expect(files[0]?.entries[0]).toMatchObject({ name: 'PORT', disabled: true })
+  })
+
+  it('writes a turned-off key as a comment and reads the file back the same way', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.applyEnvText({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: 'PORT=3000\nFEATURE_FLAG=on\n'
+    })
+    await service.setProjectEnvEntryDisabled({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'FEATURE_FLAG',
+      disabled: true
+    })
+
+    const written = await service.writeEnvFileToProject({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env'
+    })
+    expect(written.changed).toBe(true)
+
+    const content = await readFile(join(projectRoot, '.env'), 'utf8')
+    expect(content).toMatch(/^PORT=cio:\/\/secret_/mu)
+    expect(content).toMatch(/^#cio-cmt FEATURE_FLAG=cio:\/\/secret_/mu)
+    const plan = parseProjectEnvFile(content)
+    expect(plan.flatMap((line) => (line.kind === 'assignment' ? [line] : []))).toEqual([
+      expect.objectContaining({ name: 'PORT', disabled: false }),
+      expect.objectContaining({ name: 'FEATURE_FLAG', disabled: true })
+    ])
+  })
+
+  it('imports a commented key as turned off', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await writeFile(join(projectRoot, '.env'), '#cio-cmt PORT=3000\n', 'utf8')
+
+    const applied = await service.importProjectEnv({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      path: '.env',
+      apply: true
+    })
+
+    expect(applied.files[0]?.entries[0]).toMatchObject({ name: 'PORT', disabled: true })
+    expect(applied.preview.rewritten).toMatch(/^#cio-cmt PORT=cio:\/\/secret_/mu)
   })
 })

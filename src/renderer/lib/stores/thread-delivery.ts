@@ -46,6 +46,22 @@ export interface HeadlessThreadMessage {
   settings?: ThreadSettings
 }
 
+/**
+ * The settings a thread row runs with, else its family's defaults.
+ *
+ * A caller that already holds the row for another reason (a delivery attempt
+ * that had to read it to know the thread is durable at all) answers from it
+ * here instead of asking main for the same row a second time.
+ */
+export function threadDeliverySettingsFor(
+  projectId: string,
+  thread: Pick<Thread, 'settings'> | null
+): ThreadSettings {
+  const settings = thread?.settings
+  if (settings) return { ...DEFAULT_SETTINGS, ...settings }
+  return projectId === INBOX_PROJECT_ID ? { ...CHAT_DEFAULT_SETTINGS } : { ...DEFAULT_SETTINGS }
+}
+
 /** The thread's persisted settings, else the appropriate defaults. */
 export async function resolveThreadDeliverySettings(
   projectId: string,
@@ -58,13 +74,13 @@ export async function resolveThreadDeliverySettings(
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       const thread = await invoke('thread:get', projectId, threadId)
-      if (thread?.settings) return { ...DEFAULT_SETTINGS, ...thread.settings }
+      if (thread?.settings) return threadDeliverySettingsFor(projectId, thread)
     } catch {
       // Fall through to the next attempt, then to the family defaults.
     }
     await new Promise((done) => setTimeout(done, 150))
   }
-  return projectId === INBOX_PROJECT_ID ? { ...CHAT_DEFAULT_SETTINGS } : { ...DEFAULT_SETTINGS }
+  return threadDeliverySettingsFor(projectId, null)
 }
 
 /** The thread's authoritative agent state, read from the main process. */

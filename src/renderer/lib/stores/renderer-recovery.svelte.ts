@@ -476,11 +476,13 @@ export class RendererRecoveryStore {
 
   /** Whether the thread has any unsent composer content (text, attachments, or references). */
   hasDraftContent(projectId: string, threadId: string): boolean {
-    return (
-      this.hasTypedContent(projectId, threadId) ||
-      this.queuedMessageFor(projectId, threadId) !== null ||
-      this.queuedMessagesFor(projectId, threadId).length > 0
-    )
+    if (this.hasTypedContent(projectId, threadId)) return true
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return false
+    // One key and one lookup for the queue: a question about whether it holds
+    // anything must not allocate an entry to answer, because the callers ask it
+    // once per thread in the sidebar.
+    const queue = this.queuedMessages[recoveryDraftKey(projectId, threadId)]
+    return queue !== undefined && queue.length > 0
   }
 
   /**
@@ -492,9 +494,15 @@ export class RendererRecoveryStore {
    * still working. A row that folded both together could not tell "waiting to
    * send" from "typing now", so it could not say which of the two happened
    * last.
+   *
+   * Reads the stored entry directly rather than through `entryFor`, which mints
+   * an empty draft (six arrays) for a thread that has none: this runs per thread
+   * on every sidebar draft check, and the garbage it made was most of the cost.
    */
   hasTypedContent(projectId: string, threadId: string): boolean {
-    const entry = this.entryFor(projectId, threadId)
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return false
+    const entry = this.composerDrafts[recoveryDraftKey(projectId, threadId)]
+    if (entry === undefined) return false
     return (
       entry.text.length > 0 ||
       entry.attachments.length > 0 ||

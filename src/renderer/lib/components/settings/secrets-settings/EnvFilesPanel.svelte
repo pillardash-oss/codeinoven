@@ -19,6 +19,7 @@
   import ProjectSelect, { type ProjectSelectOption } from '../../shared/ProjectSelect.svelte'
   import ConfirmDialog from '../../ui/ConfirmDialog.svelte'
   import EmptyState from '../../ui/EmptyState.svelte'
+  import Switch from '../../ui/Switch.svelte'
   import CreateEnvFileDialog from './CreateEnvFileDialog.svelte'
   import EnvImportModal from './EnvImportModal.svelte'
   import EnvKeyModal from './EnvKeyModal.svelte'
@@ -151,6 +152,25 @@
       preview = await invoke('secrets:envPreview', { projectId, directory })
     } catch (cause) {
       report(cause, 'Could not store this value')
+    } finally {
+      busy = false
+    }
+  }
+
+  async function toggleEntry(name: string, disabled: boolean): Promise<void> {
+    busy = true
+    error = ''
+    try {
+      files = await invoke('secrets:envSetEntryDisabled', {
+        projectId,
+        group: selectedGroup,
+        fileName: selectedFileName,
+        name,
+        disabled
+      })
+      preview = await invoke('secrets:envPreview', { projectId, directory })
+    } catch (cause) {
+      report(cause, 'Could not switch this key')
     } finally {
       busy = false
     }
@@ -425,8 +445,25 @@
               <div class="divide-y">
                 {#each selectedFile.entries as entry (entry.name)}
                   <div class="flex items-start gap-3 px-4 py-2.5">
+                    <Switch
+                      checked={!entry.disabled}
+                      class="mt-0.5"
+                      disabled={busy}
+                      title={entry.disabled
+                        ? `Turn ${entry.name} back on so a launch injects it`
+                        : `Turn ${entry.name} off: keep its value but do not inject it`}
+                      aria-label={entry.disabled
+                        ? `Turn ${entry.name} on`
+                        : `Turn ${entry.name} off`}
+                      onchange={(checked) => void toggleEntry(entry.name, !checked)}
+                    />
                     <div class="min-w-0 flex-1">
-                      <p class="truncate font-mono text-xs text-foreground" title={entry.name}>
+                      <p
+                        class="truncate font-mono text-xs {entry.disabled
+                          ? 'text-muted line-through'
+                          : 'text-foreground'}"
+                        title={entry.name}
+                      >
                         {entry.name}
                       </p>
                       <p
@@ -435,6 +472,9 @@
                         <span class="tabular-nums"
                           >Updated {formatDateTimeCompact(entry.updatedAt)}</span
                         >
+                        {#if entry.disabled}
+                          <span>Turned off, so it is not injected</span>
+                        {/if}
                         {#if entry.missing}
                           <span class="text-danger">Value is gone, set it again</span>
                         {/if}
@@ -480,7 +520,7 @@
             >
               What a process started in {directory ? directory : 'the project root'} receives
             </h2>
-            {#if preview.entries.length === 0 && preview.skipped.length === 0}
+            {#if preview.entries.length === 0 && preview.disabled.length === 0 && preview.skipped.length === 0}
               <p class="px-4 py-3 text-xs text-muted">Nothing yet.</p>
             {:else}
               <div class="divide-y">
@@ -496,6 +536,16 @@
                       {entry.scope === 'thread'
                         ? 'this thread'
                         : `${entry.group || '.'}/${entry.fileName}`}
+                    </span>
+                  </div>
+                {/each}
+                {#each preview.disabled as entry (entry.name)}
+                  <div class="flex items-center justify-between gap-3 px-4 py-1.5">
+                    <span class="truncate font-mono text-[0.6875rem] text-muted" title={entry.name}>
+                      {entry.name}
+                    </span>
+                    <span class="shrink-0 text-[0.6875rem] text-dimmed">
+                      turned off in {entry.group || '.'}/{entry.fileName}
                     </span>
                   </div>
                 {/each}

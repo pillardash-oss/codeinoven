@@ -42,6 +42,32 @@ const STALE_SERVICE_ANSWERS: readonly RegExp[] = [
   /Oven protocol version mismatch/u
 ]
 
+/**
+ * How Node fails when it cannot even load a module, as opposed to a module that
+ * loaded and refused a request. A service file that dies this way never answers
+ * anything, so the only cure is replacing it, and the app owns that file. The
+ * list is deliberately broad: waiting for each new way a bad bundle can crash
+ * to be named first is what left an Oven broken for every request.
+ */
+const SERVICE_LOAD_CRASHES: readonly RegExp[] = [
+  /\bis not defined in ES module scope\b/u,
+  /\bSyntaxError\b/u,
+  /\bERR_(?:MODULE_NOT_FOUND|REQUIRE_ESM|UNKNOWN_FILE_EXTENSION|INVALID_PACKAGE_CONFIG|IMPORT_ATTRIBUTE_MISSING)\b/u,
+  /\bCannot find (?:package|module)\b/u,
+  /\bdoes not provide an export named\b/u
+]
+
+/**
+ * True when the service process crashed while loading.
+ *
+ * Only meaningful for a thrown failure (the remote command exited non-zero): a
+ * service that loaded answers `{ ok: false }` instead, and its own errors may
+ * legitimately mention a SyntaxError in the user's files.
+ */
+export function isServiceLoadCrash(message: string): boolean {
+  return SERVICE_LOAD_CRASHES.some((pattern) => pattern.test(message))
+}
+
 /** True when a failure proves the Oven runs a bundle this app did not install. */
 export function isStaleServiceFault(message: string): boolean {
   return STALE_SERVICE_ANSWERS.some((pattern) => pattern.test(message))

@@ -1,10 +1,13 @@
 import { resolveDeploymentProvider } from '../../../providers/registry'
 import {
   DeploymentLogPageCache,
-  readPreparedDeploymentLogPage
+  readPreparedDeploymentLogPage,
+  type PreparedDeploymentLog
 } from '../../../providers/deployment-log-pages'
+import { parseDeploymentLog, deploymentLogToText } from '../../../../lib/cloud/deployment-log'
+import { writeTextAttachment } from '../../../system/text-attachment'
 import { validateEntityId } from '../../ipc-validation'
-import { isRecord, requireString } from '../shared'
+import { isRecord, requireString, validateAttachmentStorageScope } from '../shared'
 import { trustedIpcMain as ipcMain } from '../../trusted-ipc-main'
 import {
   OWNERSHIP_SCAN_BATCH,
@@ -34,11 +37,36 @@ export function registerCloudDeploymentMonitoringHandlers(
   ctx: IpcHandlerContext,
   store: CloudDeploymentConfigStore
 ): void {
-  const { storage, projectManager, vault } = ctx
+  const { storage, projectManager, vault, privilegedIpc, attachmentStorageDirectory } = ctx
   const { loadOrCreate: loadOrCreateCloudDeploymentConfig, persist: persistCloudDeploymentConfig } =
     store
   // Full provider logs kept in main so paging one log never re-reads the provider.
   const deploymentLogPages = new DeploymentLogPageCache()
+
+  /** The fields that select one log payload. */
+  interface LogPayloadTarget {
+    projectId: string
+    kind: CloudDeploymentProviderKind
+    accountId: string | undefined
+    containerId: string
+    deploymentId: string | undefined
+    serviceName: string | undefined
+  }
+
+  /** The prepared full log payload for a target, read from the provider once. */
+  const readPreparedLog = async (
+    logKey: string,
+    target: LogPayloadTarget
+  ): Promise<PreparedDeploymentLog> => {
+    const cached = deploymentLogPages.get(logKey)
+    if (cached) return cached
+    const provider = resolveDeploymentProvider(
+      target.kind,
+      await resolveDeploymentContext(target.projectId, target.kind, target.accountId)
+    )
+    const log = await provider.getLogs(target.containerId, target.deploymentId, target.serviceName)
+    return deploymentLogPages.set(logKey, log)
+  }
 
   /** Cache key of one log payload: every input that selects it, in a fixed order. */
   const deploymentLogKey = (
@@ -501,15 +529,14 @@ export function registerCloudDeploymentMonitoringHandlers(
       // again instead of paging through the copy this process kept.
       if (refresh === true) deploymentLogPages.drop(logKey)
 
-      const prepared =
-        deploymentLogPages.get(logKey) ??
-        deploymentLogPages.set(
-          logKey,
-          await resolveDeploymentProvider(
-            kind,
-            await resolveDeploymentContext(safeProjectId, kind, safeAccountId)
-          ).getLogs(safeContainerId, safeDeploymentId, safeServiceName)
-        )
+      const prepared = await readPreparedLog(logKey, {
+        projectId: safeProjectId,
+        kind,
+        accountId: safeAccountId,
+        containerId: safeContainerId,
+        deploymentId: safeDeploymentId,
+        serviceName: safeServiceName
+      })
       const page = readPreparedDeploymentLogPage(prepared, safeBefore)
       return {
         containerId: safeContainerId,
@@ -518,6 +545,70 @@ export function registerCloudDeploymentMonitoringHandlers(
         hasMore: page.hasMore,
         cursor: page.cursor
       }
+    }
+  )
+
+  /**
+   * Attach a container log as a readable text file, in full.
+   *
+   * Handing a failing deployment to an agent must not hand it a tail: the file is
+   * written here in main from the same payload the log view pages through, so the
+   * whole log reaches the agent even when it is far past what one prompt could
+   * carry. Only the path crosses back to the renderer.
+   */
+  ipcMain.handle(
+    'cloudDeploy:logAttachment',
+    async (
+      _,
+      projectId: unknown,
+      providerKind: unknown,
+      containerId: unknown,
+      threadId: unknown,
+      deploymentId?: unknown,
+      accountId?: unknown,
+      serviceName?: unknown
+    ) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeContainerId = requireString(containerId, 'Container ID')
+      const safeDeploymentId =
+        deploymentId === undefined ? undefined : requireString(deploymentId, 'Deployment ID')
+      const safeAccountId =
+        accountId === undefined ? undefined : requireString(accountId, 'Account ID', true)
+      const safeServiceName =
+        serviceName === undefined ? undefined : requireString(serviceName, 'Service name')
+      const scope = validateAttachmentStorageScope({
+        kind: 'chat',
+        projectId: safeProjectId,
+        threadId
+      })
+
+      const prepared = await readPreparedLog(
+        deploymentLogKey(
+          safeProjectId,
+          kind,
+          safeAccountId,
+          safeContainerId,
+          safeDeploymentId,
+          safeServiceName
+        ),
+        {
+          projectId: safeProjectId,
+          kind,
+          accountId: safeAccountId,
+          containerId: safeContainerId,
+          deploymentId: safeDeploymentId,
+          serviceName: safeServiceName
+        }
+      )
+      const lines = parseDeploymentLog(prepared.payload)
+      const text = deploymentLogToText(lines)
+      if (text.trim().length === 0) {
+        throw new TypeError('This deployment has no log text to attach')
+      }
+      const path = await writeTextAttachment(await attachmentStorageDirectory(scope), text)
+      await privilegedIpc.registerUserSelectedFile(path)
+      return { path, lines: lines.length, characters: text.length }
     }
   )
 

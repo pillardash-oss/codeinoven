@@ -65,6 +65,8 @@ vi.mock('$lib/components/specs/SpecConversationSidebar.svelte', async () => {
 import SidebarHarness from './stubs/SidebarHarness.svelte'
 import { sidebarState } from '$lib/stores/sidebar.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
+import { threadGroupingState } from '$lib/stores/thread-grouping.svelte'
+import { THREAD_LIST_PAGE_SIZE } from '$lib/components/shared/RowPageBudget.svelte'
 import { WorkspaceSidebarController } from '$lib/components/workspace/WorkspaceSidebarController.svelte'
 import { WorkspaceProjectDialogs } from '$lib/components/workspace/WorkspaceProjectDialogs.svelte'
 import { ScopeActionsController } from '$lib/components/scope/ScopeActionsController.svelte'
@@ -204,6 +206,15 @@ const projectRowsById = (target: HTMLElement) =>
     ])
   )
 
+/** A Timeline footer control by its own text. */
+const footControl = (
+  pane: Element | null | undefined,
+  label: 'Show more' | 'Show less' | 'Loading history…'
+): HTMLButtonElement | null =>
+  [...(pane?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find(
+    (button) => button.textContent?.trim() === label
+  ) ?? null
+
 beforeEach(() => {
   document.body.innerHTML = ''
   // The sidebar's own store persists width/collapse; keep each test on defaults.
@@ -212,6 +223,75 @@ beforeEach(() => {
 })
 
 describe('workspace sidebar panes', () => {
+  it('pages the timeline from one Show more, memory before the DB', async () => {
+    // Grouping draws one heading per status and the tail belongs to the last of
+    // them; the flat list is the same control with nothing between it and the
+    // foot of the pane.
+    if (threadGroupingState.enabled) threadGroupingState.toggleEnabled()
+
+    const mountPane = (overrides: Record<string, unknown>) => {
+      const target = document.createElement('div')
+      document.body.append(target)
+      const component = mount(SidebarHarness, {
+        target,
+        props: {
+          sidebarProps: { ...props('threads'), ...overrides },
+          initialMode: 'threads'
+        }
+      })
+      return { target, component, pane: target.querySelector('[data-sidebar-pane="threads"]') }
+    }
+
+    // Rows the timeline already holds are revealed first, and the label never
+    // carries a count: one control, one word, whatever is left.
+    const longHistory = Array.from({ length: 40 }, (_, index) =>
+      thread(`alpha-old-${index}`, 'alpha')
+    )
+    const paged = mountPane({
+      unpinnedTimelineThreads: longHistory,
+      threadsByProject: new SvelteMap([['alpha', longHistory]])
+    })
+    await tick()
+    expect(footControl(paged.pane, 'Show more')?.textContent?.trim()).toBe('Show more')
+    expect(footControl(paged.pane, 'Show less')).toBeNull()
+    expect(rowsById(paged.pane).size).toBe(THREAD_LIST_PAGE_SIZE)
+
+    // Extending the list past its first page grows a Show less, drawn above the
+    // way forward so the reader looking at the end of the list finds it first.
+    footControl(paged.pane, 'Show more')?.click()
+    flushSync()
+    expect(rowsById(paged.pane).size).toBe(THREAD_LIST_PAGE_SIZE * 2)
+    const showLess = footControl(paged.pane, 'Show less')
+    const showMoreAgain = footControl(paged.pane, 'Show more')
+    expect(showLess).not.toBeNull()
+    expect(showMoreAgain).not.toBeNull()
+    if (!showLess || !showMoreAgain) throw new Error('the footer controls did not render')
+    expect(
+      showLess.compareDocumentPosition(showMoreAgain) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+
+    // The way back returns to the first page, and the rows it hid are the ones
+    // already in memory, so Show more reveals them again without a DB read.
+    showLess.click()
+    flushSync()
+    expect(rowsById(paged.pane).size).toBe(THREAD_LIST_PAGE_SIZE)
+    expect(footControl(paged.pane, 'Show less')).toBeNull()
+    expect(footControl(paged.pane, 'Show more')).not.toBeNull()
+    void unmount(paged.component)
+
+    // Every row in memory is on screen, so the press reads the next DB page and
+    // reveals it in the same click instead of asking for a second one.
+    const loadPage = vi.fn(async () => {})
+    const dbTail = mountPane({ hasMoreHistory: true, onLoadHistoryPage: loadPage })
+    await tick()
+    const showMore = footControl(dbTail.pane, 'Show more')
+    expect(showMore?.textContent?.trim()).toBe('Show more')
+    showMore?.click()
+    flushSync()
+    expect(loadPage).toHaveBeenCalledTimes(1)
+    void unmount(dbTail.component)
+  })
+
   it('keeps the timeline rows mounted when the shell moves to another view', async () => {
     const { target, component } = renderSidebar('threads')
     await tick()

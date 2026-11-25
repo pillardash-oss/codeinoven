@@ -1,4 +1,12 @@
-import type { AgentPart } from './types'
+import type { AgentPart, AgentToolStatus } from './types'
+
+/** Sub-agent lifecycle states that mean the worker is over, whatever its
+ *  outcome. A snapshot carrying one may never be replaced by a live one. */
+const SETTLED_SUBAGENT_STATUSES: ReadonlySet<AgentToolStatus> = new Set([
+  'completed',
+  'error',
+  'aborted'
+])
 
 /**
  * Merge an incoming streamed part snapshot with the part already accumulated in
@@ -33,6 +41,9 @@ export function mergeStreamedPart(existing: AgentPart, incoming: AgentPart): Age
   ) {
     return { ...incoming, actionLabel: existing.actionLabel }
   }
+  if (incoming.type === 'subagent' && existing.type === 'subagent') {
+    return mergeSubagentSnapshot(existing, incoming)
+  }
   if (incoming.type !== 'text' && incoming.type !== 'reasoning') return incoming
   const streamedText: string =
     existing.type === 'text' || existing.type === 'reasoning' ? existing.text : ''
@@ -61,6 +72,45 @@ export function mergeStreamedPart(existing: AgentPart, incoming: AgentPart): Age
     return { ...merged, text: streamedText }
   }
   return merged
+}
+
+/**
+ * Merge two snapshots of one delegated worker.
+ *
+ * A settled worker (completed, failed, stopped) has no way back to life, but the
+ * stream can deliver one last stale `running` snapshot after the terminal one:
+ * pi flushes a background spawn's remaining tool-execution update after the
+ * call's result already reported the failure, and that update carries no
+ * structured payload, so it can only restate `running`. Adopting it put the card
+ * back to "Working" for good where every other surface   the sub-agent session,
+ * the parent's own report   said the worker had failed, and the trace header
+ * then counted it as an active sub-agent on a turn that was long over.
+ *
+ * The terminal snapshot therefore keeps the lifecycle fields it settled   status,
+ * time range, error and output   while any other newer metadata the stale
+ * snapshot carries still lands. This also heals logs written before the driver
+ * stopped emitting the regression, because the durable fold merges through here.
+ */
+function mergeSubagentSnapshot(
+  existing: Extract<AgentPart, { type: 'subagent' }>,
+  incoming: Extract<AgentPart, { type: 'subagent' }>
+): AgentPart {
+  if (
+    !SETTLED_SUBAGENT_STATUSES.has(existing.activity.status) ||
+    SETTLED_SUBAGENT_STATUSES.has(incoming.activity.status)
+  ) {
+    return incoming
+  }
+  return {
+    ...incoming,
+    activity: {
+      ...incoming.activity,
+      status: existing.activity.status,
+      time: existing.activity.time,
+      ...(existing.activity.error === undefined ? {} : { error: existing.activity.error }),
+      ...(existing.activity.output === undefined ? {} : { output: existing.activity.output })
+    }
+  }
 }
 
 /**

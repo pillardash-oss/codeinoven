@@ -17,6 +17,15 @@
 /** The value prefix a managed ENV line uses instead of a plaintext value. */
 export const PROJECT_ENV_REFERENCE_PREFIX = 'cio://'
 
+/**
+ * The comment marker a turned-off key is written with.
+ *
+ * A key the user does not want injected but does want to keep is commented out as
+ * `#cio-cmt NAME=value`. The marker is the app's own, so every other comment in a
+ * file is the user's and is preserved without ever becoming a key.
+ */
+export const PROJECT_ENV_DISABLED_PREFIX = '#cio-cmt'
+
 /** The name a new file starts with; a user may rename it to whatever they want. */
 export const DEFAULT_ENV_FILE_NAME = '.env'
 
@@ -67,6 +76,11 @@ export interface ProjectEnvEntry {
   updatedAt: number
   /** True when the referenced value is no longer in the vault. */
   missing?: boolean
+  /**
+   * True when the key is kept but turned off: its value stays stored, and no
+   * process started from this project receives it.
+   */
+  disabled?: boolean
 }
 
 /** What writing a managed file into the project changed. */
@@ -104,9 +118,11 @@ export interface ProjectEnvLaunchPreviewEntry {
   scope: 'project' | 'thread'
 }
 
-/** What a launch will inject, and what it refused. */
+/** What a launch will inject, what it turned off, and what it refused. */
 export interface ProjectEnvLaunchPreview {
   entries: ProjectEnvLaunchPreviewEntry[]
+  /** Keys a file keeps but switched off, so they are never injected. */
+  disabled: ProjectEnvLaunchPreviewEntry[]
   skipped: { name: string; reason: string }[]
 }
 
@@ -161,6 +177,11 @@ export interface ProjectEnvValueRequest extends ProjectEnvFileRequest {
 /** A request that removes one key of a managed env file. */
 export interface ProjectEnvEntryRequest extends ProjectEnvFileRequest {
   name: string
+}
+
+/** A request that turns one key on or off without losing its value. */
+export interface ProjectEnvEntryToggleRequest extends ProjectEnvEntryRequest {
+  disabled: boolean
 }
 
 /** A request that replaces one managed file with the lines of a `.env` body. */
@@ -292,24 +313,52 @@ export function projectEnvReferenceTarget(value: string): string | null {
 export type ProjectEnvLine =
   | { kind: 'blank'; text: string }
   | { kind: 'comment'; text: string }
-  | { kind: 'assignment'; name: string; value: string; text: string }
+  | { kind: 'assignment'; name: string; value: string; text: string; disabled: boolean }
   | { kind: 'invalid'; text: string; reason: string }
 
 /**
  * Read an ENV file into lines, keeping every comment and blank line so a rewrite
  * can put the file back exactly as the user wrote it.
+ *
+ * A line commented with the app's own marker is an assignment that is turned off,
+ * not a comment: the key stays in the file and keeps its value, and a launch skips
+ * it. Every other comment is preserved untouched and never becomes a key.
  */
 export function parseProjectEnvFile(contents: string): ProjectEnvLine[] {
   return contents.split(/\r?\n/u).map((text): ProjectEnvLine => {
     const trimmed = text.trim()
     if (!trimmed) return { kind: 'blank', text }
-    if (trimmed.startsWith('#')) return { kind: 'comment', text }
-    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/u.exec(trimmed)
-    if (!match) return { kind: 'invalid', text, reason: 'Not a NAME=value line' }
-    const name = match[1] ?? ''
-    const rawValue = (match[2] ?? '').trim()
-    return { kind: 'assignment', name, value: unquote(rawValue), text }
+    if (trimmed.startsWith('#')) {
+      const body = trimmed.slice(PROJECT_ENV_DISABLED_PREFIX.length)
+      // The marker is a word, so `#cio-cmt-notes` and `#cio-cmtx` stay comments.
+      if (trimmed.startsWith(PROJECT_ENV_DISABLED_PREFIX) && /^\s/u.test(body)) {
+        const turnedOff = parseAssignment(body.trim())
+        if (turnedOff) return { kind: 'assignment', ...turnedOff, text, disabled: true }
+      }
+      return { kind: 'comment', text }
+    }
+    const assignment = parseAssignment(trimmed)
+    if (!assignment) return { kind: 'invalid', text, reason: 'Not a NAME=value line' }
+    return { kind: 'assignment', ...assignment, text, disabled: false }
   })
+}
+
+/** The name and value of one `NAME=value` line, or null when the line is not one. */
+function parseAssignment(body: string): { name: string; value: string } | null {
+  const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/u.exec(body)
+  if (!match) return null
+  return { name: match[1] ?? '', value: unquote((match[2] ?? '').trim()) }
+}
+
+/**
+ * Render one key as a line, commented out with the app's marker when it is off.
+ *
+ * The same line shape is used by the editor, the written project file and an
+ * import, so a turned-off key survives every trip through the text form.
+ */
+export function formatProjectEnvLine(name: string, value: string, disabled = false): string {
+  const marker = disabled ? `${PROJECT_ENV_DISABLED_PREFIX} ` : ''
+  return `${marker}${name}=${formatEnvValue(value)}`
 }
 
 function unquote(value: string): string {

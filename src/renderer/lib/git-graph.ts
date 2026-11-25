@@ -37,9 +37,56 @@ export interface GitGraphRow {
   laneCount: number
 }
 
+/** One batch of commits as the graph's divider reports it. */
+export interface GitGraphBatch {
+  /** Commits of the batch that are loaded and on screen. */
+  count: number
+  /** True when the batch runs past the loaded page, so the count is a floor. */
+  partial: boolean
+}
+
+/**
+ * How many commits sit in each batch a recorded movement opened.
+ *
+ * A movement is stamped on the newest commit it carried, and the batch is every
+ * row below it down to the next movement, so the divider above a batch can say
+ * how many commits went up together. The oldest batch can run past the rows that
+ * are loaded: `hasMore` is what turns its count into a floor instead of a lie.
+ *
+ * The count is taken from the rows actually placed, never from the ref's reflog
+ * distance, so it always matches what the reader can see below the line.
+ */
+export function graphPushBatches(
+  rowCount: number,
+  boundaries: ReadonlyMap<number, unknown>,
+  hasMore: boolean
+): Map<number, GitGraphBatch> {
+  const starts = [...boundaries.keys()].sort((a, b) => a - b)
+  const batches = new Map<number, GitGraphBatch>()
+  starts.forEach((start, position) => {
+    const nextStart = starts[position + 1] ?? rowCount
+    const reachesEnd = position === starts.length - 1 && nextStart >= rowCount
+    batches.set(start, {
+      count: Math.max(0, nextStart - start),
+      partial: reachesEnd && hasMore
+    })
+  })
+  return batches
+}
+
 /** Centre of a lane, in px. */
 export function graphLaneX(lane: number): number {
   return lane * GRAPH_LANE_WIDTH + GRAPH_LANE_WIDTH / 2
+}
+
+/**
+ * True for a merge: a commit with more than one parent, which is where two
+ * lanes have to end and one continues. It is the one node shape the graph draws
+ * that a plain commit does not, so a reader can tell a merge from a commit that
+ * merely sits in a side lane.
+ */
+export function isMergeRow(row: GitGraphRow): boolean {
+  return row.commit.parents.length > 1
 }
 
 /** Colour for a lane, cycling the palette. */
@@ -65,8 +112,16 @@ export function assignGraphLanes(commits: readonly GitCommitInfo[]): GitGraphRow
   // Lane index -> the commit hash that lane is currently waiting for.
   const active: Array<string | null> = []
   const rows: GitGraphRow[] = []
+  // A commit is one row, whatever the list says. The list is keyed by hash, and
+  // a repeated key throws while the keyed each renders, which aborts the flush
+  // and freezes the whole panel until it is remounted. Paging already merges
+  // without duplicates; this is the last line of defence, so a duplicate can
+  // never cost the reader an entire panel.
+  const placed = new Set<string>()
 
   for (const commit of commits) {
+    if (placed.has(commit.hash)) continue
+    placed.add(commit.hash)
     const mergingLanes: number[] = []
     let lane = -1
     for (let index = 0; index < active.length; index += 1) {

@@ -47,6 +47,15 @@ import {
 } from '../thread-message-presentation'
 import type { ThreadView } from './ThreadView-board.svelte'
 import { BoardUnit } from '$lib/components/board-unit'
+/**
+ * Identity of an assistant draft. The recap the agent wrote stays in the
+ * conversation, so a draft the user dismissed or discarded is recognised by what
+ * it says rather than by the message that carries it.
+ */
+function draftSignature(draft: { knowledge: string; plan: AssistantPlanDraft | null }): string {
+  return `${draft.knowledge.length}:${JSON.stringify(draft.plan)}`
+}
+
 /** One concern of the ThreadView board. */
 export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
@@ -373,6 +382,14 @@ export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
   }
 
   /**
+   * Identity of the draft the user threw away. A discarded draft is not the draft
+   * the assistant runs on: it is only ever a proposal, so dropping it leaves the
+   * saved behavior, schedule and connections untouched. Declared before the draft
+   * below, which reads it.
+   */
+  assistantDraftDiscarded = $state('')
+
+  /**
    * The complete draft the agent has presented for this assistant: the knowledge it
    * wrote plus the machine-readable plan (schedule and connections). A draft is
    * what makes the assistant committable, so the recap card and the fallback
@@ -402,6 +419,11 @@ export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
         !this.root.abortRun.isAssistantRevision(draft, plan)
       )
         return null
+      // A discarded revision stays discarded. The agent's recap message cannot be
+      // removed from the transcript, so the draft it carries is dropped by identity
+      // here and never offered for saving again.
+      if (this.assistantDraftDiscarded === draftSignature({ knowledge: draft.knowledge, plan }))
+        return null
       return { knowledge: draft.knowledge, plan }
     }
   )
@@ -410,11 +432,7 @@ export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
    * Identity of the current draft. Dismissing the recap card hides it only for
    * this revision, so a revised draft brings the card back.
    */
-  assistantDraftSignature = $derived(
-    this.assistantDraft
-      ? `${this.assistantDraft.knowledge.length}:${JSON.stringify(this.assistantDraft.plan)}`
-      : ''
-  )
+  assistantDraftSignature = $derived(this.assistantDraft ? draftSignature(this.assistantDraft) : '')
 
   assistantSaving = $state(false)
 
@@ -449,6 +467,60 @@ export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
       this.root.handleAgentEvent.pendingQuestionRequests.length === 0 &&
       (this.assistantBehaviorSession === undefined || this.assistantSessionReady)
   )
+
+  /**
+   * Whether the pending draft can be thrown away.
+   *
+   * A revision can: the assistant already follows saved instructions, and the
+   * draft only replaces them once the user signs it off. The first setup cannot,
+   * because there is no saved behavior behind the draft to fall back to, so it can
+   * only be saved or kept in the editor.
+   */
+  canDiscardAssistantDraft = $derived(
+    this.root.props.assistantKnowledgeComplete &&
+      (this.root.abortRun.assistant?.knowledge.trim().length ?? 0) > 0
+  )
+
+  /** One discard confirmation at a time, so a second press cannot queue another. */
+  assistantDiscardGate = $state(false)
+
+  /**
+   * Throw the agent's pending revision away.
+   *
+   * The ask is destructive, so it is confirmed first with what survives spelled
+   * out. On the go-ahead the agent's turn is stopped   a change it is still
+   * writing would otherwise land after the user said no to it   and the draft is
+   * dropped by identity, which closes the recap and hands the composer back.
+   * Nothing is written, so the assistant keeps exactly what it has now.
+   */
+  async discardAssistantDraft(): Promise<void> {
+    if (!this.canDiscardAssistantDraft || this.assistantSaving || this.assistantDiscardGate) return
+    this.assistantDiscardGate = true
+    try {
+      // The draft on screen is the one being thrown away, so its identity is taken
+      // before the stop: settling a running turn can rewrite the draft the cascade
+      // computes, and the discarded one has to stay discarded either way.
+      const discarded = this.assistantDraftSignature
+      const name = this.root.abortRun.assistant?.name ?? 'this assistant'
+      const approved = await appConfirm.request({
+        title: `Discard the revision to ${name}?`,
+        body: [
+          'The agent stops working on the change.',
+          `The instructions ${name} follows now are kept exactly as they are.`
+        ],
+        note: 'The draft in this conversation is dropped. Nothing is saved, so the behavior, schedule and connections stay as they are.',
+        tone: 'danger',
+        confirmLabel: 'Discard revision',
+        cancelLabel: 'Keep editing'
+      })
+      if (!approved) return
+      await this.root.abortRun.abortRun()
+      this.assistantDraftDiscarded = discarded
+      this.root.unmirroredTraceStartTime.finishAssistantBehaviorSession()
+    } finally {
+      this.assistantDiscardGate = false
+    }
+  }
 
   /**
    * The user's go-ahead for the pending assistant recap: commit the draft, then

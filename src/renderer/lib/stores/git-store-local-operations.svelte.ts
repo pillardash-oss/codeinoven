@@ -1,4 +1,4 @@
-import { SvelteMap } from 'svelte/reactivity'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, invokeGit } from '$lib/ipc.svelte'
 import { gitRemoteIssueOf } from '$lib/ipc-errors'
 import type {
@@ -13,6 +13,7 @@ import type {
   GitFileChange,
   GitIdentity,
   GitPullStrategy,
+  GitPushProgress,
   GitRebaseAction,
   GitRemoteInfo,
   GitRemoteIssue,
@@ -92,6 +93,29 @@ export class GitLocalOperations {
    * delete the temporary branch. Cleared after a successful finish.
    */
   prResolveSession = $state<(PrResolveSession & { projectId: string }) | null>(null)
+
+  /**
+   * The last stage git reported for each pushing checkout, as it reported it.
+   * Main sends these while a push runs and they stop when it settles, so the
+   * panel reads the percentage from here and nothing else has to poll. Keyed
+   * like the remote notices: two projects push independently.
+   */
+  private readonly pushStages = new SvelteMap<string, GitPushProgress>()
+
+  /**
+   * Whether the push in flight for a checkout was stopped by the user. A stopped
+   * push fails like any other (the process was killed), and this is what tells
+   * the difference between "the user asked for this" and "the push broke" .
+   */
+  private readonly pushStopRequests = new SvelteSet<string>()
+
+  /**
+   * The checkouts whose push this store started, so the panel offers a stop for
+   * exactly the pushes one would call off. Other work marks `push` busy without
+   * owning a git push process (finishing a PR resolution pushes internally), and
+   * a stop beside those would be a control that cannot do anything.
+   */
+  private readonly pushingProjects = new SvelteSet<string>()
 
   constructor(private readonly access: GitLocalOperationAccess) {}
 
@@ -490,6 +514,10 @@ export class GitLocalOperations {
     branch?: string
   ): Promise<GitPushResult> {
     const scopeBucketId = this.access.scopeFor(projectId)
+    const stageKey = this.remoteIssueKey(projectId, scopeBucketId)
+    this.pushStopRequests.delete(projectId)
+    this.pushStages.delete(stageKey)
+    this.pushingProjects.add(projectId)
     this.access.markBusy('push', true)
     this.error = null
     try {
@@ -504,6 +532,12 @@ export class GitLocalOperations {
       this.access.refreshConflictIndicators(projectId, true)
       return { status: 'pushed' }
     } catch (reason) {
+      // A stop the user asked for is not a failure to report: nothing reached
+      // the remote, and the panel already answered the click.
+      if (this.pushStopRequests.has(projectId)) {
+        await this.access.refresh(projectId)
+        return { status: 'stopped' }
+      }
       const message = errorMessage(reason, 'Push failed')
       // A non-fast-forward rejection is not a failure - the panel turns it into
       // the "pull & push" recovery dialog instead of a scary error banner.
@@ -513,8 +547,52 @@ export class GitLocalOperations {
         message: this.failRemoteOperation(projectId, reason, 'Push failed', scopeBucketId)
       }
     } finally {
+      this.pushStages.delete(stageKey)
+      this.pushStopRequests.delete(projectId)
+      this.pushingProjects.delete(projectId)
       this.access.markBusy('push', false)
     }
+  }
+
+  /**
+   * Stop the push in flight for one checkout. A push that already finished has
+   * nothing left to stop, so the click simply settles the control.
+   */
+  async stopPush(projectId: string): Promise<boolean> {
+    if (!this.pushingProjects.has(projectId)) return false
+    const scopeBucketId = this.access.scopeFor(projectId)
+    this.pushStopRequests.add(projectId)
+    const stopped = scopeBucketId
+      ? await invoke('git:cancelPush', projectId, scopeBucketId)
+      : await invoke('git:cancelPush', projectId)
+    // Only the push this store started reads the flag, and only while it runs;
+    // a click that found nothing to stop must not classify the next one.
+    if (!stopped) this.pushStopRequests.delete(projectId)
+    return stopped
+  }
+
+  /** Record one stage of a running push, as main reported it. */
+  applyPushProgress(progress: GitPushProgress): void {
+    this.pushStages.set(this.remoteIssueKey(progress.projectId, progress.scopeBucketId), progress)
+  }
+
+  /**
+   * Whether the push running for this checkout is one the stop control can call
+   * off, which is the push this store started and still owns.
+   */
+  canStopPush(projectId: string): boolean {
+    return this.pushingProjects.has(projectId)
+  }
+
+  /**
+   * The last stage git reported for this checkout's push, or null while it has
+   * not said yet. Keyed by checkout so a panel never shows another project's
+   * or another worktree's progress.
+   */
+  pushStageFor(projectId: string): GitPushProgress | null {
+    return (
+      this.pushStages.get(this.remoteIssueKey(projectId, this.access.scopeFor(projectId))) ?? null
+    )
   }
 
   /**

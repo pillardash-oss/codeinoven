@@ -139,6 +139,21 @@ class AgentAssistJobs {
   minimize(id: string): void {
     this.patch(id, { minimized: true })
   }
+
+  /**
+   * Let a handoff the user is already following in its thread go.
+   *
+   * Docking exists for runs with no view of their own. An agent handoff has
+   * one: the thread it prepared holds the same run and reports it for as long
+   * as it lasts, so a dismissed panel leaves nothing behind - no dock chip, and
+   * no listener watching a job nobody can see any more.
+   */
+  dismiss(id: string): void {
+    this.clearPromptWait(id)
+    this.clearDraftWait(id)
+    this.jobs = this.jobs.filter((job) => job.id !== id)
+    this.releaseWatchers()
+  }
   expand(id: string): void {
     this.patch(id, { minimized: false })
   }
@@ -307,6 +322,11 @@ class AgentAssistJobs {
       awaitingSend: false,
       ...(clearThread ? { threadId: null } : {})
     })
+    this.releaseWatchers()
+  }
+
+  /** Drop every subscription and timer once no running job is left to feed. */
+  private releaseWatchers(): void {
     if (this.jobs.some((job) => job.status === 'running')) return
     for (const dispose of this.listeners) dispose()
     this.listeners = []

@@ -79,7 +79,7 @@ export class ProjectFilesRootResolver {
             : this.threadWorkspaces.chatWorkspace
       if (lookup) {
         const cacheKey = `${projectId}::thread:${threadId}`
-        const cached = this.projectRoots.get(cacheKey)
+        const cached = await this.cachedRoot(cacheKey)
         if (cached) return cached
         const root = await realpath(await lookup.resolve(threadId))
         const metadata = await lstat(root)
@@ -92,7 +92,7 @@ export class ProjectFilesRootResolver {
     }
 
     const cacheKey = scopedKey(projectId, scopeBucketId)
-    const cached = this.projectRoots.get(cacheKey)
+    const cached = await this.cachedRoot(cacheKey)
     if (cached) return cached
 
     // A managed scope's worktree is the authoritative root for the call and is
@@ -130,6 +130,30 @@ export class ProjectFilesRootResolver {
     }
     this.projectRoots.set(cacheKey, root)
     return root
+  }
+
+  /**
+   * A root this resolver already resolved, but only while it still exists.
+   *
+   * A cached root can stop existing under us: a conversation's workspace is
+   * removed with the conversation (`threadOwnedDirectories`), and a project's
+   * checkout can be deleted or moved outside the app. Serving that path from the
+   * cache made every later call fail with a bare `ENOENT` on a directory nothing
+   * could recreate, and the failure outlived the thing that was deleted. Falling
+   * through re-resolves instead, which recreates a thread workspace through its
+   * lookup and reports a removed project as a missing project rather than a
+   * missing directory.
+   */
+  private async cachedRoot(cacheKey: string): Promise<string | null> {
+    const cached = this.projectRoots.get(cacheKey)
+    if (!cached) return null
+    try {
+      if ((await lstat(cached)).isDirectory()) return cached
+    } catch {
+      // The directory is gone: resolve it again rather than serve the dead path.
+    }
+    this.projectRoots.delete(cacheKey)
+    return null
   }
 
   async resolveNewPath(

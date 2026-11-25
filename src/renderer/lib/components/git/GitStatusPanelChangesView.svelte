@@ -1,5 +1,7 @@
 <script lang="ts">
   import { formatChangeSummary } from '$shared/change-breakdown'
+  import { waterFillHeights } from '$lib/git-changes-layout'
+  import type { Attachment } from 'svelte/attachments'
   import { RunChangesState } from '../threads/run-changes-state.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
@@ -42,7 +44,6 @@
     loadingCommitDiffFile: Record<string, boolean>
     commitDiffErrors: Record<string, string | null>
     selectedPaths: Record<string, boolean>
-    paneClass: string
     toggleDiff: (change: GitFileChange) => void
     toggleStage: (change: GitFileChange) => void
     toggleSelection: (change: GitFileChange, additive: boolean) => void
@@ -59,6 +60,8 @@
     toggleCommitDir: (path: string) => void
     /** Take the given files of the open commit out of it (confirmed by the panel). */
     requestRemoveCommitChanges: (paths: string[]) => void
+    /** Folder open state, owned by the panel so a search can reveal a file. */
+    expandedDirs: Record<string, boolean>
   }
 
   let {
@@ -82,7 +85,6 @@
     loadingCommitDiffFile,
     commitDiffErrors,
     selectedPaths = $bindable(),
-    paneClass,
     toggleDiff,
     toggleStage,
     toggleSelection,
@@ -97,7 +99,8 @@
     restoreFromSource,
     toggleCommitDiff,
     toggleCommitDir,
-    requestRemoveCommitChanges
+    requestRemoveCommitChanges,
+    expandedDirs = $bindable()
   }: Props = $props()
 
   // The existing summary worker batches path metadata. Rendering never waits on it.
@@ -113,6 +116,113 @@
         (selectedCommit ? commitDiffChanges.length : changes.length)
     )
   )
+
+  /**
+   * One card per section, in the order the panel shows them: conflicts first,
+   * then staged work, then what is still in the working tree.
+   *
+   * The column is split between these, not between the three panes they used to
+   * be grouped in, because a reader looks at Unstaged and Untracked as two lists
+   * and expects each of them to hold its own height.
+   */
+  const cards = $derived.by(() => {
+    const list: Array<{ title: string; files: GitFileChange[]; conflicts: boolean }> = []
+    for (const section of conflictSections)
+      list.push({ title: section.title, files: section.files, conflicts: true })
+    for (const section of stagedSections)
+      list.push({ title: section.title, files: section.files, conflicts: false })
+    for (const section of workingSections)
+      list.push({ title: section.title, files: section.files, conflicts: false })
+    return list
+  })
+
+  /** The column's usable height, measured, because the cards are sized from it. */
+  let columnHeight = $state(0)
+
+  /**
+   * How tall each card would be with nothing limiting it, measured from its own
+   * content.
+   *
+   * `scrollHeight` is the height the card's content asks for whether or not the
+   * card is currently clipped, so a measurement taken while a section is
+   * scrolled never reports the visible height instead of the real one. Expanding
+   * a folder or a diff changes it, which is why the observer keeps watching
+   * instead of measuring once.
+   */
+  let naturalHeights = $state<Record<string, number>>({})
+
+  const measureColumn: Attachment<HTMLElement> = (element) => {
+    const measure = (): void => {
+      columnHeight = element.clientHeight
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    measure()
+    return () => observer.disconnect()
+  }
+
+  /**
+   * One stable attachment for every card's scrolling body: the title comes from
+   * the element, so the attachment is not re-created (and its observer not
+   * rebuilt) on every render the way a factory returning a fresh function would
+   * be.
+   *
+   * It measures the *body*, not the card. The card is the box being sized, so its
+   * scroll height is the height it was given: measuring it would feed the layout
+   * back into itself and freeze every section at whatever it happened to be on
+   * the first pass. The body scrolls, so its `scrollHeight` is the content's real
+   * height however little of it is on screen, and the chrome around it (header,
+   * borders) is the difference between the two boxes.
+   */
+  const measureCard: Attachment<HTMLElement> = (element) => {
+    const title = element.dataset.cardBody
+    if (!title) return
+    const measure = (): void => {
+      const card = element.closest<HTMLElement>('[data-card-title]')
+      const chrome = card ? card.offsetHeight - element.clientHeight : 0
+      const natural = element.scrollHeight + Math.max(0, chrome)
+      if (naturalHeights[title] === natural) return
+      naturalHeights = { ...naturalHeights, [title]: natural }
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    measure()
+    return () => observer.disconnect()
+  }
+
+  /**
+   * The height each card takes, from the water fill: a short section hugs its
+   * content and hands the rest of the column to the sections that still want
+   * more, and only a column that is full everywhere leaves a section scrolling
+   * inside its own share.
+   *
+   * Null until the first measurement lands, so the first paint uses the equal
+   * share below and never flashes a collapsed column.
+   */
+  const cardHeights = $derived.by(() => {
+    if (columnHeight === 0) return null
+    const measured = cards.map((card) => naturalHeights[card.title])
+    if (measured.some((height) => height === undefined)) return null
+    // `p-1` above and below, and the 4px gap between cards.
+    const available = columnHeight - 8 - (cards.length - 1) * 4
+    return waterFillHeights(available, measured)
+  })
+
+  /**
+   * The fallback maximum one card may take: an equal share of the column.
+   *
+   * A maximum, not a height. A card with three files uses three rows and leaves
+   * the rest at the bottom of the panel, which is why a short section never
+   * forces the whole view to scroll while there is room to spare. Once every
+   * card has more rows than its share, the shares are what is left and each
+   * card scrolls on its own, so one long section cannot push the others out of
+   * sight.
+   */
+  const cardShare = $derived.by(() => {
+    const count = Math.max(cards.length, 1)
+    // The column's `gap-1` between cards is taken out of the height first.
+    return `max-height: calc((100% - ${(count - 1) * 4}px) / ${count})`
+  })
 
   /**
    * Whether every file of the open commit is selected. The commit's own header
@@ -207,21 +317,24 @@
     row, so the diff starts at the top of the content region instead of
     under a second sticky copy of them.
   -->
-  <div class="p-2">
+  <div class="flex min-h-0 flex-1 flex-col p-2">
     {#if loadingCommitDiff}
       <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
         <CioSpinner size={14} class="animate-spin" />
         Loading diff
       </div>
     {:else if commitDiffChanges.length === 0}
-      <div class="flex flex-col items-center justify-center py-12 text-center">
+      <div class="flex flex-1 flex-col items-center justify-center py-12 text-center">
         <CioCommit size={22} class="mx-auto mb-2 text-dimmed" />
         <p class="text-xs font-medium text-muted">No file changes</p>
         <p class="mt-1 text-[0.625rem] text-dimmed">This commit has no changes.</p>
       </div>
     {:else}
-      <div class="overflow-hidden border border-border bg-surface">
-        <div class="flex items-center gap-1.5 bg-elevated/50 px-2.5 py-1">
+      <div
+        class="flex min-h-0 flex-col overflow-hidden border border-border bg-surface"
+        style="max-height: 100%"
+      >
+        <div class="flex shrink-0 items-center gap-1.5 bg-elevated/50 py-1 pl-1 pr-2">
           <span
             class="shrink-0"
             role="presentation"
@@ -246,45 +359,41 @@
           <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
             Changed files
           </span>
-          <span class="text-[0.5rem] tabular-nums text-dimmed" title={summaryTitle}>
+          <span class="ml-auto text-[0.5rem] tabular-nums text-dimmed" title={summaryTitle}>
             {commitDiffChanges.length}
           </span>
         </div>
-        {#if changesView === 'tree'}
-          {@render commitTreeNode(commitTree, 0)}
-        {:else}
-          {#each commitDiffChanges as change (change.path)}
-            <GitFileRow
-              {change}
-              diff={commitDiffs[change.path] ?? null}
-              loadingDiff={loadingCommitDiffFile[change.path] ?? false}
-              error={commitDiffErrors[change.path] ?? null}
-              expanded={commitExpanded[change.path] ?? false}
-              selected={Boolean(selectedPaths[change.path])}
-              selectable
-              readonly
-              openLabel="Open working copy"
-              onToggleDiff={() => toggleCommitDiff(change)}
-              onToggleStage={() => {}}
-              onToggleSelect={(item, additive) => toggleSelection(item, additive)}
-              onOpenInEditor={(path) => openInEditor(path)}
-              onRemoveFromCommit={(path) => requestRemoveCommitChanges([path])}
-              onRestore={(path, target) =>
-                restoreFromSource(selectedCommit?.hash ?? 'HEAD', path, target)}
-            />
-          {/each}
-        {/if}
+        <div class="min-h-0 overflow-y-auto">
+          {#if changesView === 'tree'}
+            {@render commitTreeNode(commitTree, 0)}
+          {:else}
+            {#each commitDiffChanges as change (change.path)}
+              <GitFileRow
+                {change}
+                diff={commitDiffs[change.path] ?? null}
+                loadingDiff={loadingCommitDiffFile[change.path] ?? false}
+                error={commitDiffErrors[change.path] ?? null}
+                expanded={commitExpanded[change.path] ?? false}
+                selected={Boolean(selectedPaths[change.path])}
+                selectable
+                readonly
+                openLabel="Open working copy"
+                onToggleDiff={() => toggleCommitDiff(change)}
+                onToggleStage={() => {}}
+                onToggleSelect={(item, additive) => toggleSelection(item, additive)}
+                onOpenInEditor={(path) => openInEditor(path)}
+                onRemoveFromCommit={(path) => requestRemoveCommitChanges([path])}
+                onRestore={(path, target) =>
+                  restoreFromSource(selectedCommit?.hash ?? 'HEAD', path, target)}
+              />
+            {/each}
+          {/if}
+        </div>
       </div>
     {/if}
   </div>
 {:else}
-  <!--
-    Grow to the full region only while an empty state has to centre
-    itself. With changes present the column hugs its content, so the
-    sticky toolbar stays pinned for the whole scroll instead of being
-    cut off once its containing block leaves the scrollport.
-  -->
-  <div class={['flex flex-col', changes.length === 0 ? 'h-full min-h-0' : null]}>
+  <div class="flex min-h-0 flex-1 flex-col">
     {#if status && changes.length === 0 && status.clean}
       <div class="flex flex-1 flex-col items-center justify-center py-12 text-center">
         <div class="mb-2 flex h-10 w-10 items-center justify-center bg-success/10">
@@ -297,25 +406,30 @@
       </div>
     {:else if status}
       <!--
-        Staged / working panes   conflicts sit on top; each pane shares the
-        height. Each pane carries a little padding of its own (see
-        `paneClass`) so the staged and unstaged cards read as separate
-        containers, and the wrapper's inset is what lines their outer edge
-        up with the rows above: its 4px here plus the pane's own 4px is the
-        8px the first card keeps from the action row, the same as its sides.
-        The top inset used to be left to the pane alone, which put the
-        first card 4px under the header while the other three sides had 8.
+        One card per section, each capped at an equal share of the column (see
+        `cardShare`). A card that holds fewer files than its share keeps only the
+        height it needs, so the column does not scroll while room is left at the
+        bottom; a card that holds more scrolls inside itself, so a long Unstaged
+        section never hides Staged or Untracked above it.
       -->
-      <div class="flex flex-col gap-1 p-1">
-        {#if conflictSections.length > 0}
-          <div class={paneClass}>
+      <div class="flex min-h-0 flex-1 flex-col gap-1 p-1" {@attach measureColumn}>
+        {#each cards as card, cardIndex (card.title)}
+          {@const measuredHeight = cardHeights?.[cardIndex]}
+          <div
+            class="flex min-h-0 flex-col"
+            style={measuredHeight === undefined
+              ? cardShare
+              : `height: ${measuredHeight}px; flex: 0 0 auto`}
+            data-card-title={card.title}
+          >
             {#if changesView === 'tree'}
               <GitChangesTree
-                sections={conflictSections}
+                sections={[card]}
                 {diffs}
                 {expanded}
                 {loadingDiff}
                 {diffErrors}
+                {measureCard}
                 bind:selectedPaths
                 onToggleDiff={(change) => toggleDiff(change)}
                 onToggleStage={(change) => toggleStage(change)}
@@ -327,65 +441,24 @@
                 onIgnorePaths={(paths) => ignorePathsAction(paths)}
                 onDiscardPaths={(paths) => requestDiscard(paths)}
                 onResolveConflict={(path) => routeConflictResolution(path)}
+                bind:expandedDirs
               />
             {:else}
-              <div class="overflow-hidden border border-warning/25 bg-surface">
-                {#each conflictSections as section, si (section.title)}
-                  {#if si > 0}<div class="border-t border-border"></div>{/if}
-                  <div class="flex items-center gap-1.5 bg-warning/10 px-2.5 py-1">
-                    <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
-                      {section.title}
-                    </span>
-                    <span class="text-[0.5rem] tabular-nums text-dimmed">
-                      {section.files.length}
-                    </span>
-                  </div>
-                  {#each section.files as change (change.path)}
-                    <GitFileRow
-                      {change}
-                      diff={diffs[fileDiffKey(change)] ?? null}
-                      loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
-                      error={diffErrors[fileDiffKey(change)] ?? null}
-                      expanded={expanded[fileDiffKey(change)] ?? false}
-                      onToggleDiff={() => toggleDiff(change)}
-                      onToggleStage={() => toggleStage(change)}
-                      onOpenInEditor={(path) => openInEditor(path)}
-                      onResolveConflict={(path) => routeConflictResolution(path)}
-                    />
-                  {/each}
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {/if}
-
-        {#if stagedSections.length > 0}
-          <div class={paneClass}>
-            {#if changesView === 'tree'}
-              <GitChangesTree
-                sections={stagedSections}
-                {diffs}
-                {expanded}
-                {loadingDiff}
-                {diffErrors}
-                bind:selectedPaths
-                onToggleDiff={(change) => toggleDiff(change)}
-                onToggleStage={(change) => toggleStage(change)}
-                onToggleSelect={(change, additive) => toggleSelection(change, additive)}
-                onStagePaths={(paths, staged) => stagePathsAction(paths, staged)}
-                onStashPaths={(paths) => requestStashFor(paths)}
-                onOpenInEditor={(path) => openInEditor(path)}
-                onOpenDirectory={(path) => openDirectory(path)}
-                onIgnorePaths={(paths) => ignorePathsAction(paths)}
-                onDiscardPaths={(paths) => requestDiscard(paths)}
-              />
-            {:else}
-              <div class="overflow-hidden border border-border bg-surface">
-                {#each stagedSections as section, si (section.title)}
-                  {#if si > 0}<div class="border-t border-border"></div>{/if}
-                  {@const sectionAllSelected =
-                    section.files.length > 0 && section.files.every((f) => selectedPaths[f.path])}
-                  <div class="flex items-center gap-1.5 bg-elevated/50 px-2.5 py-1">
+              {@const sectionAllSelected =
+                card.files.length > 0 && card.files.every((file) => selectedPaths[file.path])}
+              <div
+                class={[
+                  'flex min-h-0 flex-1 flex-col overflow-hidden border bg-surface',
+                  card.conflicts ? 'border-warning/25' : 'border-border'
+                ]}
+              >
+                <div
+                  class={[
+                    'flex shrink-0 items-center gap-1.5 py-1 pl-1 pr-2',
+                    card.conflicts ? 'bg-warning/10' : 'bg-elevated/50'
+                  ]}
+                >
+                  {#if !card.conflicts}
                     <span
                       class="shrink-0"
                       role="presentation"
@@ -397,24 +470,30 @@
                     >
                       <Switch
                         checked={sectionAllSelected}
-                        onchange={() => toggleSectionSelection(section.files)}
+                        onchange={() => toggleSectionSelection(card.files)}
                         title={sectionAllSelected
-                          ? `Deselect all ${section.files.length} files in ${section.title}`
-                          : `Select all ${section.files.length} files in ${section.title}`}
+                          ? `Deselect all ${card.files.length} files in ${card.title}`
+                          : `Select all ${card.files.length} files in ${card.title}`}
                         aria-label={sectionAllSelected
-                          ? `Deselect all ${section.files.length} files in ${section.title}`
-                          : `Select all ${section.files.length} files in ${section.title}`}
+                          ? `Deselect all ${card.files.length} files in ${card.title}`
+                          : `Select all ${card.files.length} files in ${card.title}`}
                         activeClass="border-primary bg-primary"
                       />
                     </span>
-                    <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
-                      {section.title}
-                    </span>
-                    <span class="text-[0.5rem] tabular-nums text-dimmed">
-                      {section.files.length}
-                    </span>
-                  </div>
-                  {#each section.files as change (change.path)}
+                  {/if}
+                  <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
+                    {card.title}
+                  </span>
+                  <span class="ml-auto text-[0.5rem] tabular-nums text-dimmed">
+                    {card.files.length}
+                  </span>
+                </div>
+                <div
+                  class="min-h-0 overflow-y-auto"
+                  data-card-body={card.title}
+                  {@attach measureCard}
+                >
+                  {#each card.files as change (change.path)}
                     <GitFileRow
                       {change}
                       diff={diffs[fileDiffKey(change)] ?? null}
@@ -422,7 +501,7 @@
                       error={diffErrors[fileDiffKey(change)] ?? null}
                       expanded={expanded[fileDiffKey(change)] ?? false}
                       selected={Boolean(selectedPaths[change.path])}
-                      selectable
+                      selectable={!card.conflicts}
                       onToggleDiff={() => toggleDiff(change)}
                       onToggleStage={() => toggleStage(change)}
                       onToggleSelect={(item, additive) => toggleSelection(item, additive)}
@@ -430,92 +509,16 @@
                       onOpenInEditor={(path) => openInEditor(path)}
                       onIgnore={(path) => ignorePathsAction([path])}
                       onDiscard={(path) => requestDiscard([path])}
+                      onResolveConflict={card.conflicts
+                        ? (path) => routeConflictResolution(path)
+                        : undefined}
                     />
                   {/each}
-                {/each}
+                </div>
               </div>
             {/if}
           </div>
-        {/if}
-
-        {#if workingSections.length > 0}
-          <div class={paneClass}>
-            {#if changesView === 'tree'}
-              <GitChangesTree
-                sections={workingSections}
-                {diffs}
-                {expanded}
-                {loadingDiff}
-                {diffErrors}
-                bind:selectedPaths
-                onToggleDiff={(change) => toggleDiff(change)}
-                onToggleStage={(change) => toggleStage(change)}
-                onToggleSelect={(change, additive) => toggleSelection(change, additive)}
-                onStagePaths={(paths, staged) => stagePathsAction(paths, staged)}
-                onStashPaths={(paths) => requestStashFor(paths)}
-                onOpenInEditor={(path) => openInEditor(path)}
-                onOpenDirectory={(path) => openDirectory(path)}
-                onIgnorePaths={(paths) => ignorePathsAction(paths)}
-                onDiscardPaths={(paths) => requestDiscard(paths)}
-              />
-            {:else}
-              <div class="overflow-hidden border border-border bg-surface">
-                {#each workingSections as section, si (section.title)}
-                  {#if si > 0}<div class="border-t border-border"></div>{/if}
-                  {@const sectionAllSelected =
-                    section.files.length > 0 && section.files.every((f) => selectedPaths[f.path])}
-                  <div class="flex items-center gap-1.5 bg-elevated/50 px-2.5 py-1">
-                    <span
-                      class="shrink-0"
-                      role="presentation"
-                      onclick={(event: MouseEvent) => {
-                        event.stopPropagation()
-                        event.preventDefault()
-                      }}
-                      onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
-                    >
-                      <Switch
-                        checked={sectionAllSelected}
-                        onchange={() => toggleSectionSelection(section.files)}
-                        title={sectionAllSelected
-                          ? `Deselect all ${section.files.length} files in ${section.title}`
-                          : `Select all ${section.files.length} files in ${section.title}`}
-                        aria-label={sectionAllSelected
-                          ? `Deselect all ${section.files.length} files in ${section.title}`
-                          : `Select all ${section.files.length} files in ${section.title}`}
-                        activeClass="border-primary bg-primary"
-                      />
-                    </span>
-                    <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
-                      {section.title}
-                    </span>
-                    <span class="text-[0.5rem] tabular-nums text-dimmed">
-                      {section.files.length}
-                    </span>
-                  </div>
-                  {#each section.files as change (change.path)}
-                    <GitFileRow
-                      {change}
-                      diff={diffs[fileDiffKey(change)] ?? null}
-                      loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
-                      error={diffErrors[fileDiffKey(change)] ?? null}
-                      expanded={expanded[fileDiffKey(change)] ?? false}
-                      selected={Boolean(selectedPaths[change.path])}
-                      selectable
-                      onToggleDiff={() => toggleDiff(change)}
-                      onToggleStage={() => toggleStage(change)}
-                      onToggleSelect={(item, additive) => toggleSelection(item, additive)}
-                      onStash={(path) => requestStashFor([path])}
-                      onOpenInEditor={(path) => openInEditor(path)}
-                      onIgnore={(path) => ignorePathsAction([path])}
-                      onDiscard={(path) => requestDiscard([path])}
-                    />
-                  {/each}
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {/if}
+        {/each}
       </div>
     {/if}
   </div>

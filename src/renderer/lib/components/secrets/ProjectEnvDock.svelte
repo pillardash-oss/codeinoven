@@ -20,7 +20,7 @@
   import { isOrchestrationChildThread, type Thread } from '$shared/types'
   import {
     DEFAULT_ENV_FILE_NAME,
-    formatEnvValue,
+    formatProjectEnvLine,
     parseProjectEnvFile,
     validateEnvFileName,
     type ProjectEnvFile
@@ -31,6 +31,7 @@
   import DockableModal from '../ui/DockableModal.svelte'
   import FindInBar from '../files/FindInBar.svelte'
   import NoticeDismissButton from '../ui/NoticeDismissButton.svelte'
+  import Switch from '../ui/Switch.svelte'
 
   /**
    * The env file for one path, as a floating editor.
@@ -87,6 +88,8 @@
     id: number
     name: string
     value: string
+    /** True when the key is commented out: stored, but never injected. */
+    disabled: boolean
   }
 
   /** One undoable state of the document, carrying both surfaces together. */
@@ -245,15 +248,23 @@
 
   function parseRows(text: string): KeyRow[] {
     return parseProjectEnvFile(text).flatMap((line) =>
-      line.kind === 'assignment' ? [{ id: nextRowId++, name: line.name, value: line.value }] : []
+      line.kind === 'assignment'
+        ? [{ id: nextRowId++, name: line.name, value: line.value, disabled: line.disabled }]
+        : []
     )
   }
 
-  /** Comment and blank lines belong to the file, so the key rows never rewrite them. */
+  /**
+   * Comment and blank lines belong to the file, so the key rows never rewrite them.
+   *
+   * A turned-off key is written as `#cio-cmt NAME=value`, which is the one comment
+   * shape the parser reads back as a key. Without it a switch could not survive a
+   * save, because the row would come back as a comment and vanish from the list.
+   */
   function serializeRows(list: readonly KeyRow[]): string {
     return list
       .filter((row) => row.name.trim().length > 0)
-      .map((row) => `${row.name.trim()}=${formatEnvValue(row.value)}`)
+      .map((row) => formatProjectEnvLine(row.name.trim(), row.value, row.disabled))
       .join('\n')
   }
 
@@ -393,7 +404,9 @@
     })
     const byName = new Map(values.entries.map((entry) => [entry.name, entry.value ?? '']))
     return file.entries
-      .map((entry) => `${entry.name}=${formatEnvValue(byName.get(entry.name) ?? '')}`)
+      .map((entry) =>
+        formatProjectEnvLine(entry.name, byName.get(entry.name) ?? '', entry.disabled === true)
+      )
       .join('\n')
   }
 
@@ -700,7 +713,7 @@
 
   /** Add a blank key, then put the caret in it and bring it on screen. */
   async function addRow(): Promise<void> {
-    const row: KeyRow = { id: nextRowId++, name: '', value: '' }
+    const row: KeyRow = { id: nextRowId++, name: '', value: '', disabled: false }
     commit({ rows: [...rows, row] })
     await tick()
     const field = document.getElementById(domId(`key-name-${row.id}`))
@@ -718,6 +731,12 @@
     commit({ rows: rows.filter((row) => row.id !== id) })
   }
 
+  function toggleRowDisabled(id: number): void {
+    commit({
+      rows: rows.map((row) => (row.id === id ? { ...row, disabled: !row.disabled } : row))
+    })
+  }
+
   function toggleReveal(id: number): void {
     const key = String(id)
     if (revealed.has(key)) revealed.delete(key)
@@ -727,13 +746,18 @@
   function untouchedNames(text: string): string[] {
     const before = new Map(
       parseProjectEnvFile(savedBody).flatMap((line) =>
-        line.kind === 'assignment' ? [[line.name, `${line.name}=${line.value}`] as const] : []
+        line.kind === 'assignment' ? [[line.name, envLineKey(line)] as const] : []
       )
     )
     return parseProjectEnvFile(text).flatMap((line) => {
       if (line.kind !== 'assignment') return []
-      return before.get(line.name) === `${line.name}=${line.value}` ? [line.name] : []
+      return before.get(line.name) === envLineKey(line) ? [line.name] : []
     })
+  }
+
+  /** A line's identity, so switching a key off is an edit while a value stays kept. */
+  function envLineKey(line: { name: string; value: string; disabled: boolean }): string {
+    return `${line.disabled ? '#' : ''}${line.name}=${line.value}`
   }
 
   async function save(): Promise<void> {
@@ -1127,9 +1151,22 @@
                 ? 'bg-primary/10'
                 : ''}"
             >
+              <Switch
+                checked={!row.disabled}
+                class="shrink-0"
+                title={row.disabled
+                  ? `Turn ${row.name.trim() || 'this key'} back on so a launch injects it`
+                  : `Turn ${row.name.trim() || 'this key'} off: keep its value but do not inject it`}
+                aria-label={row.disabled
+                  ? `Turn ${row.name.trim() || 'this key'} on`
+                  : `Turn ${row.name.trim() || 'this key'} off`}
+                onchange={() => toggleRowDisabled(row.id)}
+              />
               <input
                 id={domId(`key-name-${row.id}`)}
-                class="h-7 w-52 shrink-0 border bg-elevated px-2 font-mono text-xs text-foreground outline-none focus:border-primary"
+                class="h-7 w-52 shrink-0 border bg-elevated px-2 font-mono text-xs outline-none focus:border-primary {row.disabled
+                  ? 'text-muted line-through'
+                  : 'text-foreground'}"
                 type="text"
                 autocomplete="off"
                 spellcheck="false"

@@ -89,8 +89,85 @@ describe('browser launch guard', () => {
 
   it('points at the in-app browser instead', () => {
     const reason = shell('chromium --headless --dump-dom http://localhost:3000')
-    expect(reason).toContain('cio_util_find')
+    expect(reason).toContain('cio:browser')
     expect(reason).toContain('cio_util_init')
     expect(reason).toContain('in-app browser')
+  })
+})
+
+/**
+ * The launch a command hides: a model that cannot get `npx playwright` past the
+ * gate writes a script and runs it with node.
+ */
+describe('a script an executor was handed', () => {
+  it('is refused when it launches a browser itself', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const root = await mkdtemp(join(tmpdir(), 'cio-browser-script-'))
+    try {
+      const script = join(root, 'boot.mjs')
+      await writeFile(
+        script,
+        "import { chromium } from 'playwright'\n" +
+          "await chromium.launchPersistentContext('./profile', { headless: true })\n",
+        'utf8'
+      )
+      const reason = unmanagedBrowserShellReason(
+        'bash',
+        { command: `node ${script}` },
+        { cwd: root }
+      )
+      expect(reason).not.toBeNull()
+      // A relative path in the session workspace is the same launch.
+      expect(
+        unmanagedBrowserShellReason('bash', { command: 'node boot.mjs' }, { cwd: root })
+      ).not.toBeNull()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'keeps a Windows path whole when it reads the script',
+    async () => {
+      // Windows separates a path with a backslash, so there it is not an escape.
+      // Reading it as one turned `node C:\work\boot.mjs` into `C:workboot.mjs`,
+      // which found no file, so the launch this check exists to catch went
+      // through. A host where a backslash is a legal filename character can hold
+      // that same argument, and the guard has to see the file it names.
+      const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'cio-browser-script-'))
+      try {
+        await writeFile(
+          join(root, 'boot\\win.mjs'),
+          "import { chromium } from 'playwright'\nchromium.launch()\n",
+          'utf8'
+        )
+        expect(
+          unmanagedBrowserShellReason('bash', { command: 'node boot\\win.mjs' }, { cwd: root })
+        ).not.toBeNull()
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    }
+  )
+
+  it('is allowed when the script is ordinary work', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const root = await mkdtemp(join(tmpdir(), 'cio-browser-script-'))
+    try {
+      const script = join(root, 'seed.mjs')
+      await writeFile(script, "console.log('seeding')\n", 'utf8')
+      expect(
+        unmanagedBrowserShellReason('bash', { command: `node ${script}` }, { cwd: root })
+      ).toBeNull()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })
