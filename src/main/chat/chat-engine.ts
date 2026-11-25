@@ -1329,13 +1329,15 @@ export class ChatEngine {
     projectId: string,
     coordinatorThreadId: string,
     settings: ThreadSettings,
-    instructions?: string
+    instructions?: string,
+    rejected?: string
   ): Promise<AssignmentPlan> {
     return this.units['assignment'].generateAssignmentDraft(
       projectId,
       coordinatorThreadId,
       settings,
-      instructions
+      instructions,
+      rejected
     )
   }
   /** Start or join the thread's Assignment draft without waiting for it. */
@@ -1344,6 +1346,7 @@ export class ChatEngine {
     coordinatorThreadId: string
     settings: ThreadSettings
     instructions?: string
+    rejected?: string
     sessionId: string
   }): Promise<AssignmentDraftStart> {
     return this.units['assignment'].requestAssignmentDraft(input)

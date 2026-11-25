@@ -311,6 +311,39 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
    */
   assignmentDraftError = $state('')
 
+  /**
+   * The failure a failed Assignment draft left on the thread row, recovered from
+   * the persisted row so the card survives a reload.
+   *
+   * The draft's own card and the thread's `failed` status are both durable, so a
+   * rebuilt view has to derive the same failure instead of falling back to the
+   * spec-less entry, which asked the user to send work the thread already holds.
+   */
+  private assignmentDraftFailureDurable = $derived.by((): string => {
+    const thread = this.root.handleAgentEvent.thread
+    if (thread.status !== 'failed' || !thread.lastError) return ''
+    if (this.root.loadOlderMessages.settings.loopMode === true) return ''
+    if (this.root.submitBrainstormDecision.spec !== null) return ''
+    if (this.root.submitSpecDecision.assignment !== null) return ''
+    return thread.lastError
+  })
+
+  /** The user closed the failed-draft card for this view. */
+  assignmentDraftFailureDismissed = $state(false)
+
+  /** The one failure the composer shows for a failed Assignment draft. */
+  assignmentDraftFailure = $derived(
+    this.assignmentDraftFailureDismissed
+      ? ''
+      : this.assignmentDraftError || this.assignmentDraftFailureDurable
+  )
+
+  /** Close the failed-draft card without dropping the failing run's session. */
+  dismissAssignmentDraftFailure(): void {
+    this.assignmentDraftFailureDismissed = true
+    this.assignmentDraftError = ''
+  }
+
   /** True while the retry of a failed draft is being started. */
   assignmentDraftRetrying = $state(false)
 
@@ -325,6 +358,7 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
   async retryAssignmentDraft(): Promise<void> {
     if (this.assignmentDraftRetrying) return
     this.assignmentDraftRetrying = true
+    this.assignmentDraftFailureDismissed = false
     try {
       await invoke(
         'agent:retryAssignmentDraft',

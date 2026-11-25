@@ -1,6 +1,7 @@
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import { validateEntityId, validateThreadSettings } from '../../ipc/ipc-validation'
 import { parseGeneratedAssignmentContent } from '../../../lib/assignment/assignment-validation'
+import { assignmentContinuationPrompt } from '../../../lib/assignment/assignment-draft-continuation'
 import { assignmentDraftPartId } from '../../../lib/assignment/assignment-draft'
 import type {
   AgentSubagentActivity,
@@ -19,21 +20,6 @@ import type { ChatEngine } from '../chat-engine'
 
 /** How long one continuation turn may run before the retry is reported failed. */
 const CONTINUATION_TIMEOUT_MS = 180_000
-
-/**
- * The prompt a retry sends into the preserved draft session.
- *
- * It never re-states the task: the session already holds the specification, the
- * repository reads and the analysis, which is the whole point of continuing it.
- * The turn only has to finish the shape the app can store.
- */
-const CONTINUATION_PROMPT = [
-  'Continue the Assignment draft you were already writing in this session.',
-  'Do not repeat your analysis, do not explain anything, and do not ask questions.',
-  'Return only one complete JSON object shaped as:',
-  '{"title": string, "summary": string, "phases": [{"id": string, "title": string, "description": string}], "tasks": [{"id": string, "phaseId": string, "title": string, "description": string, "prompt": string, "owner": "senior" | "worker", "dependsOn": string[], "expectedFiles": string[], "auditChecklist": string[]}]}',
-  'Every phase id a task names must exist in phases, and at least one phase and one task are required.'
-].join('\n')
 
 /**
  * The Assignment draft run, as one job the user can watch like a sub-agent.
@@ -148,6 +134,7 @@ export class ChatEngineAssignmentDraftRun {
       this.host.state.activeAssignmentDraftSessions.delete(key)
     }
     this.host.state.activeAssignmentDraftRuns.delete(key)
+    this.host.state.assignmentDraftFailures.delete(key)
     this.disposePreserved(key)
     // A user Stop ends the run the user is watching, so its card must say so
     // instead of claiming to work forever. A superseded run is replaced by
@@ -218,20 +205,20 @@ export class ChatEngineAssignmentDraftRun {
     coordinatorThreadId: string
     settings: ThreadSettings
     instructions?: string
+    /** The validator's refusal of the previous answer, handed to the next one. */
+    rejected?: string
     sessionId: string
     generate: (
       projectId: string,
       coordinatorThreadId: string,
       settings: ThreadSettings,
-      instructions?: string
+      instructions?: string,
+      rejected?: string
     ) => Promise<AssignmentPlan>
   }): Promise<AssignmentDraftStart> {
     const projectId = validateEntityId(input.projectId, 'Project ID')
     const coordinatorThreadId = validateEntityId(input.coordinatorThreadId, 'Coordinator thread ID')
     const settings = validateThreadSettings(input.settings)
-    if (settings.assignmentMode !== true) {
-      throw new Error('Assignment mode must be enabled to generate an Assignment.')
-    }
     const active = this.host.state.assignmentEngine.getActive(projectId, coordinatorThreadId)
     if (active) return { state: 'draft', assignment: active }
     const spec = await this.host.units['spec'].getActiveSpec(projectId, coordinatorThreadId)
@@ -252,7 +239,16 @@ export class ChatEngineAssignmentDraftRun {
       coordinatorThreadId,
       activity: this.runningActivity(settings, startedAt, input.instructions)
     })
-    const task = input.generate(projectId, coordinatorThreadId, settings, input.instructions)
+    // A new run supersedes the refused answer it replaces, so it never inherits a
+    // stale failure.
+    this.host.state.assignmentDraftFailures.delete(key)
+    const task = input.generate(
+      projectId,
+      coordinatorThreadId,
+      settings,
+      input.instructions,
+      input.rejected
+    )
     this.host.state.activeAssignmentDraftRuns.set(key, task)
     void task.then(
       (assignment) => this.settle({ projectId, coordinatorThreadId, revision, assignment }),
@@ -276,7 +272,8 @@ export class ChatEngineAssignmentDraftRun {
       projectId: string,
       coordinatorThreadId: string,
       settings: ThreadSettings,
-      instructions?: string
+      instructions?: string,
+      rejected?: string
     ) => Promise<AssignmentPlan>
     /** Store the graph a continued turn produced as the thread's draft. */
     persist: (content: AssignmentPlanContent) => Promise<AssignmentPlan>
@@ -291,12 +288,14 @@ export class ChatEngineAssignmentDraftRun {
     const key = this.draftKey(projectId, coordinatorThreadId)
     if (this.host.state.activeAssignmentDraftRuns.has(key)) return { state: 'formulating' }
     const preserved = this.host.state.preservedAssignmentDraftSessions.get(key)
+    const rejected = this.host.state.assignmentDraftFailures.get(key)
     const requestedHarness = settings.harnessId || DEFAULT_HARNESS
     if (!preserved || preserved.driverId !== requestedHarness) {
       return this.request({
         projectId,
         coordinatorThreadId,
-        settings: { ...settings, assignmentMode: true },
+        settings,
+        ...(rejected ? { rejected } : {}),
         sessionId: thread.sessionId ?? '',
         generate: input.generate
       })
@@ -308,7 +307,7 @@ export class ChatEngineAssignmentDraftRun {
       projectId,
       coordinatorThreadId,
       activity: {
-        ...this.runningActivity({ ...settings, assignmentMode: true }, startedAt),
+        ...this.runningActivity(settings, startedAt),
         childSessionId: preserved.sessionId
       }
     })
@@ -317,7 +316,8 @@ export class ChatEngineAssignmentDraftRun {
       coordinatorThreadId,
       settings,
       preserved,
-      revision
+      revision,
+      rejected
     ).then((content) => input.persist(content))
     this.host.state.activeAssignmentDraftRuns.set(key, task)
     void task.then(
@@ -336,7 +336,8 @@ export class ChatEngineAssignmentDraftRun {
     coordinatorThreadId: string,
     settings: ThreadSettings,
     session: ActiveAssignmentDraftSession,
-    revision: number
+    revision: number,
+    rejected?: string
   ): Promise<AssignmentPlanContent> {
     const key = this.draftKey(projectId, coordinatorThreadId)
     this.host.state.activeAssignmentDraftSessions.set(key, session)
@@ -354,7 +355,7 @@ export class ChatEngineAssignmentDraftRun {
           assignmentMode: false,
           loopMode: false
         },
-        text: CONTINUATION_PROMPT,
+        text: assignmentContinuationPrompt(rejected),
         attachments: [],
         allowedTools: PROMPT_READ_ONLY_TOOLS
       }
@@ -425,6 +426,7 @@ export class ChatEngineAssignmentDraftRun {
     const startedAt = this.host.state.assignmentDraftStartedAt.get(key) ?? Date.now()
     this.host.state.assignmentDraftStartedAt.delete(key)
     if (input.assignment) {
+      this.host.state.assignmentDraftFailures.delete(key)
       void this.settleStatus(input.projectId, input.coordinatorThreadId, 'spec')
       void this.publish({
         projectId: input.projectId,
@@ -451,6 +453,7 @@ export class ChatEngineAssignmentDraftRun {
     }
     const error =
       input.error instanceof Error ? input.error.message : 'Assignment generation failed.'
+    this.host.state.assignmentDraftFailures.set(key, error)
     void this.settleStatus(input.projectId, input.coordinatorThreadId, 'failed', error)
     void this.publish({
       projectId: input.projectId,

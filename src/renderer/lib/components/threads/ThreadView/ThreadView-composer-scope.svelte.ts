@@ -286,6 +286,12 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
       this.root.loadOlderMessages.settings.loopMode !== true &&
       this.root.submitBrainstormDecision.spec === null &&
       this.root.submitSpecDecision.assignment === null &&
+      // A draft that was asked for and failed is not an entry point: the failure
+      // card already carries that request and its retry, so repeating "send the
+      // work you want assigned" over it asked the user to re-send work the thread
+      // plainly already holds. The failure is read from the thread row too, so it
+      // survives a reload instead of coming back as this entry.
+      this.root.sources.assignmentDraftFailure === '' &&
       !this.root.harnessUsage.specFormulating &&
       !this.assignmentFormulating
   )
