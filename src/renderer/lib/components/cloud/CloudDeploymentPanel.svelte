@@ -37,6 +37,7 @@
   import Switch from '../ui/Switch.svelte'
   import CloudDeploymentConfigSheet from './CloudDeploymentConfigSheet.svelte'
   import CloudDeploymentDetail from './CloudDeploymentDetail.svelte'
+  import type { RemediationLogTarget } from '$lib/cloud/remediation-log-target'
   import ContainerLinksMenu from './ContainerLinksMenu.svelte'
   import {
     type CloudDeploymentConfig,
@@ -578,7 +579,10 @@
    * and provider context, and the prompt asks the agent to diagnose and propose
    * a fix   never to redeploy, trigger, or auto-fix.
    */
-  async function startAgentRemediation(logText: string): Promise<void> {
+  async function startAgentRemediation(
+    logText: string,
+    target: RemediationLogTarget
+  ): Promise<void> {
     const container = selectedContainer
     if (!container) return
     agentAssist.open({
@@ -597,7 +601,7 @@
           settings
         }).catch(() => null)
         if (!thread) throw new Error('The diagnosis thread could not be created')
-        const [prompt, attachments] = await remediationPrompt(container, logText, thread.id)
+        const [prompt, attachments] = await remediationPrompt(container, logText, thread.id, target)
         return { threadId: thread.id, text: prompt, attachments }
       }
     })
@@ -615,35 +619,46 @@
   async function remediationPrompt(
     container: CloudDeploymentContainer,
     log: string,
-    threadId: string
+    threadId: string,
+    target: RemediationLogTarget
   ): Promise<[string, PromptAttachment[]]> {
     const provider = PROVIDER_LABELS[container.providerKind] ?? container.providerKind
     const trimmed = log.trim()
     const attachments: PromptAttachment[] = []
-    if (trimmed) {
-      try {
-        const path = await invoke(
-          'attachment:saveText',
-          { kind: 'chat', projectId, threadId },
-          trimmed
-        )
-        attachments.push({
-          mime: 'text/plain',
-          url: pathToFileUrl(path),
-          filename: 'Pasted text.txt'
-        })
-      } catch (error) {
-        reportError(error, 'Could not attach the deployment log.')
-      }
+    // Main writes the whole log as an attachment from the same payload the log
+    // view pages through, so a diagnosis never starts from a partial log: the
+    // newest page on screen is only what the reader happens to have loaded.
+    let attachmentNote = '(no deployment log text was available)'
+    try {
+      const saved = await invoke(
+        'cloudDeploy:logAttachment',
+        projectId,
+        container.providerKind,
+        container.id,
+        threadId,
+        target.deploymentId ?? undefined,
+        container.accountId,
+        target.serviceName ?? undefined
+      )
+      attachments.push({
+        mime: 'text/plain',
+        url: pathToFileUrl(saved.path),
+        filename: 'Deployment log.txt'
+      })
+      attachmentNote = `The complete deployment log is attached as "Deployment log.txt" (${saved.lines} lines).`
+    } catch (error) {
+      reportError(error, 'Could not attach the deployment log.')
     }
     const fence = '```'
     const inlineExcerpt = trimmed
-      ? `Recent log tail (the full log is attached as "Pasted text.txt"):
+      ? `${attachmentNote}
+
+Recent log tail:
 
 ${fence}text
 ${trimmed.slice(-INLINE_LOG_EXCERPT_CHARS)}${trimmed.length > INLINE_LOG_EXCERPT_CHARS ? '\n[earlier output omitted]' : ''}
 ${fence}`
-      : '(no deployment log text was available)'
+      : attachmentNote
     const prompt = [
       `This project failed to deploy on ${provider}.`,
       'Help me diagnose and fix it. When you are done, give me a summary report of what happened.',
@@ -661,7 +676,7 @@ ${fence}`
       container={selectedContainer}
       onBack={() => (selectedContainerKey = null)}
       onUpdated={(updated) => cloudDeployState.setContainerStatus(projectId, updated)}
-      onRemediate={(logText) => void startAgentRemediation(logText)}
+      onRemediate={(logText, target) => void startAgentRemediation(logText, target)}
     />
   {:else}
     {#if configured && hasContainers}

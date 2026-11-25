@@ -1,7 +1,7 @@
 import { toast } from 'svelte-sonner'
 import { invoke } from '$lib/ipc.svelte'
 import { ipcErrorMessage } from '$lib/ipc-errors'
-import { parseDeploymentLog, type DeploymentLogLine } from '$lib/cloud/deployment-log'
+import { parseDeploymentLog, type DeploymentLogLine } from '$shared/cloud/deployment-log'
 import {
   CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS,
   type CloudDeploymentContainer,

@@ -26,6 +26,7 @@ import {
 } from '../ipc-validation'
 import { isMissingFilesystemError, requireString, validateAttachmentStorageScope } from './shared'
 import { rememberLocalDownloadName } from '../../system/local-download-names'
+import { TEXT_ATTACHMENT_NAME_PATTERN, writeTextAttachment } from '../../system/text-attachment'
 import {
   captureScreenshotForAgent,
   retainScreenshot,
@@ -167,10 +168,9 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
       const text = rawText
 
       const directory = await attachmentStorageDirectory(scope)
-      await mkdir(directory, { recursive: true })
       let targetPath: string
       if (rawExistingPath === undefined) {
-        targetPath = join(directory, `pasted-${randomUUID()}.txt`)
+        targetPath = await writeTextAttachment(directory, text)
       } else {
         if (typeof rawExistingPath !== 'string') {
           throw new TypeError('Existing text attachment path must be a string')
@@ -178,13 +178,13 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
         targetPath = resolve(rawExistingPath)
         if (
           resolve(dirname(targetPath)) !== resolve(directory) ||
-          !/^pasted-[0-9a-f-]+\.txt$/u.test(basename(targetPath))
+          !TEXT_ATTACHMENT_NAME_PATTERN.test(basename(targetPath))
         ) {
           throw new TypeError('Existing text attachment path is outside this composer')
         }
+        await atomicWrite(targetPath, text)
       }
 
-      await atomicWrite(targetPath, text)
       await privilegedIpc.registerUserSelectedFile(targetPath)
       return targetPath
     }
