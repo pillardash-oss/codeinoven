@@ -305,6 +305,35 @@ describe('permission policy', () => {
     ).toBe(false)
   })
 
+  it('reads a destructive flag as belonging to its own command', () => {
+    const scratch = resolve(projectRoot, '.cio')
+    const policy = new PermissionPolicy({
+      projectRoot,
+      mode: 'auto_review',
+      scratchPaths: [scratch]
+    })
+
+    // `--porcelain` on `git status` is not a recursive flag on the plain `rm -f`
+    // earlier in the same line, and a cleanup that cannot be proven is still
+    // not destructive work.
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: [
+          'rm -f .cio/tmp/scan/* 2>/dev/null; for d in ats co; do rm -f .cio/tmp/scan/$d/* 2>/dev/null; done; git status --porcelain | head -5'
+        ]
+      })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
+    // The same line with a real recursive delete still asks when the target is
+    // not something the policy can prove.
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: ['rm -rf "$NOPE"/scan; git status --porcelain']
+      }).approved
+    ).toBe(false)
+  })
+
   it('proves a delete glob by the directory it enumerates', () => {
     const scratch = resolve(projectRoot, '.cio')
     const policy = new PermissionPolicy({

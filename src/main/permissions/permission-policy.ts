@@ -249,12 +249,16 @@ const DESTRUCTIVE_SEGMENTS = new Set(['rm', 'rmdir', 'del', 'erase', 'rd', 'remo
 /** Longest shell command the confinement proof will read. Anything longer is
  *  left to the ordinary card instead of being parsed. */
 const MAX_PROVEN_COMMAND_LENGTH = 8192
+/** What each destructive verb looks like. Every lookahead stops at the end of
+ *  the verb's own segment (`;`, `&`, `|`) as well as at a newline: a flag on a
+ *  later command is that command's, so `rm -f scan/*; git status --porcelain`
+ *  is not a recursive delete because `--porcelain` happens to contain an `r`. */
 const DESTRUCTIVE_COMMAND_PATTERNS = [
-  /(?:^|[;&|]\s*)rm\s+(?=[^\n]*(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?:\s|$))/u,
-  /(?:^|[;&|]\s*)find\s+[^\n]+\s-delete(?:\s|$)/u,
-  /(?:^|[;&|]\s*)git\s+clean\s+(?=[^\n]*-[a-zA-Z]*f)(?=[^\n]*-[a-zA-Z]*d)/u,
-  /(?:^|[;&|]\s*)Remove-Item\b[^\n]*\s-Recurse\b/iu,
-  /(?:^|[;&|]\s*)(?:rmdir|rd|del)\b[^\n]*\s\/(?:s|S)\b/u
+  /(?:^|[;&|]\s*)rm\s+(?=[^\n;&|]*(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?:\s|$))/u,
+  /(?:^|[;&|]\s*)find\s+[^\n;&|]+\s-delete(?:\s|$)/u,
+  /(?:^|[;&|]\s*)git\s+clean\s+(?=[^\n;&|]*-[a-zA-Z]*f)(?=[^\n;&|]*-[a-zA-Z]*d)/u,
+  /(?:^|[;&|]\s*)Remove-Item\b[^\n;&|]*\s-Recurse\b/iu,
+  /(?:^|[;&|]\s*)(?:rmdir|rd|del)\b[^\n;&|]*\s\/(?:s|S)\b/u
 ]
 const DEFAULT_PROTECTED_PATTERNS = [
   '.git',
