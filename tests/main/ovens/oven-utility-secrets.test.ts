@@ -331,7 +331,11 @@ describe('Oven secret backends', () => {
     expect(noBus.id).toBe('linux-encrypted-file')
     await noBus.write('github', 'token-value')
     expect(await noBus.read('github')).toBe('token-value')
-    expect((await stat(join(directory, 'store-key'))).mode & 0o777).toBe(0o600)
+    // Windows has no POSIX owner bits: chmod leaves the mode at 0o666 there, so the
+    // key file's mode is only meaningful on the POSIX runners.
+    if (process.platform !== 'win32') {
+      expect((await stat(join(directory, 'store-key'))).mode & 0o777).toBe(0o600)
+    }
     // The value never lands on disk as plain text.
     const sealedFiles = (await readdir(directory)).filter((name) => name.endsWith('.sealed'))
     expect(sealedFiles).toHaveLength(1)
