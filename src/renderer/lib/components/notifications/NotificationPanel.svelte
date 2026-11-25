@@ -653,7 +653,7 @@
 
 {#snippet appErrorRow(e: AppErrorEntry)}
   <div
-    class="group flex items-start gap-2 border-l-2 bg-surface px-3 py-2.5 transition-colors hover:bg-elevated {appErrorAccent(
+    class="group relative flex items-start gap-2 border-l-2 bg-surface px-3 py-2.5 transition-colors hover:bg-elevated {appErrorAccent(
       e.kind
     )}"
   >
@@ -665,7 +665,7 @@
       title={appErrorLabel(e.kind)}
     ></span>
     <div class="min-w-0 flex-1">
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 pr-14">
         <span
           class="shrink-0 text-[0.625rem] font-semibold uppercase tracking-wide {e.kind === 'error'
             ? 'text-danger'
@@ -687,7 +687,9 @@
         {@render detailsBlock(`app:${e.id}`, e.details)}
       {/if}
     </div>
-    <div class="flex shrink-0 items-center gap-0.5">
+    <div
+      class="absolute top-1 right-1.5 flex items-center gap-0.5 bg-surface transition-colors group-hover:bg-elevated"
+    >
       <button
         class="flex h-6 w-6 items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
         aria-label={hasUsefulDetails(e.message, e.details)
