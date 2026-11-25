@@ -256,6 +256,12 @@ export class AgentProcessService implements AgentProcessObserver {
   private lastScanAt = 0
   private journal: OwnedProcessJournal | null = null
   private lastSnapshot: ProcessSnapshotEntry[] = []
+  /**
+   * Session each app-wide pid was proven to belong to (`null` when no stamp was
+   * readable). A process's environment is fixed at spawn, so this is read once
+   * per pid instead of on every poll.
+   */
+  private readonly appAttribution = new Map<number, string | null>()
 
   constructor(private readonly snapshotter: ProcessSnapshotter = defaultSnapshotter) {}
 
@@ -916,6 +922,10 @@ export class AgentProcessService implements AgentProcessObserver {
       await this.adoptMarkedOrphans(snapshot, currentByPid, childrenByParent)
 
       const changedOwners = new Map<string, ProcessOwner>()
+      /** Descendants found under an app-wide root, held until their own session
+       *  marker can be read: the shared Pi host runs the shell of every thread,
+       *  so the tree alone cannot say which thread a child belongs to. */
+      const appScopeDescendants = new Map<number, { entry: ProcessSnapshotEntry; cwd: string }>()
       const sessionIds = new Set([...this.roots.keys(), ...this.tracked.keys()])
       for (const sessionId of sessionIds) {
         const isAppScope = sessionId === APP_SCOPE
@@ -935,12 +945,17 @@ export class AgentProcessService implements AgentProcessObserver {
           }
           for (const descendant of descendantsOf(root.pid, childrenByParent)) {
             if (sessionProcesses.has(descendant.pid)) continue
+            if (isAppScope) {
+              appScopeDescendants.set(descendant.pid, { entry: descendant, cwd: root.cwd })
+              continue
+            }
+            if (this.trackedSessionOf(descendant.pid) !== null) continue
             sessionProcesses.set(descendant.pid, {
               pid: descendant.pid,
               parentPid: descendant.parentPid,
               command: descendant.command,
               startedAt: Date.now(),
-              scope: isAppScope ? 'app' : 'thread',
+              scope: 'thread',
               sessionId,
               cwd: root.cwd
             })
@@ -967,12 +982,106 @@ export class AgentProcessService implements AgentProcessObserver {
         const owner = this.owners.get(sessionId)
         if (changed && owner) changedOwners.set(`${owner.projectId}:${owner.threadId}`, owner)
       }
+      await this.attributeAppScopeProcesses(appScopeDescendants, currentByPid, changedOwners)
       for (const owner of changedOwners.values()) {
         broadcastAgentProcessesChanged(owner.projectId, owner.threadId)
       }
     } catch (error) {
       Logger.dev('Agent process scan failed:', error)
     }
+  }
+
+  /**
+   * Move a shared root's children to the thread that actually spawned them.
+   *
+   * The pooled Pi host is one process for every session, so walking down from it
+   * can only ever say "the app". The environment can say more: every shell the
+   * host runs for a session carries that session's `CODEINOVEN_SESSION` stamp, so
+   * a child found under the app-wide tree is re-keyed to its owner instead of
+   * being listed under the app node (and, before this pass, under whichever
+   * thread happened to be the only live session). A row with no readable stamp,
+   * or one naming a session this instance does not hold, stays app-wide: the app
+   * node is the honest answer when ownership cannot be proven.
+   */
+  private async attributeAppScopeProcesses(
+    discovered: ReadonlyMap<number, { entry: ProcessSnapshotEntry; cwd: string }>,
+    currentByPid: ReadonlyMap<number, ProcessSnapshotEntry>,
+    changedOwners: Map<string, ProcessOwner>
+  ): Promise<void> {
+    let appScoped = this.tracked.get(APP_SCOPE)
+    const ensureAppScoped = (): Map<number, TrackedProcess> => {
+      if (!appScoped) {
+        appScoped = new Map()
+        this.tracked.set(APP_SCOPE, appScoped)
+      }
+      return appScoped
+    }
+    for (const pid of this.appAttribution.keys()) {
+      if (!currentByPid.has(pid)) this.appAttribution.delete(pid)
+    }
+    const candidates = new Map<number, { entry: ProcessSnapshotEntry; cwd: string | null }>()
+    for (const [pid, tracked] of appScoped ?? []) {
+      if (this.appAttribution.has(pid)) continue
+      const entry = currentByPid.get(pid)
+      if (entry) candidates.set(pid, { entry, cwd: tracked.cwd })
+    }
+    for (const [pid, found] of discovered) {
+      if (!this.appAttribution.has(pid) && !candidates.has(pid)) candidates.set(pid, found)
+    }
+    if (candidates.size === 0) return
+    const ownership = await this.readOwnership([...candidates.keys()])
+    let appScopeChanged = false
+    for (const [pid, { entry, cwd }] of candidates) {
+      const probed = ownership.get(pid)
+      const marker = probed?.sessionId ?? null
+      const claimed = marker !== null && marker !== APP_SCOPE && this.owners.has(marker)
+      // Only a successful probe is remembered; a failed one is retried next scan.
+      if (probed) this.appAttribution.set(pid, claimed ? marker : null)
+      if (!claimed) {
+        // No readable stamp, or a session this instance does not hold: the app
+        // node is the honest owner, and the row still stays visible there.
+        const target = ensureAppScoped()
+        if (!target.has(pid)) {
+          target.set(pid, {
+            pid,
+            parentPid: entry.parentPid,
+            command: entry.command,
+            startedAt: Date.now(),
+            scope: 'app',
+            sessionId: APP_SCOPE,
+            cwd
+          })
+        }
+        continue
+      }
+      if (appScoped?.delete(pid)) appScopeChanged = true
+      let sessionProcesses = this.tracked.get(marker)
+      if (!sessionProcesses) {
+        sessionProcesses = new Map()
+        this.tracked.set(marker, sessionProcesses)
+      }
+      if (sessionProcesses.has(pid)) continue
+      sessionProcesses.set(pid, {
+        pid,
+        parentPid: entry.parentPid,
+        command: entry.command,
+        startedAt: Date.now(),
+        scope: 'thread',
+        sessionId: marker,
+        cwd
+      })
+      const owner = this.owners.get(marker)
+      if (owner) changedOwners.set(`${owner.projectId}:${owner.threadId}`, owner)
+    }
+    if (appScopeChanged && appScoped?.size === 0) this.tracked.delete(APP_SCOPE)
+  }
+
+  /** The session a known row is already tracked under, or null when it is new. */
+  private trackedSessionOf(pid: number): string | null {
+    for (const [sessionId, processes] of this.tracked) {
+      if (processes.has(pid)) return sessionId
+    }
+    return null
   }
 
   /**
@@ -1013,9 +1122,6 @@ export class AgentProcessService implements AgentProcessObserver {
     childrenByParent: ReadonlyMap<number, ProcessSnapshotEntry[]>
   ): Promise<void> {
     if (currentByPid.size === 0) return
-    const liveSessions = [...this.roots.entries()].flatMap(([sessionId, sessionRoots]) =>
-      [...sessionRoots.keys()].some((pid) => currentByPid.has(pid)) ? [sessionId] : []
-    )
     // Everything a live root reaches is tracked by the descendant walk that
     // follows, and every known row is already tracked, so neither is a candidate.
     const knownPids = new Set<number>()
@@ -1097,12 +1203,12 @@ export class AgentProcessService implements AgentProcessObserver {
       // A process that still has a live parent and carries a session this
       // instance no longer holds is still that parent's. Only a detached one is adopted.
       if (sessionId !== null && !claimed && !this.isOrphaned(entry.parentPid, alive)) continue
-      const scope =
-        claimed && sessionId !== null
-          ? sessionId
-          : liveSessions.length === 1
-            ? liveSessions[0]
-            : APP_SCOPE
+      // A detached process is only a thread's when its own stamp names a
+      // session this instance holds. "The only live session" used to stand in
+      // for that proof, which folded every unmarked orphan (a browser a
+      // different project started, a helper) into whichever thread happened to
+      // be open, and put its row in that thread's Processes tab.
+      const scope = claimed && sessionId !== null ? sessionId : APP_SCOPE
       let sessionProcesses = this.tracked.get(scope)
       if (!sessionProcesses) {
         sessionProcesses = new Map()

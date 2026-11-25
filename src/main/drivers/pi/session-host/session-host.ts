@@ -22,10 +22,13 @@ import { join, resolve } from 'node:path'
 import {
   createAgentSessionFromServices,
   createAgentSessionServices,
+  createBashToolDefinition,
   SessionManager
 } from '@earendil-works/pi-coding-agent'
 import type { AgentSession } from '@earendil-works/pi-coding-agent'
+import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { createHostUiContext } from './ui-context'
+import { OWNED_SESSION_MARKER } from '../../../system/process-ownership'
 import type { AgentSessionServices } from '@earendil-works/pi-coding-agent'
 import type {
   HostCreateSessionCommand,
@@ -47,6 +50,42 @@ export type HostLineSink = (
 
 /** Pi's own default agent directory, used when an account does not name one. */
 const DEFAULT_AGENT_DIR = join(homedir(), '.pi', 'agent')
+
+/**
+ * Widen a built-in shell tool to the SDK's custom-tool slot.
+ *
+ * `customTools` is typed with `unknown` details while a built-in shell tool
+ * carries its own details type in both directions, so the SDK rejects the very
+ * definition it built even though the runtime shape is identical. The cast only
+ * erases that details parameter; no behaviour changes.
+ */
+function asCustomTool<T extends { name: string }>(definition: T): ToolDefinition {
+  return definition as unknown as ToolDefinition
+}
+
+/**
+ * The shell tools a hosted session runs with.
+ *
+ * The host is one process for every session, so the stamp in its own environment
+ * names whichever session wrote it last, and a thread's commands would inherit
+ * that one id and be attributed to another thread. Stamping each spawn from the
+ * session that owns the turn is what lets the process tracker put a command
+ * under its thread instead of under the app node, even while eight sessions
+ * share this process.
+ *
+ * Only `bash` is replaced: the Windows-only `powershell` and `cmd` tools are
+ * registered by the app's own extension with native operations, and overriding
+ * them here would discard that implementation.
+ */
+function sessionShellTools(cwd: string, sessionId: string): ToolDefinition[] {
+  const spawnHook: NonNullable<Parameters<typeof createBashToolDefinition>[1]>['spawnHook'] = (
+    context
+  ) => ({
+    ...context,
+    env: { ...context.env, [OWNED_SESSION_MARKER]: sessionId }
+  })
+  return [asCustomTool(createBashToolDefinition(cwd, { spawnHook }))]
+}
 
 interface HostedSession {
   readonly key: string
@@ -315,7 +354,8 @@ export class PiSessionHost {
       sessionManager,
       ...(model === undefined ? {} : { model }),
       ...(command.thinkingLevel === undefined ? {} : { thinkingLevel: command.thinkingLevel }),
-      ...(command.tools === undefined ? {} : { tools: [...command.tools] })
+      ...(command.tools === undefined ? {} : { tools: [...command.tools] }),
+      customTools: sessionShellTools(command.cwd, key)
     })
     const unsubscribe = created.session.subscribe((event) => {
       this.sink({ type: 'event', sessionId: key, event })
