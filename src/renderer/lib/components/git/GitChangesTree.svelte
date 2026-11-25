@@ -14,6 +14,7 @@
     dirExpansionKey,
     filesForNode,
     pathsForNode,
+    splitChangePath,
     sortTreeDirs,
     type GitChangeTreeNode
   } from '$lib/git-changes-tree'
@@ -314,8 +315,10 @@
           {statusLetter(change)}
         </span>
         <FileTypeIcon path={change.path} size={13} class="shrink-0" />
-        <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted">
-          {change.path.split('/').pop()}
+        <!-- Inside the tree the folders are the rows above, so the file row is
+             its name alone, in the same weight a folder row uses. -->
+        <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-foreground">
+          {splitChangePath(change.path).name}
         </span>
         {#if diffs[key] && !diffs[key].binary}
           <span class="shrink-0 font-mono text-[0.5625rem] tabular-nums text-success">

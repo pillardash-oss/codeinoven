@@ -6,7 +6,8 @@ import {
   dirExpansionKey,
   filesForNode,
   pathsForNode,
-  sortTreeDirs
+  sortTreeDirs,
+  splitChangePath
 } from '../../../src/renderer/lib/git-changes-tree'
 
 function change(path: string, status: GitFileChange['status'] = 'modified'): GitFileChange {
@@ -78,6 +79,27 @@ describe('compressDirChain', () => {
 
     expect(row.label).toBe('src')
     expect(row.node.files).toHaveLength(2)
+  })
+})
+
+describe('splitChangePath', () => {
+  it('separates the file name from the folders that qualify it', () => {
+    expect(splitChangePath('apps/application/src/journal.ts')).toEqual({
+      name: 'journal.ts',
+      dir: 'apps/application/src'
+    })
+  })
+
+  it('leaves a root file with no folders to name', () => {
+    expect(splitChangePath('package.json')).toEqual({ name: 'package.json', dir: '' })
+  })
+
+  it('keeps a dotfile whole, including its leading dot', () => {
+    expect(splitChangePath('.github/workflows/ci.yml')).toEqual({
+      name: 'ci.yml',
+      dir: '.github/workflows'
+    })
+    expect(splitChangePath('apps/.env')).toEqual({ name: '.env', dir: 'apps' })
   })
 })
 

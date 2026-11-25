@@ -15,6 +15,7 @@
   } from '$shared/types'
 
   import { ContextMenu } from 'bits-ui'
+  import { splitChangePath } from '$lib/git-changes-tree'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FileDiffView from '../files/DeferredFileDiffView.svelte'
   import Switch from '../ui/Switch.svelte'
@@ -77,6 +78,16 @@
     openLabel = 'Open'
   }: Props = $props()
 
+  /**
+   * The name the row leads with, and the folders that qualify it.
+   *
+   * `displayPath` is what the tree hands in: inside a tree the folders are the
+   * rows above, so repeating them on the file row would say nothing twice. A
+   * flat list has no enclosing rows, so it prints the folders beside the name,
+   * dimmed, and lets them truncate while the name stays whole.
+   */
+  const parts = $derived(splitChangePath(displayPath ?? change.path))
+
   const hasActions = $derived(
     onStash !== undefined ||
       onOpenInEditor !== undefined ||
@@ -136,11 +147,11 @@
       aria-label={hasActions ? `Actions for ${change.path}` : undefined}
       title={hasActions ? `Actions for ${change.path}` : undefined}
     >
-      <div class="group flex min-h-8 items-center pr-1">
+      <div class="group flex min-h-7 items-center pr-1">
         <button
           type="button"
           class={[
-            'flex min-h-8 min-w-0 flex-1 items-center gap-1.5 px-2 text-left transition-colors',
+            'flex min-h-7 min-w-0 flex-1 items-center gap-1.5 px-2 text-left transition-colors',
             selected ? 'bg-primary/10' : 'hover:bg-elevated/50'
           ]}
           title={change.status === 'conflicted' && onResolveConflict
@@ -186,9 +197,15 @@
             {letter}
           </span>
           <FileTypeIcon path={change.path} size={13} />
-          <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted"
-            >{displayPath ?? change.path}</span
+          <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-foreground"
+            >{parts.name}</span
           >
+          {#if parts.dir}
+            <span
+              class="min-w-0 max-w-[45%] shrink truncate font-mono text-[0.5625rem] text-dimmed"
+              title={change.path}>{parts.dir}</span
+            >
+          {/if}
           {#if change.oldPath}
             <span class="shrink-0 text-[0.5625rem] text-dimmed">from {change.oldPath}</span>
           {/if}

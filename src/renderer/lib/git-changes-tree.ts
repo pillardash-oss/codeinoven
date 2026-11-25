@@ -66,6 +66,28 @@ export function pathsForNode(node: GitChangeTreeNode): string[] {
   return filesForNode(node).map((change) => change.path)
 }
 
+/** A path split into the file it names and the folders it sits in. */
+export interface ChangePathParts {
+  /** The file name alone, which is what a row leads with. */
+  name: string
+  /** Everything before it, without a trailing slash. Empty at the root. */
+  dir: string
+}
+
+/**
+ * Split a repository path at its last slash.
+ *
+ * A row leads with the file name because that is what identifies the change;
+ * the folders are context. Truncating the whole path from the right, as the
+ * list used to, threw the name away first and left `…/journal/accoun…`: the one
+ * word a reader needs was the one word the row dropped.
+ */
+export function splitChangePath(path: string): ChangePathParts {
+  const slash = path.lastIndexOf('/')
+  if (slash === -1) return { name: path, dir: '' }
+  return { name: path.slice(slash + 1), dir: path.slice(0, slash) }
+}
+
 /**
  * The key a folder's open state is stored under.
  *
