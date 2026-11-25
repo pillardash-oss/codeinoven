@@ -113,6 +113,7 @@ export interface AgentUtilityHost {
   readonly agentTarget: BrowserService['agentTarget']
   readonly agentTargetChange: BrowserService['agentTargetChange']
   readonly optionalAgentTarget: BrowserService['optionalAgentTarget']
+  readonly serveWorkspacePreview: BrowserService['serveWorkspacePreview']
   readonly runAgentScriptIn: BrowserService['runAgentScriptIn']
   readonly assistantPageTabIds: BrowserService['assistantPageTabIds']
   readonly boxOfExistingTab: BrowserService['boxOfExistingTab']
@@ -348,6 +349,19 @@ export class BrowserServiceAgentUtility {
         detail:
           'The user is viewing this tab, so it is laid out at the on-screen size right now. This viewport holds until you change it, and it is the size the page renders at the next time the tab is offscreen, however the user had it on screen.'
       }
+    }
+    if (operation === 'preview') {
+      // A page this conversation wrote has no origin of its own, and the browser
+      // only opens http(s). Serving the conversation's folder gives the page a
+      // URL; `open` then drives it like any other page.
+      const result = await this.host.serveWorkspacePreview({
+        projectId,
+        threadId,
+        ...(typeof input['path'] === 'string' && input['path'].trim().length > 0
+          ? { path: input['path'] }
+          : {})
+      })
+      return { ...utilityContext, result }
     }
     if (operation === 'navigate') {
       const url = validateBrowserUrl(this.host.requiredInputString(input, 'url'))

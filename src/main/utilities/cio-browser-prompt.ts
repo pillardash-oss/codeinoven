@@ -20,6 +20,7 @@ export const BROWSER_PLAYBOOK = [
   '- A conversation has one page. `open` navigates it and says so (`reuse: "navigated"`), and opening the address the conversation is already on returns that page rather than a second copy of it: do not call `open` per URL, and do not treat it as \'create a tab\'. Reach for `navigate` to move the page you have, `open` when you have none, and `fresh: true` only when you truly need a separate page.',
   '- `page` names the target: "agent" for a tab you opened, "user" for the page the conversation\'s thread browser resolved for this thread, "strip" for whatever that browser shows right now. On the user\'s page only reading operations are yours to run; a mutation is reviewed before it runs, and a whole `run` is reviewed once, with every step listed.',
   '- `wait` holds in the page for a condition without failing the call: an element appears or goes away, text appears, the address changes, or the page content changes. It resolves with `timedOut: true` and what the page looked like instead of throwing, so a timeout is an answer to read, not an error to retry blindly.',
+  'A page you wrote yourself has no address until you give it one: `preview` serves a file or folder from this conversation\u2019s workspace on a loopback origin and returns its URL, so `open` it and read it with `snapshot` or `console` instead of handing back a path. It is not needed for a dev server, a design, a prototype or a video, which are already served.',
   '',
   '## When a page will not give up what you need',
   '- A page is not a flat document. Modern components (Fluent UI, the Azure portal, most design systems) render their real controls inside shadow roots, and `document.querySelector` cannot see them. `snapshot` and every operation read through those boundaries: an element reports `shadow: true` and a selector written across the boundary (`host >>> inner`), and its ref works exactly like any other.',
@@ -44,3 +45,4 @@ export const BROWSER_PLAYBOOK = [
   '## Report what actually happened',
   '- Report the exchanged messages, the outcome, and the reference that proves it, not what you hoped the conversation would achieve. A conversation still open is reported as open, with what it is waiting for.'
 ].join('\n')
+
