@@ -2,6 +2,7 @@ import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { Logger } from '../system/logger'
 import type { RendererLogEntry, RendererLogLevel, RendererLogSource } from '../../lib/ipc-contract'
 import { isBenignRendererErrorMessage } from '../../lib/renderer-error-classification'
+import { logEngineNotice } from './renderer-notice-fold'
 
 const MAX_MESSAGE_CHARS = 8000
 const MAX_STACK_CHARS = 16000
@@ -11,8 +12,9 @@ const MAX_STACK_CHARS = 16000
  *
  * The patterns live in `lib/renderer-error-classification` because the
  * renderer's own Errors panel applies the same rule. Here they are still
- * recorded, at `dev`, so a layout loop someone is actually chasing stays in
- * `main.jsonl` while `error.log` keeps describing failures.
+ * recorded, at `dev` and folded per message by `renderer-notice-fold`, so a
+ * layout loop someone is actually chasing stays in `main.jsonl` as one line and
+ * a count while `error.log` keeps describing failures.
  */
 function isBenignRendererError(entry: RendererLogEntry): boolean {
   if (entry.level !== 'error') return false
@@ -66,7 +68,9 @@ export function registerRendererLogIpcHandler(): void {
     if (!entry) return
     const prefix = `[renderer:${entry.source}]`
     if (isBenignRendererError(entry)) {
-      Logger.dev(prefix, entry.message)
+      // Folded, so a layout loop that fires every frame leaves one line and a
+      // count instead of a thousand identical records.
+      logEngineNotice(prefix, entry.message)
       return
     }
     if (entry.stack) {
