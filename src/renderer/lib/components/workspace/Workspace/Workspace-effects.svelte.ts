@@ -1235,9 +1235,6 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
      *  self-terminating and bounded by the pager's own exhaustion flag. */
     $effect(() => {
       if (this.root.props.mode !== 'threads' || !this.root.props.active) return
-      // A folded history is the reader's own decision to read less: the backfill
-      // must not unfold it by paging more rows in behind their back.
-      if (this.root.createThreadInProject.historyFolded) return
       if (threadProjectFilterState.isAll) return
       if (
         this.root.switcherPanelTabs.sidebar.threadsSearching &&

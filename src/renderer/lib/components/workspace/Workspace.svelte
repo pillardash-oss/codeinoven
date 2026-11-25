@@ -750,16 +750,13 @@
       typingThreadKeys={board.markThreadReadAndApply.typingThreadKeys}
       hasMoreHistory={board.mergeThreadsInList.hasMoreHistory}
       historyLoading={board.switcherPanelTabs.historyLoading}
-      historyPaged={board.createThreadInProject.historyPaged}
-      historyFolded={board.createThreadInProject.historyFolded}
       projectPageLoading={board.switcherPanelTabs.projectPageLoading}
       sidebar={board.switcherPanelTabs.sidebar}
       projectDialogs={board.createThreadInProject.projectDialogs}
       scopeActions={board.state.scopeActions}
       projectHasMoreInDb={board.switcherPanelTabs.projectHasMoreInDb}
       onLoadProjectThreadsPage={board.createThreadInProject.loadProjectThreadsPage}
-      onShowMoreHistory={board.createThreadInProject.showMoreHistory}
-      onCollapseHistory={board.createThreadInProject.collapseHistory}
+      onLoadHistoryPage={board.createThreadInProject.loadHistoryPage}
       onSetProjects={(next: Project[]) => (board.createThreadInProject.projects = next)}
       onOpenThread={board.openThreadFromSwitcher.openThread}
       onRename={board.switcherPanelTabs.handleRename}

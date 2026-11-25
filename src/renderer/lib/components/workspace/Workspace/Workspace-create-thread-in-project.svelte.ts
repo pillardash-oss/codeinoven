@@ -61,29 +61,6 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
 
   historyOffset = $state(0)
 
-  /**
-   * Every thread the older-history pager added past the bounded recent slice.
-   *
-   * The pages stay in `allThreads` once they have been read, so folding the
-   * history back to the slice is a listing decision, not a cache eviction: the
-   * rows are simply taken off the Threads timeline by id. Keeping the ids (rather
-   * than a row count) is what makes the fold exact when a page's rows interleave
-   * with newer threads that keep arriving at the head of the list.
-   */
-  historyLoadedIds = new SvelteSet<string>()
-
-  /**
-   * Whether the older history the pager loaded is folded away again.
-   *
-   * The pager's own offset is deliberately left where it stopped: the pages it
-   * already read are still in `allThreads`, so reopening the history shows them
-   * again without a second read of the same rows.
-   */
-  historyFolded = $state(false)
-
-  /** Whether the timeline holds rows past the bounded recent slice. */
-  historyPaged = $derived(this.historyLoadedIds.size > 0)
-
   /** Project icon data URLs keyed by project id. */
   projectIcons = new SvelteMap<string, string>()
 
@@ -251,8 +228,6 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
       // A restored thread beyond the bounded recent slice keeps its row.
       if (restoredThread) this.upsertThreadInList(restoredThread)
       this.historyOffset = uniqueThreads.length
-      this.historyLoadedIds.clear()
-      this.historyFolded = false
       this.root.mergeThreadsInList.hasMoreHistory = false
       // Restore what the last session left in the durable inbox, alongside the
       // thread-state hydration below. Deliberately not awaited: hydration
@@ -557,9 +532,6 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
         offset: this.historyOffset
       })
       this.historyOffset += page.length
-      // Every row the page carried is history, whether or not it was new to the
-      // list: a row read again after a fold must still be foldable again.
-      for (const thread of page) this.historyLoadedIds.add(thread.id)
       this.root.mergeThreadsInList.hasMoreHistory =
         page.length === this.root.switcherPanelTabs.HISTORY_PAGE_LIMIT
       const uniqueCurrentThreads = this.uniqueThreadList(this.allThreads)
@@ -574,24 +546,6 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
     } finally {
       this.root.switcherPanelTabs.historyLoading = false
     }
-  }
-
-  /**
-   * The older-history control's "Show more": reopen the folded pages and keep
-   * paging while the DB has more.
-   */
-  async showMoreHistory(): Promise<void> {
-    this.historyFolded = false
-    await this.loadHistoryPage()
-  }
-
-  /**
-   * The older-history control's "Show less": take the pages the pager loaded
-   * back off the timeline, leaving the bounded recent slice the view opened with.
-   */
-  collapseHistory(): void {
-    if (this.historyLoadedIds.size === 0) return
-    this.historyFolded = true
   }
 
   /**
