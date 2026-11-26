@@ -147,7 +147,10 @@ export class ChatEngineProcesses {
     const projectId = validateEntityId(context.projectId, 'Project ID')
     const threadId = validateEntityId(context.threadId, 'Thread ID')
     if (action === 'list') {
-      return { processes: await this.listProcesses(projectId, threadId) }
+      return {
+        processes: await this.listProcesses(projectId, threadId),
+        appOwned: await this.appOwnedProcessesInProject(context)
+      }
     }
     if (action === 'start') {
       const command = typeof input['command'] === 'string' ? input['command'] : ''
@@ -169,13 +172,45 @@ export class ChatEngineProcesses {
         () => [] as AgentRunningProcess[]
       )
       const pids = stoppable.map((entry) => entry.pid).join(', ')
+      const parked = await this.appOwnedProcessesInProject(context).catch(() => [])
+      const match = parked.find((entry) => entry.pid === pid)
       const reason = error instanceof Error ? error.message : String(error)
+      // A process the app owns but no live session of this thread claims is not
+      // a dead end for the agent: naming the row and its port is what lets it
+      // report the collision instead of guessing, and the task manager is where
+      // a person ends it.
+      const parkedNotice = match
+        ? ` pid ${pid} is app-owned (${match.command} in ${match.cwd ?? 'an unknown directory'}, ports ${match.ports.join(', ') || 'none'}); it holds no live session of this thread, so the app lists it under App in the task manager for the user to end.`
+        : ' A process started outside this thread is never stopped by the app.'
       throw new Error(
-        `${reason}. This thread can stop these pids: ${pids || 'none'}. A process started outside this thread is never stopped by the app.`,
+        `${reason}. This thread can stop these pids: ${pids || 'none'}.${parkedNotice}`,
         { cause: error }
       )
     }
     return { pid, stopped: true, force }
+  }
+
+  /**
+   * App-owned processes whose working directory is inside this project but
+   * whose start no live session of this thread claims.
+   *
+   * The app proves too little to let one thread stop these (another thread in
+   * the same project may still be serving from that port), so they are reported
+   * as read-only context: an agent that hits a busy port can name the pid and
+   * port that hold it, and point the user at the task manager, instead of
+   * guessing or reporting nothing at all.
+   */
+  private async appOwnedProcessesInProject(
+    context: SecretRequestContext
+  ): Promise<Array<{ pid: number; command: string; cwd: string | null; ports: number[] }>> {
+    const projectPath = resolve(context.projectPath)
+    const rows = await this.host.state.agentProcesses.listAll()
+    return rows.flatMap((row) => {
+      if (row.scope !== 'app' || !row.cwd) return []
+      const inside = relative(projectPath, row.cwd)
+      if (inside.startsWith('..') || isAbsolute(inside)) return []
+      return [{ pid: row.pid, command: row.command, cwd: row.cwd, ports: row.ports }]
+    })
   }
 
   /**

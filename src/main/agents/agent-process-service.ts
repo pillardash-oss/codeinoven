@@ -262,6 +262,18 @@ export class AgentProcessService implements AgentProcessObserver {
    * per pid instead of on every poll.
    */
   private readonly appAttribution = new Map<number, string | null>()
+  /**
+   * The session a live row's stamp names while this instance does not hold that
+   * session yet.
+   *
+   * Ownership never waits on this map: a process carrying this instance's stamp
+   * is adopted the moment it is seen, whatever its session says. The session
+   * only decides which node the row lists under, so an unclaimed one parks the
+   * row app-wide and records the name here. When the session is registered a
+   * later scan promotes the row to its thread instead of leaving a process the
+   * thread started visible nowhere it can reach it.
+   */
+  private readonly pendingSessions = new Map<number, string>()
 
   constructor(private readonly snapshotter: ProcessSnapshotter = defaultSnapshotter) {}
 
@@ -307,11 +319,16 @@ export class AgentProcessService implements AgentProcessObserver {
             parentPid: process.parentPid,
             command: process.command,
             startedAt: process.startedAt,
-            scope: 'thread'
+            scope: 'thread',
+            cwd: process.cwd
           })
         }
       }
     }
+    // A thread asks for this list to answer "is it still running, and on which
+    // port?", so the ports are part of the answer rather than a second call.
+    const portsByPid = await this.detectPorts([...unique.keys()])
+    for (const process of unique.values()) process.ports = portsByPid.get(process.pid) ?? []
     return [...unique.values()].sort((left, right) => left.startedAt - right.startedAt)
   }
 
@@ -543,7 +560,17 @@ export class AgentProcessService implements AgentProcessObserver {
       }
       this.roots.delete(sessionId)
     }
+    this.forgetPendingSessions(sessionIds)
     broadcastAgentProcessesChanged(projectId, threadId)
+  }
+
+  /** Drop parked rows of sessions that no longer exist. */
+  private forgetPendingSessions(sessionIds: readonly string[]): void {
+    if (sessionIds.length === 0) return
+    const ending = new Set(sessionIds)
+    for (const [pid, sessionId] of [...this.pendingSessions]) {
+      if (ending.has(sessionId)) this.pendingSessions.delete(pid)
+    }
   }
 
   async releaseThread(projectId: string, threadId: string): Promise<void> {
@@ -563,6 +590,7 @@ export class AgentProcessService implements AgentProcessObserver {
     this.tracked.clear()
     this.roots.clear()
     this.owners.clear()
+    this.pendingSessions.clear()
     // What could not be verified stays journaled, for the next launch to reap.
     if (this.journal && stopped) {
       this.journal.clear()
@@ -983,6 +1011,7 @@ export class AgentProcessService implements AgentProcessObserver {
         if (changed && owner) changedOwners.set(`${owner.projectId}:${owner.threadId}`, owner)
       }
       await this.attributeAppScopeProcesses(appScopeDescendants, currentByPid, changedOwners)
+      this.promotePendingProcesses(currentByPid, changedOwners)
       for (const owner of changedOwners.values()) {
         broadcastAgentProcessesChanged(owner.projectId, owner.threadId)
       }
@@ -1035,8 +1064,17 @@ export class AgentProcessService implements AgentProcessObserver {
       const probed = ownership.get(pid)
       const marker = probed?.sessionId ?? null
       const claimed = marker !== null && marker !== APP_SCOPE && this.owners.has(marker)
-      // Only a successful probe is remembered; a failed one is retried next scan.
-      if (probed) this.appAttribution.set(pid, claimed ? marker : null)
+      // A row that names a session this instance has not registered yet is not a
+      // row without an owner: remember the name and re-probe it next scan, so it
+      // moves to its thread the moment that session is claimed. Only the two
+      // settled answers are memoized   held, or nothing readable at all.
+      if (probed) {
+        if (claimed) this.appAttribution.set(pid, marker)
+        else if (marker === null) this.appAttribution.set(pid, null)
+        else this.appAttribution.delete(pid)
+      }
+      if (marker !== null && !claimed) this.pendingSessions.set(pid, marker)
+      else if (claimed) this.pendingSessions.delete(pid)
       if (!claimed) {
         // No readable stamp, or a session this instance does not hold: the app
         // node is the honest owner, and the row still stays visible there.
@@ -1074,6 +1112,47 @@ export class AgentProcessService implements AgentProcessObserver {
       if (owner) changedOwners.set(`${owner.projectId}:${owner.threadId}`, owner)
     }
     if (appScopeChanged && appScoped?.size === 0) this.tracked.delete(APP_SCOPE)
+  }
+
+  /**
+   * Move a parked row back to the thread whose session has since been claimed.
+   *
+   * Adoption never waits on the session (see `pendingSessions`), so a process
+   * this instance spawned while its session was not yet registered lists app-wide
+   * for a while: the restart case, where a shell stamped with a session id
+   * outlives the registration that named it. This pass gives the row back to its
+   * thread with no new snapshot and no new environment probe   the pid's stamp
+   * already said where it belongs.
+   */
+  private promotePendingProcesses(
+    currentByPid: ReadonlyMap<number, ProcessSnapshotEntry>,
+    changedOwners: Map<string, ProcessOwner>
+  ): void {
+    if (this.pendingSessions.size === 0) return
+    for (const [pid, sessionId] of [...this.pendingSessions]) {
+      if (!currentByPid.has(pid)) {
+        this.pendingSessions.delete(pid)
+        continue
+      }
+      if (!this.owners.has(sessionId)) continue
+      const parked = this.tracked.get(APP_SCOPE)?.get(pid)
+      if (!parked) {
+        // Not parked: it was never adopted, or another pass already moved it.
+        this.pendingSessions.delete(pid)
+        continue
+      }
+      this.tracked.get(APP_SCOPE)?.delete(pid)
+      let sessionProcesses = this.tracked.get(sessionId)
+      if (!sessionProcesses) {
+        sessionProcesses = new Map()
+        this.tracked.set(sessionId, sessionProcesses)
+      }
+      sessionProcesses.set(pid, { ...parked, scope: 'thread', sessionId })
+      this.pendingSessions.delete(pid)
+      const owner = this.owners.get(sessionId)
+      if (owner) changedOwners.set(`${owner.projectId}:${owner.threadId}`, owner)
+    }
+    if (this.tracked.get(APP_SCOPE)?.size === 0) this.tracked.delete(APP_SCOPE)
   }
 
   /** The session a known row is already tracked under, or null when it is new. */
@@ -1140,7 +1219,6 @@ export class AgentProcessService implements AgentProcessObserver {
       }
     }
     const appFamily = this.appProcessFamily(currentByPid, childrenByParent)
-    const alive = new Set(currentByPid.keys())
     const isWindows = process.platform === 'win32'
     const adbServerPattern = /\badb\b[^\0]*\bfork-server\b/u
     const candidates = snapshot.filter(
@@ -1200,15 +1278,23 @@ export class AgentProcessService implements AgentProcessObserver {
       if (!adoptable.has(entry.pid)) continue
       const sessionId = adoptable.get(entry.pid) ?? null
       const claimed = sessionId !== null && this.owners.has(sessionId)
-      // A process that still has a live parent and carries a session this
-      // instance no longer holds is still that parent's. Only a detached one is adopted.
-      if (sessionId !== null && !claimed && !this.isOrphaned(entry.parentPid, alive)) continue
-      // A detached process is only a thread's when its own stamp names a
-      // session this instance holds. "The only live session" used to stand in
-      // for that proof, which folded every unmarked orphan (a browser a
-      // different project started, a helper) into whichever thread happened to
-      // be open, and put its row in that thread's Processes tab.
+      // The stamp is this instance's, so the process is this instance's: a live
+      // parent never keeps it out. A session this instance does not hold yet is
+      // not proof that the process is someone else's either   an app that
+      // restarted can still spawn a shell stamped with a session id it means to
+      // register, and a `/bin/bash` wrapper in between has an unreadable
+      // environment, so refusing here leaked the dev server it started, its
+      // port, and every child of it.
+      //
+      // The session only picks the node. A row whose session is not held parks
+      // app-wide and is promoted to its thread as soon as that session is
+      // claimed, so "only the app knows it" never becomes "nobody can stop it".
+      // "The only live session" used to pick the thread instead of the stamp,
+      // which folded every unmarked orphan (a browser a different project
+      // started, a helper) into whichever thread happened to be open.
       const scope = claimed && sessionId !== null ? sessionId : APP_SCOPE
+      if (claimed || sessionId === null) this.pendingSessions.delete(entry.pid)
+      else this.pendingSessions.set(entry.pid, sessionId)
       let sessionProcesses = this.tracked.get(scope)
       if (!sessionProcesses) {
         sessionProcesses = new Map()

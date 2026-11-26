@@ -51,6 +51,10 @@ export interface AgentRunningProcess {
   command: string
   startedAt: number
   scope: 'thread' | 'app'
+  /** The directory it runs in, when the tracker knows it. */
+  cwd?: string | null
+  /** TCP ports it listens on, best-effort: what a busy port is traced by. */
+  ports?: number[]
 }
 
 /**
