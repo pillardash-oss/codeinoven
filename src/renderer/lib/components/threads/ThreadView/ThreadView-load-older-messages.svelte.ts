@@ -922,6 +922,40 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     })
   }
 
+  /**
+   * The reader took the viewport by working inside the transcript   they opened
+   * a tool call, a reasoning block, a compaction disclosure in the live trace.
+   *
+   * Detaching on a scroll alone watched only half the gesture. A reader still
+   * inside the reading band when they opened a card stayed attached, so the
+   * tail follower re-anchored them to the bottom on the resize their own
+   * expansion caused   and again, once per step, for every tool the run
+   * appended after it. The block they were reading slid off the top of the
+   * screen each time, which is precisely the scroll position they had chosen.
+   *
+   * Nothing is scrolled here: the viewport stays exactly where the reader left
+   * it, pinned to the block at its top, and it stays there until they scroll
+   * back down to the true bottom   the ordinary gesture that re-attaches the
+   * tail through `scrollDetachesFromLatest`.
+   */
+  claimViewportForReading(): void {
+    if (this.userScrolledAway) return
+    // Pin the mounted window to what is on screen before the live tail grows,
+    // exactly like the first upward scroll: a streaming turn must not unmount
+    // the block the reader just opened.
+    this.windowStartId ??= this.root.composerScope.mountedWindowStartId()
+    this.userScrolledAway = true
+    // Measured on the click frame, before the expansion lays out, so the hold
+    // describes the viewport the reader actually chose.
+    this.captureReaderAnchor()
+    const el = this.scrollEl
+    if (!el) return
+    threadScrollPositions.set(this.root.handleAgentEvent.thread.id, {
+      top: el.scrollTop,
+      awayFromBottom: true
+    })
+  }
+
   scrollToLatest(): void {
     if (!this.scrollEl) return
     // The reader has taken the viewport. Any pending open-at-prompt restore has

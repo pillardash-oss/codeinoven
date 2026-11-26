@@ -315,6 +315,9 @@
         )
       }
     }}
+    onReaderClaimsViewport={groupThread
+      ? undefined
+      : () => board.loadOlderMessages.claimViewportForReading()}
     onOpenSubagent={board.unmirroredTraceStartTime.openSubagent}
     onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
   />

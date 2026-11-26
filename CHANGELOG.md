@@ -80,6 +80,16 @@ browser-session-cookies.ts`), plus upstream ANGLE, Skia and V8 backports and
 
 ### Fixed
 
+- **A tool call the reader opens mid-run keeps its place on screen.** The
+  transcript follows the live tail while the reader is still at the bottom, and
+  it read the resize caused by the reader's own expansion as new work arriving
+  there: the card they had just expanded was scrolled past, then again for every
+  step the run appended after it. The trace now hands the viewport over on the
+  reader's gesture a tool call, a reasoning block, a chain of thought, the
+  trace body itself so the viewport stays where they left it until they scroll
+  back to the bottom, which re-attaches the tail through the ordinary scroll
+  contract (`WorkingTrace.svelte`, `WorkingTraceChain.svelte`,
+  `ThreadView-load-older-messages.svelte.ts`).
 - **A working trace keeps counting while its turn is still running, so a stuck
   run can no longer read as minutes of work.** The header measured the turn's
   mirrored rows: once the harness closed a message and went quiet between steps,

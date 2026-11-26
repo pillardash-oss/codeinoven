@@ -93,6 +93,9 @@
       userOpened,
       userFolded
     )}
+  onReaderClaimsViewport={inGroupBubble
+    ? undefined
+    : () => board.loadOlderMessages.claimViewportForReading()}
   onOpenSubagent={board.unmirroredTraceStartTime.openSubagent}
   onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
   {formatOutput}
