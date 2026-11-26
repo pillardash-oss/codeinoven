@@ -31,15 +31,27 @@ and models answered the replayed request instead of the one the user had just
 sent. A recap costs a few hundred tokens and makes the agent ask for detail only
 when a decision needs it.
 
-| Piece                                                                         | Status      |
-| ----------------------------------------------------------------------------- | ----------- |
-| `formatHistoryBrief` — the short recap                                        | **Landed**  |
-| Fork notice naming the parent thread id                                       | **Landed**  |
-| `read_messages` paging (`before_id` / `nextBeforeId`) and tool evidence       | **Landed**  |
-| Indexes carry the conversation's words only (no tools, reasoning, sub-agents) | **Landed**  |
-| Checkpoint-scoped reads, page-level budget, checkpoints in the brief          | **Agreed**  |
-| App-owned context checkpoints replacing harness compaction                    | **Planned** |
-| Fork stops copying rows, lineage row instead                                  | **Planned** |
+| Piece                                                                         | Status     |
+| ----------------------------------------------------------------------------- | ---------- |
+| `formatHistoryBrief` — the short recap                                        | **Landed** |
+| Fork notice naming the parent thread id                                       | **Landed** |
+| `read_messages` paging (`before_id` / `nextBeforeId`) and tool evidence       | **Landed** |
+| Indexes carry the conversation's words only (no tools, reasoning, sub-agents) | **Landed** |
+| App-owned context checkpoints replacing harness compaction                    | **Landed** |
+| A checkpoint window readable by `checkpoint_id`                               | **Landed** |
+| A page bounded as a whole (60k characters)                                    | **Landed** |
+| Checkpoints named in the brief                                                | **Landed** |
+| Fork records lineage and copies no rows                                       | **Landed** |
+| Old rows reindexed to the narrowed corpus (schema v15)                        | **Landed** |
+
+----------------------------------------------------------------------------- | ----------- |
+| `formatHistoryBrief` — the short recap | **Landed** |
+| Fork notice naming the parent thread id | **Landed** |
+| `read_messages` paging (`before_id` / `nextBeforeId`) and tool evidence | **Landed** |
+| Indexes carry the conversation's words only (no tools, reasoning, sub-agents) | **Landed** |
+| Checkpoint-scoped reads, page-level budget, checkpoints in the brief | **Agreed** |
+| App-owned context checkpoints replacing harness compaction | **Planned** |
+| Fork stops copying rows, lineage row instead | **Planned** |
 
 ---
 
@@ -213,9 +225,11 @@ of the switch is already thrown:
 Checkpointing is an app-owned mechanism, so it does not depend on a harness
 having one: the brief, the read tools, the marker and the checkpoint rows are all
 the app's, and every driver already implements the two primitives it needs —
-`createSession` and a rebindable `threads.session_id`. What differs per harness
-is whether the app can switch off the harness's own compaction, which gives two
-tiers.
+`createSession` and a rebindable `threads.session_id`. The engine takes the
+checkpoint in `ensureSession`, before the turn is dispatched, so **every harness
+in the table below checkpoints on the same line**. What differs per harness is
+only whether the app can also switch off the harness's own compaction, which
+decides what that compaction is for.
 
 | Harness              | Its own compaction                                                                                                                                                       | What the app can do                                                                                                                                                 | Tier                           |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
@@ -230,16 +244,21 @@ tiers.
 
 Rules that hold for every row:
 
-- A checkpoint is recorded whichever tier produced it, including a harness
-  compaction that beat the app to the line. The marker and the session id are
-  facts about what happened, not a promise about who caused it.
-- The line is derived from the window the _harness_ reports, never from the model
-  catalog alone, or an app checkpoint on a small provider window arrives after the
-  harness has already compacted.
-- A tier-2 harness that compacts on its own does not corrupt anything: its
-  boundary becomes a checkpoint row, the mirror keeps every row, and the brief
-  still points at the same thread ids.
-- The emergency rebuild path stays in every tier. A session that cannot checkpoint
+- A checkpoint is recorded whichever path produced it, including a harness
+  compaction the app did not ask for. The marker and the session id are facts
+  about what happened, not a promise about who caused it.
+- The app checkpoints at the start of a turn, so a session it just checkpointed
+  begins the next turn well below the line. A harness trigger that shares the
+  line therefore only fires when a single turn is large enough to reach it on
+  its own, which is what makes it the emergency net rather than the primary path.
+- The line comes from the model's usable input budget (`COMPACT_LINE_SHARE` of
+  it), the same number a harness that accepts a trigger is given. A harness that
+  sees a smaller window than the catalog knows compacts earlier; its boundary is
+  recorded as a checkpoint like any other, so nothing is lost.
+- A harness that compacts on its own does not corrupt anything: its boundary
+  becomes a checkpoint row, the mirror keeps every row, and the brief still points
+  at the same thread ids.
+- The emergency rebuild path stays in every row. A session that cannot checkpoint
   in time must still be able to continue.
 
 ---
@@ -351,25 +370,29 @@ What must keep working, and does:
 
 ---
 
-## 8. What this requires of the reader
+## 8. What the reader does
 
-Landed: paging, tool evidence, and an index that carries only the conversation's
-words (section 3).
+Every piece below is in the build; this section is the contract the next change
+has to keep.
 
-Agreed, and the rest of the work:
+- **Read a window.** `read_messages` takes `checkpoint_id` and returns the
+  messages the session behind that checkpoint covered. The mirror rows carry no
+  session tag (the thread is the conversation), so a window is the time range
+  between the previous checkpoint and that one's boundary.
+- **Read a page.** One page is bounded per message _and_ as a whole
+  (`MAX_PAGE_CHARACTERS`, 60k): it keeps the newest messages that fit, says it
+  was trimmed, and still hands back the cursor that walks further back.
+- **Read the evidence.** Each message carries its tool calls with a redacted
+  result preview, which is what a resumed agent needs to know what was run and
+  changed. The indexes never carry it; the read path does.
+- **Name the windows.** A rebuilt session's brief lists the thread's checkpoints
+  — id, sequence, kind, harness, consumed tokens — because an agent that is not
+  told older windows exist has no reason to ask for one.
+- **Repair the index once.** Schema v15 rewrites `search_text` for rows written
+  before the corpus was narrowed, and bumps `updated_at` on the affected threads
+  so the embedding index re-embeds them (the thread's recency is `last_activity`
+  and does not move).
 
-- **Scope a read to a checkpoint or session.** `read_messages` currently reads
-  `session_id IS NULL` rows — the thread's shared mirror. It must also accept
-  `checkpoint_id` (or `session_id`) so "what did the window before this one do"
-  is one call, and so a subagent trace is reachable without leaking into every
-  ordinary read.
-- **A page-level budget.** Cap the characters a single page returns and say so
-  in the result, so the worst case in section 3 stops being possible.
-- **Checkpoints in the brief.** The brief names the thread; it should also name
-  the checkpoints (sequence, kind, when it closed, session id), or an agent has no
-  reason to believe older windows exist.
-- **Rebuild the old index rows.** Regenerate `search_text` for rows written before
-  reasoning and sub-agent cards were dropped, and re-embed the threads that change.
-
-The indexes stay text-only on purpose. Tool evidence is reachable through bounded
-reads, not through search, and search stays the thing a person would recognise.
+Two things stay out on purpose: tool evidence never enters the FTS or embedding
+indexes (search stays the thing a person would recognise), and a checkpoint never
+summarizes the conversation it closes — the rows stay in the mirror.
