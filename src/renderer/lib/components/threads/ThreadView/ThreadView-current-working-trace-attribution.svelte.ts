@@ -27,6 +27,7 @@ import {
 import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
 import { modelRuntime } from '$lib/stores/model-runtime.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
+import { openThreadById } from '$lib/threads/open-thread-by-id'
 import { logRendererDev } from '$lib/system/renderer-logger'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
@@ -466,14 +467,20 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
   }
 
   /** Leave a worker/auditor view for the coordinator that owns it. The child is
-   *  hidden from every thread list, so this control is the way back. */
+   *  hidden from every thread list, so this control is the way back.
+   *
+   * The coordinator is revealed by id rather than merely selected: selecting a
+   * thread the current view cannot render left the shell exactly where it was, so
+   * the button looked dead. The by-id route moves to the view that owns the
+   * thread's family first, and reports a lookup that fails instead of swallowing
+   * it.
+   */
   openCoordinatorParent(): void {
-    const parent = this.coordinatorParentThread
-    if (parent) {
-      workspaceState.openThread(parent, this.root.contextUsage.project)
-      return
-    }
-    if (this.coordinatorParentId) void this.openAssignmentTaskThread(this.coordinatorParentId)
+    const parentId = this.coordinatorParentThread?.id ?? this.coordinatorParentId
+    if (!parentId) return
+    const projectId =
+      this.coordinatorParentThread?.projectId ?? this.root.handleAgentEvent.thread.projectId
+    void openThreadById(projectId, parentId)
   }
 
   /**
