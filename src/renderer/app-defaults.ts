@@ -37,7 +37,7 @@ export const defaultConfig: AppConfig = {
   keybindings: {},
   preferredEditor: 'system',
   memory: { enabled: true, chatEnabled: true, entries: [] },
-  agentDefaults: { syncFromThreadChanges: false },
+  agentDefaults: {},
   auxiliaryAgents: {},
   design: { assignments: [] },
   modelProfiles: [],

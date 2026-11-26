@@ -57,8 +57,6 @@ export interface AgentModelSelection extends ModelRuntimeSettings {
   thinkingLevel?: ThinkingLevel
 }
 
-export type AgentRole = 'seniorEngineer' | 'worker' | 'auditor'
-
 /** Reply to a tool permission request. */
 export type PermissionReply = 'once' | 'always' | 'reject'
 

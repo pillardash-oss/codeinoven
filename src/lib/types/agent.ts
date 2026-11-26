@@ -26,28 +26,23 @@ export interface ThinkingPreset {
  */
 export type AuxiliaryAgentConfig = Record<string, AgentModelSelection>
 
-/** Optional global model defaults for Engineering's distinct agent roles. */
+/**
+ * Global model defaults for the one job that is not a thread.
+ *
+ * Engineering roles, pawn agents and audits used to be configured here too, and
+ * that was the bug: a saved role default silently outranked the model the
+ * conversation was actually using, so a worker spawned from a Codex thread could
+ * run on a Claude model nobody had chosen for it. Those roles now inherit the
+ * thread that created them   the same harness, account, model and Oven   and an
+ * agent that needs another target names it on the call instead. What is left
+ * here is the vision model, which describes images for text-only threads and is
+ * therefore not a thread of its own at all.
+ */
 export interface AgentDefaultsConfig {
-  seniorEngineer?: AgentModelSelection
-  worker?: AgentModelSelection
-  auditor?: AgentModelSelection
-  /**
-   * Model for pawn agents: background worker threads an agent spawns for itself
-   * with `cio_pawn_agent`. A pawn answers only to the agent that spawned it, the
-   * user never prompts it, and it is never tied to one harness or account: the
-   * user picks any available combination here.
-   *
-   * User-owned. Only the Agents settings page sets or clears it (the agent-facing
-   * `config:update` channel is stripped of this field), and an agent that finds no
-   * pawn default spawns one on its own model rather than writing this value.
-   */
-  pawn?: AgentModelSelection
   /** Vision model used to describe images for text-only models. */
   imageDescriptor?: AgentModelSelection
   /** Fallback vision model tried automatically when the primary image descriptor fails. */
   imageDescriptorFallback?: AgentModelSelection
-  /** When enabled, role changes made inside a thread replace the matching global default. */
-  syncFromThreadChanges: boolean
 }
 
 /** Per-thread agent configuration. Active-thread settings seed siblings; last-used is the fallback. */

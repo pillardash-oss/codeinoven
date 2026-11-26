@@ -914,7 +914,6 @@
               onSave={(content) => void board.submitSpecDecision.saveAssignment(content)}
               onApprove={(content) => void board.submitSpecDecision.approveAssignment(content)}
               onOpenFullscreen={board.submitSpecDecision.openAssignmentStudio}
-              onWorkerModelChange={(selection) => board.sources.syncAgentRole('worker', selection)}
               onSeniorModelChange={board.sources.updateAssignmentSeniorModel}
               onTaskScopeChange={board.submitSpecDecision.updateAssignmentTaskScope}
               onWorkerScopeChange={board.submitSpecDecision.updateAssignmentWorkerScope}

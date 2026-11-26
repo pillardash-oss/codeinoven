@@ -88,6 +88,13 @@ export interface NewThreadCheckpoint {
   parentThreadId?: string
   label?: string
   createdAt?: number
+  /**
+   * The boundary the row was known at creation, for a row that is never closed:
+   * a fork's lineage row names the parent message the fork was cut at and has no
+   * session ending to finalize, so it must not be written through `close`.
+   */
+  boundaryMessageId?: string
+  boundaryCreatedAt?: number
 }
 
 /** What finalizing a checkpoint adds: how it ended and what it had consumed. */
@@ -130,11 +137,12 @@ export class ThreadCheckpointRepo {
       .prepare(
         `INSERT INTO thread_checkpoints (
            id, thread_id, sequence, kind, harness_id, provider_id, model_id, account_id,
-           session_id, project_path, parent_thread_id, label, created_at
+           session_id, project_path, parent_thread_id, label, created_at,
+           boundary_message_id, boundary_created_at
          ) VALUES (
            ?, ?,
            (SELECT COALESCE(MAX(sequence), 0) + 1 FROM thread_checkpoints WHERE thread_id = ?),
-           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
          )
          RETURNING sequence`
       )
@@ -151,7 +159,9 @@ export class ThreadCheckpointRepo {
         input.projectPath ?? '',
         input.parentThreadId ?? null,
         input.label ?? null,
-        createdAt
+        createdAt,
+        input.boundaryMessageId ?? null,
+        input.boundaryCreatedAt ?? null
       ) as { sequence: number } | undefined
     return {
       id,
@@ -166,7 +176,11 @@ export class ThreadCheckpointRepo {
       ...(input.modelId ? { modelId: input.modelId } : {}),
       ...(input.accountId ? { accountId: input.accountId } : {}),
       ...(input.parentThreadId ? { parentThreadId: input.parentThreadId } : {}),
-      ...(input.label ? { label: input.label } : {})
+      ...(input.label ? { label: input.label } : {}),
+      ...(input.boundaryMessageId ? { boundaryMessageId: input.boundaryMessageId } : {}),
+      ...(input.boundaryCreatedAt !== undefined
+        ? { boundaryCreatedAt: input.boundaryCreatedAt }
+        : {})
     }
   }
 

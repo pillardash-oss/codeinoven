@@ -156,8 +156,8 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'audits',
     group: 'agents',
     title: 'Agents',
-    description: 'Agent names, audits, and per-agent behavior.',
-    keywords: ['workers', 'audit'],
+    description: 'Worker names and the vision model that describes images.',
+    keywords: ['workers', 'audit', 'vision', 'image descriptor'],
     icon: CioTeam
   },
   {

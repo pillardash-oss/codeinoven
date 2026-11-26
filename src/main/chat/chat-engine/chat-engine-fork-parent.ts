@@ -15,18 +15,17 @@ export interface ForkNoticeQuery {
 /**
  * The note the app prepends to the first turn of a forked thread.
  *
- * A fork copies the parent's transcript rows into the new thread, so this
- * thread's own history holds the same work up to the fork point. The agent still
- * has to be told that the copy is a copy and where the rest lives: without this
- * line it answers from the recap alone, and its first reply reads as if the work
- * started there. Naming the parent thread lets the agent go and read the rest
- * when the recap or its own history is not enough, and tells it what to do when
- * that thread is gone.
+ * A fork keeps no copy of the parent's transcript: the parent thread holds the
+ * history up to the fork point, and this thread starts empty. The agent still has
+ * to be told that, or it answers from the recap alone and its first reply reads
+ * as if the work started here. Naming the parent thread lets the agent go and
+ * read the rest when the recap or its own history is not enough, and tells it
+ * what to do when that thread is gone.
  */
 export function forkParentNotice(parentThreadId: string): string {
   return [
-    `This thread was forked from thread ${parentThreadId}: the work it held before the fork was copied into this thread, so both threads' histories are in the app database.`,
-    `Read either of them yourself instead of guessing or asking the user to repeat it: ${UTILITY_DIAGNOSTICS_TOOL_NAME} with action read_messages and thread_id "${parentThreadId}" for the thread this came from, or this thread's own id for what happened here since.`,
+    `This thread was forked from thread ${parentThreadId}: the work done before the fork lives in that thread, not in this one.`,
+    `Read it yourself instead of guessing or asking the user to repeat it: ${UTILITY_DIAGNOSTICS_TOOL_NAME} with action read_messages and thread_id "${parentThreadId}" for the thread this came from, or this thread's own id for what happened here since.`,
     'If that thread no longer exists, work with the context you already have instead of asking the user to repeat it.'
   ].join('\n')
 }

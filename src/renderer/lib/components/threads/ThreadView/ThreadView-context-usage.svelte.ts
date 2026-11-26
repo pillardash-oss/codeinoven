@@ -852,11 +852,9 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
         loopMode: false,
         loopAuditor: undefined
       })
-      this.root.sources.syncAgentRole('auditor', auditor)
       return
     }
     this.updateSettings({ ...this.root.loadOlderMessages.settings, loopAuditor: auditor })
-    this.root.sources.syncAgentRole('auditor', auditor)
   }
 
   updateSettings(updated: ThreadSettings): void {
@@ -933,16 +931,6 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       // the user to type the continuation by hand. The card keeps attributing
       // the issue to the harness that reported it (`statusCardProviderName`),
       // while its picker mirrors the newly selected configuration.
-    }
-    if (seniorModelChanged && this.root.submitBrainstormDecision.engineeringOn) {
-      this.root.sources.syncAgentRole('seniorEngineer', {
-        harnessId: normalized.harnessId,
-        providerId: normalized.providerId,
-        modelId: normalized.modelId,
-        thinkingLevel: normalized.thinkingLevel,
-        inferenceMode: normalized.inferenceMode,
-        contextWindow: normalized.contextWindow
-      })
     }
     // Persist immediately so the choice survives navigation away from this view.
     this.root.sources.commitSettings(normalized)

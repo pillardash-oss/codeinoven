@@ -430,10 +430,8 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
    * the automatic capacity sweep away from it all belong to this one place.
    */
   ipcMain.handle('assistant:createDonConversation', async () => {
-    const config = await ctx.storage.getConfig().catch(() => null)
     const don = assistantManager.getAssistant(DON_ASSISTANT_ID)
-    const fallback =
-      assistantPrimaryModel(don?.agents) ?? config?.agentDefaults?.seniorEngineer ?? null
+    const fallback = assistantPrimaryModel(don?.agents) ?? null
     const thread = await createDonConversation({ threadManager: ctx.threadManager, fallback })
     broadcastThreadUpdate(thread)
     return thread

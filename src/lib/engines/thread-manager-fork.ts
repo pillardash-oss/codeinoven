@@ -4,7 +4,9 @@ import { getConfigRoot } from '../utils'
 import { messageId as createMessageId } from '../id'
 import { featureSlugFromTitle } from '../project-artifacts'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
+import { ThreadCheckpointRepo } from '../../main/database/repositories/thread-checkpoint-repo'
 import type { Database } from '../../main/database/database'
+import { DEFAULT_HARNESS } from '../harness-default'
 import { EngineeringLifecycleEngine } from './engineering-lifecycle-engine'
 import { DON_ASSISTANT_ID } from '../types/assistant'
 import { Logger } from '../../main/system/logger'
@@ -71,14 +73,16 @@ export interface ForkThreadInput {
 /**
  * Where a fork came from, as recorded next to the fork's own artifacts.
  *
- * The fork writes this once and never touches it again, so a reader can cache it
- * for the life of the process: a thread id is never reused, and a missing file
- * stays missing.
+ * The authoritative record of a fork's lineage is the `thread_checkpoints` row
+ * of kind `fork`; this file is a cache of the same fact for the paths that read
+ * it off the fork's branch directory. The fork writes it once and never touches
+ * it again, so a reader can cache it for the life of the process: a thread id is
+ * never reused, and a missing file stays missing.
  */
 export interface ForkOrigin {
   /** The thread this one was forked from. */
   parentThreadId: string
-  /** Epoch ms the fork was made. Every copied message is older than this. */
+  /** Epoch ms the fork was made. Everything either thread did before it is older. */
   forkedAt: number
 }
 
@@ -120,9 +124,23 @@ export async function readForkOrigin(
 }
 
 /**
+ * The one-line label a fork's lineage row carries: the thread it came from, named
+ * so a reader of the checkpoint list never has to resolve an id to know it.
+ */
+function forkLineageLabel(parentTitle: string): string {
+  const name = parentTitle.trim() || 'Untitled thread'
+  const label = `Forked from ${name}`
+  return label.length > 120 ? `${label.slice(0, 119)}…` : label
+}
+
+/**
  * Forking a conversation into a new thread: resolve the fork boundary from the
- * parent transcript, create the destination thread, copy the bounded history,
- * and link the fork to its parent through branch metadata.
+ * parent transcript, create the destination thread, and record the lineage.
+ *
+ * A fork carries no copy of the parent's messages. The parent thread stays the
+ * one place that history lives, and the fork's `thread_checkpoints` row of kind
+ * `fork` names it (with the message the fork was cut at), so the agent reads the
+ * parent through the read tools and the composer can draw the fork banner.
  */
 export class ThreadForkService {
   constructor(
@@ -145,8 +163,9 @@ export class ThreadForkService {
       const destination = this.projectRepo.get(destinationProjectId)
       if (!destination) throw new Error(`Project not found: ${destinationProjectId}`)
     }
-    // Resolve the upper bound before creating a destination. Only metadata crosses
-    // the worker boundary; transcript JSON stays in SQLite throughout the copy.
+    // Resolve the fork point before creating a destination: an unknown or stale
+    // boundary has to fail while no fork exists yet. Only the boundary's id and
+    // timestamp are read; the parent's transcript itself is never touched.
     const upper = await this.db.queryViaWorker(
       `SELECT id, created_at FROM agent_messages WHERE thread_id = ?
        AND session_id IS NULL ${messageId ? 'AND id = ?' : ''}
@@ -186,32 +205,12 @@ export class ThreadForkService {
         throw new Error(`Cannot fork from message ${messageId}: this turn has not been saved yet`)
       }
     }
-    const boundary = cutoff
-      ? await this.db.queryViaWorker(
-          `SELECT CASE WHEN json_extract(p.value, '$.firstKeptCreatedAt') IS NOT NULL THEN '' ELSE m.id END AS id,
-         min(m.created_at, coalesce((SELECT max(k.created_at) FROM agent_messages k
-           WHERE k.thread_id = m.thread_id AND k.session_id IS NULL
-             AND k.created_at <= json_extract(p.value, '$.firstKeptCreatedAt')),
-           json_extract(p.value, '$.firstKeptCreatedAt'), m.created_at)) AS created_at
-       FROM agent_messages m, json_each(m.parts) p
-       WHERE m.thread_id = ? AND m.session_id IS NULL
-       AND (m.created_at, m.id) <= (?, ?)
-       AND (
-         (json_extract(p.value, '$.type') = 'compaction-summary'
-           AND length(trim(json_extract(p.value, '$.text'))) > 0)
-         OR (json_extract(p.value, '$.type') = 'compaction'
-           AND length(trim(json_extract(p.value, '$.summary'))) > 0
-           AND (json_extract(p.value, '$.firstKeptEntryId') IS NULL
-             OR json_extract(p.value, '$.firstKeptCreatedAt') IS NOT NULL)))
-       ORDER BY m.created_at DESC, m.id DESC LIMIT 1`,
-          [threadId, cutoff.created_at, cutoff.id],
-          1
-        )
-      : undefined
-    if (boundary && !boundary.ok)
-      throw new Error(boundary.error ?? 'Cannot read compaction boundary')
-    const lower = boundary?.rows[0]
-
+    // The cutoff is the last parent message the fork was cut at. Both values are
+    // nullable in storage, so an unreadable boundary yields none rather than a
+    // row whose marker is a lie.
+    const boundaryMessageId = typeof cutoff?.['id'] === 'string' ? cutoff['id'] : undefined
+    const boundaryCreatedAt =
+      typeof cutoff?.['created_at'] === 'number' ? cutoff['created_at'] : undefined
     const destinationPath = this.projectRepo.get(destinationProjectId)?.path ?? ''
     const forkScopeBucketId = destinationProjectId === projectId ? parent.scopeBucketId : undefined
     /**
@@ -284,6 +283,39 @@ export class ThreadForkService {
       ...assistantFork,
       ...groupFork
     })
+    // The fork's lineage is written here, before anything else touches the new
+    // thread: a fork that existed without it would read as a conversation whose
+    // history came from nowhere. This row is the authoritative record   every
+    // reader (the composer's fork banner, the session brief, the diagnostics
+    // reader) resolves the parent from it, so the fork needs no copy of the
+    // parent's messages at all.
+    //
+    // The boundary is the message the fork was cut at when the caller named one,
+    // which is what lets a reader tell how much of the parent's history the fork
+    // was made over without re-deriving it.
+    const forkedAt = Date.now()
+    new ThreadCheckpointRepo(this.db).create({
+      threadId: forked.id,
+      kind: 'fork',
+      // The fork's settings travel with it from the parent, and the harness those
+      // settings name is the one that owns the parent's provider, so reading the
+      // parent's harness when the fork's own row carries none keeps the lineage
+      // row from disagreeing with the conversation it describes.
+      harnessId: forked.settings?.harnessId ?? parent.settings?.harnessId ?? DEFAULT_HARNESS,
+      // `session_id` is NOT NULL, and this row describes a thread that has not run
+      // yet. With no session of its own, the session it names is the parent's:
+      // that is the session whose history this fork continues. A fork cut from a
+      // parent that never started one has no session to name at all, so it
+      // carries its own thread id   unique by construction, and never something
+      // a harness could later hand out as a session id.
+      sessionId: forked.sessionId ?? parent.sessionId ?? forked.id,
+      projectPath: destinationPath,
+      parentThreadId: threadId,
+      label: forkLineageLabel(parent.title),
+      createdAt: forkedAt,
+      ...(boundaryMessageId ? { boundaryMessageId } : {}),
+      ...(boundaryCreatedAt !== undefined ? { boundaryCreatedAt } : {})
+    })
     // The orchestrator's conversations are pinned so the automatic capacity
     // sweep can never take the front door, and a fork of one is another of the
     // same kind: it has to survive the next sweep exactly like its parent.
@@ -312,68 +344,23 @@ export class ThreadForkService {
         // Lifecycle inheritance is cosmetic   never fail the fork on it.
       }
     }
-    if (cutoff) {
-      let after: Record<string, unknown> | undefined
-      for (;;) {
-        const page = await this.db.queryViaWorker(
-          `SELECT id, created_at FROM agent_messages WHERE thread_id = ?
-           AND session_id IS NULL AND visibility IN ('conversation', 'working_trace')
-           AND (created_at, id) <= (?, ?)
-           ${lower ? 'AND (created_at, id) >= (?, ?)' : ''}
-           ${after ? 'AND (created_at, id) > (?, ?)' : ''}
-           ORDER BY created_at, id LIMIT 16`,
-          [
-            threadId,
-            cutoff.created_at,
-            cutoff.id,
-            ...(lower ? [lower.created_at, lower.id] : []),
-            ...(after ? [after.created_at, after.id] : [])
-          ],
-          16
-        )
-        if (!page.ok) throw new Error(page.error ?? 'Cannot read fork page')
-        if (page.rows.length === 0) break
-        const statements = page.rows.map((row) => {
-          const id = createMessageId()
-          return {
-            sql: `INSERT INTO agent_messages (
-              id, thread_id, role, origin, visibility, parts, search_text,
-              model_id, provider_id, harness_id, thinking_level,
-              references_json, project_references_json, created_at, completed_at,
-              generation_ms, author
-            ) SELECT ?, ?, role, origin, visibility,
-              (SELECT json_group_array(json(CASE WHEN json_type(value, '$.messageID') IS NULL
-                THEN value ELSE json_set(value, '$.messageID', ?, '$.id', ? || ':' || json_extract(value, '$.id')) END))
-                FROM json_each(parts)), search_text,
-              model_id, provider_id, harness_id, thinking_level,
-              references_json, project_references_json, created_at, completed_at,
-              generation_ms,
-              author
-              FROM agent_messages WHERE thread_id = ? AND id = ?`,
-            params: [id, forked.id, id, id, threadId, row.id]
-          }
-        })
-        const outcome = await this.db.transactionViaWorker(statements)
-        if (!outcome.ok) throw new Error(outcome.error ?? 'Cannot copy fork page')
-        after = page.rows[page.rows.length - 1]
-        await new Promise<void>((resolve) => setImmediate(resolve))
-      }
-    }
-
-    // A fork carries the parent's history, so it is a completed thread, not an
-    // empty "New Thread" draft. Keep it out of the todo slice and out of the
-    // renderer's empty-new-thread reuse logic; it becomes active again only
-    // when the user actually writes on it.
+    // A fork holds the parent's history by reference, so it is a completed
+    // thread, not an empty "New Thread" draft. Keep it out of the todo slice and
+    // out of the renderer's empty-new-thread reuse logic; it becomes active again
+    // only when the user actually writes on it.
     const completed = await this.host.setStatus(destinationProjectId, forked.id, 'completed', {
       read: true
     })
 
-    // Link fork to parent via branch metadata
+    // Link fork to parent via branch metadata. This is now a cache of the
+    // lineage the checkpoint row already holds: the renderer reads it through
+    // `readForkOrigin` without a database round trip, and a missing or stale file
+    // costs the banner, never the fact.
     const branchMeta = {
       parentThreadId: threadId,
       checkpointId: checkpointId ?? null,
       messageId: messageId ?? null,
-      forkedAt: Date.now()
+      forkedAt
     }
 
     const branchDir = join(

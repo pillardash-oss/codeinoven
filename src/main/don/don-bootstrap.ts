@@ -7,9 +7,9 @@ import {
 } from '../../lib/don-assistant'
 import { DON_ASSISTANT_ID } from '../../lib/types/assistant'
 import type { AgentModelSelection } from '../../lib/types/common'
+import { assistantPrimaryModel } from '../../lib/assistant-agents'
 import type { AssistantManager } from '../../lib/engines/assistant-manager'
 import type { ThreadManager } from '../../lib/engines/thread-manager'
-import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
 
 /** The reserved thread id Don's one conversation is written under. */
@@ -60,15 +60,17 @@ export interface DonBootstrapResult {
 export async function ensureDonOrchestrator(deps: {
   assistantManager: AssistantManager
   threadManager: ThreadManager
-  storage: StorageEngine
 }): Promise<DonBootstrapResult> {
-  const { assistantManager, threadManager, storage } = deps
+  const { assistantManager, threadManager } = deps
   try {
-    const config = await storage.getConfig()
-    // Don inherits the model the user already works on, so it can answer the first
-    // time it is opened instead of arriving incomplete. The panel's Agents tab
-    // changes it later like any other assistant.
-    const primary: AgentModelSelection | undefined = config.agentDefaults?.seniorEngineer
+    // Don's own assistant record owns his model. A global Sr. Engineer default used
+    // to override it, which made Don run on a model the user never chose for him.
+    // On a fresh install there is no record yet, so he inherits the model of the
+    // conversation the user last worked in, which is what the app itself treats as
+    // "the model you are using" when a new thread starts.
+    const primary: AgentModelSelection | undefined =
+      assistantPrimaryModel(assistantManager.getAssistant(DON_ASSISTANT_ID)?.agents) ??
+      (await mostRecentThreadModel(threadManager))
     const seed = donAssistantSeed(primary ? { primary, fallbacks: [] } : undefined)
     const { created: assistantCreated } = assistantManager.ensureBuiltinAssistant(seed)
     // The instructions moved from a dedicated delegate tool to the unified
@@ -167,4 +169,33 @@ export async function ensureDonOrchestrator(deps: {
 /** A copy, so a caller can never mutate the settings a caller handed over. */
 function settingsFor(settings: ThreadSettings): ThreadSettings {
   return { ...settings }
+}
+
+/**
+ * The model of the conversation the user last worked in.
+ *
+ * Don has no model of his own until something assigns one, and on a fresh install
+ * that would leave his first question unaskable. The most recently active thread
+ * that has run settings is the same mind the user is already talking to, so it is
+ * the honest answer; an install with no threads at all keeps the assistant's own
+ * built-in default.
+ */
+async function mostRecentThreadModel(
+  threadManager: ThreadManager
+): Promise<AgentModelSelection | undefined> {
+  try {
+    const threads = await threadManager.listAllThreads({ limit: 20, order: 'activity' })
+    const settings = threads.find((thread) => thread.settings?.harnessId)?.settings
+    if (!settings) return undefined
+    return {
+      harnessId: settings.harnessId,
+      providerId: settings.providerId,
+      modelId: settings.modelId,
+      ...(settings.accountId ? { accountId: settings.accountId } : {}),
+      ...(settings.thinkingLevel ? { thinkingLevel: settings.thinkingLevel } : {})
+    }
+  } catch (error) {
+    Logger.dev('Don could not inherit a model from recent threads:', error)
+    return undefined
+  }
 }

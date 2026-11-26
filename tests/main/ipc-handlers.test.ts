@@ -128,7 +128,7 @@ const defaultConfig: AppConfig = {
   prototypeCdnAllowlist: [],
   inAppNotificationSound: { success: true, issue: true },
   memory: { enabled: true, chatEnabled: true, entries: [] },
-  agentDefaults: { syncFromThreadChanges: false },
+  agentDefaults: {},
   auxiliaryAgents: {},
   design: { assignments: [] },
   modelProfiles: [],
@@ -198,12 +198,6 @@ describe('validateAppConfigPatch', () => {
         threadLimit: 120,
         preferredEditor: 'ghostty',
         agentDefaults: {
-          syncFromThreadChanges: true,
-          seniorEngineer: {
-            harnessId: 'opencode',
-            providerId: 'openai',
-            modelId: 'gpt-5.6'
-          },
           imageDescriptor: {
             harnessId: 'opencode',
             providerId: 'anthropic',
@@ -243,12 +237,6 @@ describe('validateAppConfigPatch', () => {
       threadLimit: 120,
       preferredEditor: 'ghostty',
       agentDefaults: {
-        syncFromThreadChanges: true,
-        seniorEngineer: {
-          harnessId: 'opencode',
-          providerId: 'openai',
-          modelId: 'gpt-5.6'
-        },
         imageDescriptor: {
           harnessId: 'opencode',
           providerId: 'anthropic',
@@ -315,8 +303,7 @@ describe('validateAppConfigPatch', () => {
     { maxDiffLines: 5001 },
     { maxDiffLines: '100' },
     { preferredEditor: 'unknown-editor' },
-    { agentDefaults: { syncFromThreadChanges: 'yes' } },
-    { agentDefaults: { syncFromThreadChanges: true, imageDescriptor: { harnessId: 'opencode' } } },
+    { agentDefaults: { imageDescriptor: { harnessId: 'opencode' } } },
     { imageDescriptorAskAgain: 'yes' },
     { imageDescriptorAskAgain: 1 },
     { browserAllowSiteKeymapOverride: 'yes' },
@@ -458,10 +445,9 @@ describe('config IPC', () => {
 
     const getHandler = handlers.get('config:get')
     const updateHandler = handlers.get('config:update')
-    const syncAgentRoleHandler = handlers.get('config:syncAgentRole')
     expect(getHandler).toBeDefined()
     expect(updateHandler).toBeDefined()
-    expect(syncAgentRoleHandler).toBeDefined()
+    expect(handlers.get('config:syncAgentRole')).toBeUndefined()
 
     await expect(getHandler?.(trustedEvent())).resolves.toEqual({
       ...defaultConfig,
@@ -480,30 +466,21 @@ describe('config IPC', () => {
       lastFolderDialogPath: '/projects'
     })
 
-    getConfig.mockResolvedValue({
-      ...defaultConfig,
-      agentDefaults: { syncFromThreadChanges: true }
-    })
+    // A config written by an older build still carries the retired role defaults.
+    // An update that hands them back is accepted and they are dropped, so the
+    // install can still save settings instead of being locked out by its own file.
     await expect(
-      syncAgentRoleHandler?.(trustedEvent(), 'worker', {
-        harnessId: 'opencode',
-        providerId: 'openai',
-        modelId: 'gpt-5.6'
-      })
-    ).resolves.toMatchObject({
-      agentDefaults: {
-        syncFromThreadChanges: true,
-        worker: { harnessId: 'opencode', providerId: 'openai', modelId: 'gpt-5.6' }
-      }
-    })
-    expect(saveConfig).toHaveBeenLastCalledWith(
-      expect.objectContaining({
+      updateHandler?.(trustedEvent(), {
         agentDefaults: {
-          syncFromThreadChanges: true,
-          worker: { harnessId: 'opencode', providerId: 'openai', modelId: 'gpt-5.6' }
+          seniorEngineer: { harnessId: 'opencode', providerId: 'openai', modelId: 'gpt-5.6' },
+          worker: { harnessId: 'opencode', providerId: 'openai', modelId: 'gpt-5.6' },
+          auditor: { harnessId: 'opencode', providerId: 'openai', modelId: 'gpt-5.6' },
+          pawn: { harnessId: 'opencode', providerId: 'openai', modelId: 'gpt-5.6' },
+          syncFromThreadChanges: true
         }
       })
-    )
+    ).resolves.toMatchObject({ agentDefaults: {} })
+    expect(saveConfig).toHaveBeenLastCalledWith(expect.objectContaining({ agentDefaults: {} }))
   })
 
   it('rejects invalid patches before storage is written', async () => {

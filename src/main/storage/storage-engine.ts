@@ -111,7 +111,7 @@ const DEFAULT_CONFIG: AppConfig = {
   ideLanguageServers: DEFAULT_IDE_LANGUAGE_SERVERS,
   ideFormatOnSave: true,
   memory: { enabled: true, chatEnabled: true, entries: [] },
-  agentDefaults: { syncFromThreadChanges: false },
+  agentDefaults: {},
   auxiliaryAgents: {},
   design: { assignments: [] },
   modelProfiles: [],

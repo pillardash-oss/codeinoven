@@ -34,17 +34,15 @@ export interface AppControlExecutor {
 /**
  * Config fields the user owns alone, stripped from every agent-driven patch.
  *
- * `agentDefaults.pawn` picks the model a pawn agent runs on. An agent spawns a
- * pawn on its own model when the value is unset, so it never has a reason to
- * write it, and a default that an agent could repoint would stop meaning what
- * the user chose. The settings page writes it through the same
- * `config:update` channel, so the field is only removed here, at the
- * agent-facing door.
+ * `agentDefaults.imageDescriptor` picks the vision model that describes images for
+ * a text-only thread. An agent that wanted a different description can read the
+ * image itself; nothing it is asked to do requires repointing the model the whole
+ * app uses, so it never has a reason to write it.
  *
- * `keybindings` is the user's keyboard, and a shortcut an agent could remap is
- * a shortcut that stopped doing what the person at the keyboard expects. The
- * Keymap settings page saves it through this same channel, so it is removed at
- * the agent-facing door as well.
+ * `keybindings` is the user's keyboard, and a shortcut an agent could remap is a
+ * shortcut that stopped doing what the person at the keyboard expects. The Keymap
+ * settings page saves it through this same channel, so it is removed at the
+ * agent-facing door as well.
  */
 function withoutUserOwnedConfig(patch: unknown): unknown {
   if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) return patch
@@ -54,8 +52,9 @@ function withoutUserOwnedConfig(patch: unknown): unknown {
   if (typeof agentDefaults !== 'object' || agentDefaults === null || Array.isArray(agentDefaults))
     return candidate
   const defaults = { ...(agentDefaults as Record<string, unknown>) }
-  if (!('pawn' in defaults)) return candidate
-  delete defaults['pawn']
+  const owned = ['imageDescriptor', 'imageDescriptorFallback'].filter((field) => field in defaults)
+  if (owned.length === 0) return candidate
+  for (const field of owned) delete defaults[field]
   return { ...candidate, agentDefaults: defaults }
 }
 

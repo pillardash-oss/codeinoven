@@ -11,7 +11,12 @@ vi.mock('electron', () => ({
 import { ChatEngineCheckpoints } from '../../../src/main/chat/chat-engine/chat-engine-checkpoints'
 import type { ChatEngine } from '../../../src/main/chat/chat-engine'
 import type { HarnessDriver } from '../../../src/main/drivers/driver.interface'
-import type { ThreadCheckpoint, ThreadCheckpointKind, ThreadSettings } from '../../../src/lib/types'
+import type {
+  ThreadCheckpoint,
+  ThreadCheckpointKind,
+  ThreadSettings,
+  Thread
+} from '../../../src/lib/types'
 
 /**
  * The checkpoint is the app's replacement for harness compaction: the session is
@@ -185,10 +190,11 @@ describe('ChatEngineCheckpoints', () => {
 
   it('keeps the turn on the session it has when the successor cannot start', async () => {
     const stub = stubHost({ used: 90_000, createSessionFails: true })
-    stub.host.threadManager.getThread = async () => ({
-      id: 'thread-1',
-      title: 'Checkpoint thread'
-    })
+    stub.host.threadManager.getThread = async () =>
+      ({
+        id: 'thread-1',
+        title: 'Checkpoint thread'
+      }) as unknown as Thread
     const unit = new ChatEngineCheckpoints(stub.host)
     const driver = {
       id: 'pi',

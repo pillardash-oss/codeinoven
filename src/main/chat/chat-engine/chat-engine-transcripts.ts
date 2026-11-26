@@ -6,7 +6,6 @@ import {
   SearchSummaryUnavailableError,
   validateSearchSummary
 } from '../../search/thread-search-summary'
-import { broadcastThreadUpdate } from '../thread-events'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import { instanceRegistry } from '../../system/instance-registry'
 import type { AgentEvent, AgentMessage, ThreadSettings } from '../../../lib/types'
@@ -287,9 +286,8 @@ export class ChatEngineTranscripts {
         : mirrored
     if (mirror.length === 0) return ''
     // `mirror` is non-empty real prior history at this point. If the format
-    // step still can't render it into text, that content would otherwise be
-    // silently lost from the conversation   rescue it into a fresh thread
-    // rather than let the turn proceed with no memory of it.
+    // step still can't render it into text, that content is still in the mirror
+    // under this thread's id; say so rather than let the turn proceed silently.
     const emitRecap = async (): Promise<string> => {
       const recap = await brief(mirror)
       if (!recap) {
@@ -348,10 +346,14 @@ export class ChatEngineTranscripts {
   }
 
   /**
-   * Safety net for history that could not be carried forward as a recap
-   * (e.g. a harness switch where the durable mirror still failed to render).
-   * Forks the thread's full transcript into a new thread so the conversation
-   * is never silently lost, and notifies the user where to find it.
+   * Safety net for history that could not be rendered into a recap (a harness
+   * switch where the durable mirror produced no text).
+   *
+   * There is nothing to copy anywhere: the conversation is in the mirror under
+   * this thread's id, which is exactly what the next session's brief names. A
+   * fork used to duplicate it, and that is no longer what a fork does, so the
+   * honest rescue is to say where the history lives instead of minting a thread
+   * that would hold nothing.
    */
   async rescueUnreplayableHistory(
     projectId: string,
@@ -361,15 +363,17 @@ export class ChatEngineTranscripts {
     try {
       const thread = await this.host.threadManager.getThread(projectId, threadId)
       if (!thread) return
-      const rescueTitle = `${thread.title || 'Untitled'} (recovered)`
-      const forked = await this.host.threadManager.forkThread(projectId, threadId, rescueTitle)
-      broadcastThreadUpdate(forked)
+      Logger.error('Prior history could not be rendered into a recap; the thread keeps it', {
+        projectId,
+        threadId,
+        driverId
+      })
       broadcastToast(
-        `Prior context on "${thread.title || 'this thread'}" couldn't carry over to ${driverId}. Saved the full conversation to a new thread: "${rescueTitle}".`,
+        `Prior context on "${thread.title || 'this thread'}" couldn't be carried over to ${driverId} as a recap. The full conversation is still in this thread, readable by its id.`,
         'info'
       )
     } catch (error) {
-      Logger.error('History rescue fork failed', {
+      Logger.error('History rescue could not report where the thread keeps its history', {
         projectId,
         threadId,
         error: rawErrorMessage(error)

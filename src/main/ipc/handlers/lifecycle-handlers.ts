@@ -13,7 +13,6 @@ import type { IpcHandlerContext } from './context'
 export function registerEngineeringLifecycleHandlers(ctx: IpcHandlerContext): void {
   const {
     chatEngine,
-    storage,
     threadCreation,
     threadManager,
     engineeringLifecycleEngine,
@@ -29,14 +28,13 @@ export function registerEngineeringLifecycleHandlers(ctx: IpcHandlerContext): vo
   async function applyEngineeringDefaults(projectId: string, threadId: string): Promise<void> {
     const thread = await threadManager.getThread(projectId, threadId)
     if (!thread?.settings) return
-    const defaults = (await storage.getConfig()).agentDefaults
     const baseSettings = { ...thread.settings }
+    // The Sr. Engineer and the auditor run on this thread's own model, so the one
+    // thing a first Engineering selection changes is the audit slot it stops
+    // inheriting: a thread that was auditing with an explicit model keeps nothing
+    // stale when the stage changes.
     delete baseSettings.loopAuditor
-    await threadManager.updateSettings(projectId, threadId, {
-      ...baseSettings,
-      ...(defaults.seniorEngineer ?? {}),
-      ...(defaults.auditor ? { loopAuditor: defaults.auditor } : {})
-    })
+    await threadManager.updateSettings(projectId, threadId, baseSettings)
   }
 
   /**

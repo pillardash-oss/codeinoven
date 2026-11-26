@@ -1292,10 +1292,9 @@ export class ChatEngineAudit {
   }
 
   async loopAuditSettings(settings: ThreadSettings): Promise<ThreadSettings> {
-    const configuredAuditor = (await this.host.storage.getConfig()).agentDefaults.auditor
     return {
       ...settings,
-      ...(settings.loopAuditor ?? configuredAuditor ?? {}),
+      ...(settings.loopAuditor ?? {}),
       permissionLevel: 'auto_review',
       loopMode: false,
       loopAuditor: undefined

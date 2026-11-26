@@ -28,7 +28,6 @@ import type {
   AgentPart,
   AgentDefaultsConfig,
   AgentModelSelection,
-  AgentRole,
   AgentQuestion,
   SpecGenerationTraceUpdate,
   AssignmentGenerationTraceUpdate,
@@ -89,7 +88,7 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
     return this.root.props.chatMode ? normalizeChatSettings(next) : next
   }
 
-  agentDefaults = $state<AgentDefaultsConfig>({ syncFromThreadChanges: false })
+  agentDefaults = $state<AgentDefaultsConfig>({})
 
   /** Commit to the model memory of this conversation's family, so a model picked
    *  for a chat or an assistant task never changes what another kind starts on. */
@@ -505,25 +504,22 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
         loopMode: false
       }
     }
-    return this.agentDefaults.auditor
-      ? { ...this.root.loadOlderMessages.settings, ...this.agentDefaults.auditor }
-      : { ...this.root.loadOlderMessages.settings }
+    return { ...this.root.loadOlderMessages.settings }
   }
 
   /**
    * The model a worker dispatched from this thread right now would run on.
    *
    * It must resolve exactly like `AssignmentWorkerSelection.workerSettings`:
-   * the configured worker default laid over the thread settings, so an account
-   * pinned on either one survives. Dropping `accountId` here made every
-   * inherited phase/task model render the provider's default account (leo-1)
-   * while the worker was actually dispatched on the thread's account (cio-5).
+   * the thread's own settings, since a worker inherits the harness, account and
+   * model of the thread that created it and an explicit task or phase model is
+   * the only thing that replaces it. Keeping `accountId` here matters: dropping
+   * it made every inherited phase/task model render the provider's default
+   * account (leo-1) while the worker was actually dispatched on the thread's
+   * account (cio-5).
    */
   workerModelForThread(): AssignmentModelSelection {
-    const settings = this.root.loadOlderMessages.settings
-    const selected = this.agentDefaults.worker
-      ? { ...settings, ...this.agentDefaults.worker }
-      : settings
+    const selected = this.root.loadOlderMessages.settings
     return {
       harnessId: selected.harnessId,
       providerId: selected.providerId,
@@ -533,15 +529,6 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
       inferenceMode: selected.inferenceMode,
       contextWindow: selected.contextWindow
     }
-  }
-
-  syncAgentRole(role: AgentRole, selection: AgentModelSelection): void {
-    void invoke('config:syncAgentRole', role, selection)
-      .then((config) => {
-        if (!this.root.loadOlderMessages.alive) return
-        this.agentDefaults = config.agentDefaults
-      })
-      .catch(() => undefined)
   }
 
   /**
@@ -691,7 +678,6 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
       this.root.contextUsage.contextUsageDisplay = undefined
       this.root.contextUsage.accountUsageCache.markStale()
     }
-    this.syncAgentRole('seniorEngineer', selection)
     this.commitSettings(updated)
 
     this.assignmentSeniorSettingsPersistence = this.assignmentSeniorSettingsPersistence

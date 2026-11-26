@@ -180,7 +180,7 @@ export function registerIpcHandlers(
   // store initializes once and only a broadcast refreshes it. So whatever the
   // seed created is pushed the moment the seed finishes, instead of leaving Don
   // invisible until the next launch.
-  void ensureDonOrchestrator({ assistantManager, threadManager, storage }).then((result) => {
+  void ensureDonOrchestrator({ assistantManager, threadManager }).then((result) => {
     if (result.assistantCreated) {
       broadcastAssistantsChanged(assistantManager.listAssistants())
     }
