@@ -421,13 +421,16 @@ describe('PiHostSupervisor', () => {
    */
   it('stops one host by pid and reports only its sessions as lost', async () => {
     const hosts: FakeHost[] = []
+    // Two populated hosts: the session on the primary first, then a saturated
+    // reading opens the loan the second one runs on.
+    let cpu = 1.2
     const supervisor = new PiHostSupervisor(
       () => {
         const host = new FakeHost(500 + hosts.length)
         hosts.push(host)
         return host.transport
       },
-      { maxSessionsPerHost: 1 }
+      { readHostCpu: () => cpu }
     )
     const lost: string[] = []
     supervisor.onSessionLost((sessionId) => lost.push(sessionId))
@@ -435,11 +438,14 @@ describe('PiHostSupervisor', () => {
       sessionId: 'atlas',
       command: { type: 'create_session', cwd: '/work/atlas', agentDir: '/agent' }
     })
+    cpu = 98
     await supervisor.createSession({
       sessionId: 'ledger',
       command: { type: 'create_session', cwd: '/work/ledger', agentDir: '/agent' }
     })
     expect(hosts).toHaveLength(2)
+    expect(supervisor.hostOf('atlas')).toBe(500)
+    expect(supervisor.hostOf('ledger')).toBe(501)
     expect(supervisor.pids()).toEqual(hosts.map((host) => host.transport.pid))
 
     supervisor.stopHost(hosts[0].transport.pid)
@@ -520,7 +526,6 @@ describe('PiHostSupervisor placement and rejoin', () => {
     readHostCpu: (pid: number) => number | null,
     options: {
       rebalanceIntervalMs?: number
-      maxSessionsPerHost?: number
       readPressure?: () => Promise<AdmissionDecision>
       /** Configure each host the moment the supervisor starts it. */
       configure?: (host: FakeHost) => void
@@ -537,8 +542,7 @@ describe('PiHostSupervisor placement and rejoin', () => {
       {
         readHostCpu,
         readPressure: options.readPressure ?? (async () => roomyDevice()),
-        rebalanceIntervalMs: options.rebalanceIntervalMs ?? 60_000,
-        maxSessionsPerHost: options.maxSessionsPerHost ?? 8
+        rebalanceIntervalMs: options.rebalanceIntervalMs ?? 60_000
       }
     )
     return { supervisor, hosts }
@@ -550,6 +554,43 @@ describe('PiHostSupervisor placement and rejoin', () => {
       command: { type: 'create_session', cwd: `/work/${sessionId}`, agentDir: '/agent' }
     })
   }
+
+  /**
+   * How many sessions a host carries never opens another process.
+   *
+   * Eight resident sessions opening a second host, sixteen a third and so on is
+   * what made a busy window read as a leak: every one of those processes held
+   * one heap for the same machine, and none of them fixed anything. A session
+   * costs the host it runs on nothing extra, so every one of them shares the one
+   * host, however many the window has.
+   */
+  it('keeps every session on one host however many there are', async () => {
+    const { supervisor, hosts } = harness(() => IDLE_HOST)
+    for (let index = 0; index < 20; index += 1) await create(supervisor, `thread-${index}`)
+
+    expect(hosts).toHaveLength(1)
+    expect(supervisor.sessionsOn(500)).toBe(20)
+    supervisor.stop()
+  })
+
+  it('drains a loan back into a primary that carries many sessions', async () => {
+    let cpu = IDLE_HOST
+    const { supervisor, hosts } = harness(() => cpu)
+    for (let index = 0; index < 12; index += 1) await create(supervisor, `thread-${index}`)
+
+    cpu = SATURATED
+    await create(supervisor, 'borrowed')
+    expect(supervisor.hostOf('borrowed')).toBe(501)
+
+    // The count the primary carries is not a reason to hold the loan: only its
+    // own CPU is, and it has room now.
+    cpu = IDLE_HOST
+    await supervisor.rebalance()
+
+    expect(supervisor.hostOf('borrowed')).toBe(500)
+    expect(hosts[1].stopped).toBe(true)
+    expect(supervisor.pids()).toEqual([500])
+  })
 
   it('opens one temporary host while the primary host is saturated', async () => {
     const asked: number[] = []
@@ -733,8 +774,10 @@ describe('PiHostSupervisor placement and rejoin', () => {
   })
 
   it('stops a host whose session never arrived', async () => {
-    const { supervisor, hosts } = harness(() => IDLE_HOST, {
-      maxSessionsPerHost: 1,
+    // The primary takes the first session with an idle reading, then a saturated
+    // one opens the loan this create is meant to fail on.
+    let cpu = IDLE_HOST
+    const { supervisor, hosts } = harness(() => cpu, {
       // Every process the supervisor opens after the first one refuses the create
       // it was started for, which is what a host that cannot open the session
       // does.
@@ -746,8 +789,7 @@ describe('PiHostSupervisor placement and rejoin', () => {
     expect(hosts).toHaveLength(1)
     expect(supervisor.hostOf('atlas')).toBe(500)
 
-    // The primary already carries the one session it may carry, so this create
-    // opens a second host and then fails on it.
+    cpu = SATURATED
     await expect(create(supervisor, 'ledger')).rejects.toThrow(/create refused/)
 
     expect(hosts).toHaveLength(2)

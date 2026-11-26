@@ -27,11 +27,15 @@ import type { ChildProcess } from 'node:child_process'
  * sent after any pause paid a full spawn, an extension reload and a transcript
  * resume before the prompt could even reach pi: measured at roughly a second of
  * pure loss per pause, and invisible to the user as anything but "it is slow
- * again". A resident process is not wasted work; it is the thing that makes a
- * follow-up instant, and it is still released once the thread has genuinely
- * been left alone.
+ * again". Ten minutes is twice the pause that hurt, and it is the same window
+ * every other harness in the app releases on, so a thread costs the same however
+ * it is run.
+ *
+ * A resident process is still not wasted work: it is the thing that makes a
+ * follow-up instant, and it is released once the thread has genuinely been left
+ * alone.
  */
-const PI_SESSION_IDLE_DISPOSE_MS = 30 * 60_000
+const PI_SESSION_IDLE_DISPOSE_MS = 10 * 60_000
 
 /** Cadence of the idle sweep. One timer serves every session of the driver. */
 const PI_SESSION_IDLE_SWEEP_MS = 60_000
@@ -93,8 +97,8 @@ export interface PiRpcSessionsHost {
    * tracker.
    *
    * A hosted session has no child process of its own: its shell tool, and every
-   * process that shell starts, run inside the long-lived Pi host. Up to
-   * `maxSessionsPerHost` sessions share that one host pid, and the host's
+   * process that shell starts, run inside the long-lived Pi host. Every hosted
+   * session shares that one host pid, and the host's
    * environment names only whichever session wrote it last, so the host cannot
    * be attributed to one thread. It is registered app-wide instead (an
    * undefined session id), which is the pool the tracker already models: the

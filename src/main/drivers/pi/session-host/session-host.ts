@@ -70,8 +70,8 @@ function asCustomTool<T extends { name: string }>(definition: T): ToolDefinition
  * names whichever session wrote it last, and a thread's commands would inherit
  * that one id and be attributed to another thread. Stamping each spawn from the
  * session that owns the turn is what lets the process tracker put a command
- * under its thread instead of under the app node, even while eight sessions
- * share this process.
+ * under its thread instead of under the app node, even while every session the
+ * app has shares this process.
  *
  * Only `bash` is replaced: the Windows-only `powershell` and `cmd` tools are
  * registered by the app's own extension with native operations, and overriding
