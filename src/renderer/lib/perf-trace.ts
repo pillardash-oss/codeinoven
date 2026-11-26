@@ -291,15 +291,28 @@ class PerfTracer {
   private startHeartbeat(): void {
     if (this.heartbeat !== null) return
     this.lastBeatAt = Date.now()
+    // An occluded window is not a frozen one. A background renderer has its timers
+    // throttled, so this heartbeat wakes a minute late and would report a
+    // minute-long "freeze" for a window nobody was looking at. Resetting the
+    // baseline on every visibility change keeps those gaps out of the record, so
+    // what remains is a pause that happened while the window was on screen.
+    document.addEventListener('visibilitychange', () => {
+      this.lastBeatAt = Date.now()
+    })
     this.heartbeat = setInterval(() => {
       const now = Date.now()
       const gap = now - this.lastBeatAt
       this.lastBeatAt = now
+      if (document.hidden || document.visibilityState !== 'visible') return
       if (!isRenderFreeze(gap)) return
       const heap = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory
         ?.usedJSHeapSize
       this.pushAt('mark', 'renderer.freeze', now - gap, gap, 'abandoned', this.currentSpanId, {
         interrupted: this.currentSpanName ?? 'idle',
+        // The span named above is the one that was open, which is a hint and not a
+        // verdict: an awaited span can stay open for minutes while whatever
+        // stalled the thread is something else entirely.
+        visibility: document.visibilityState,
         ...(typeof heap === 'number' ? { heapUsedBytes: heap } : {})
       })
     }, 250)
