@@ -109,27 +109,68 @@ export class ThreadMessagesCache {
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   #threadsBySession = new Map<string, { projectId: string; threadId: string }>()
 
+  /**
+   * How many threads may hold a cached transcript at once.
+   *
+   * The cache had no limit at all: every thread opened this session kept its
+   * window of messages resident, and clearing was only ever explicit (a delete, a
+   * drop). A long session across a few dozen threads grew the renderer by
+   * hundreds of megabytes for conversations nobody was looking at, which is what
+   * a rising Tab working set in the trace turned out to be. Least-recently-read
+   * entries are evicted past this, never one with a mounted reader: a thread on
+   * screen is never the one that gets dropped, so the conversation cannot blank.
+   */
+  static readonly MAX_CACHED_THREADS = 8
+
   /** Return or create a cache entry for the given thread. */
   entry(projectId: string, threadId: string): ThreadMessagesEntry {
     const key = threadKey(projectId, threadId)
-    let entry = this.#threads.get(key)
-    if (!entry) {
-      entry = {
-        messages: [],
-        revision: 0,
-        loaded: false,
-        loading: false,
-        hasOlder: false,
-        error: '',
-        runIssue: null,
-        waitingIssue: null,
-        heldSteerIds: new SvelteSet<string>()
-      }
-      this.#threads.set(key, entry)
-      this.threads.set(key, { ...entry })
-      this.structureMessages.set(key, entry.messages)
+    const existing = this.#threads.get(key)
+    if (existing !== undefined) {
+      // Re-inserting moves the key to the end of the map, which makes insertion
+      // order the LRU order the eviction below relies on.
+      this.#threads.delete(key)
+      this.#threads.set(key, existing)
+      return existing
     }
-    return entry
+    const created: ThreadMessagesEntry = {
+      messages: [],
+      revision: 0,
+      loaded: false,
+      loading: false,
+      hasOlder: false,
+      error: '',
+      runIssue: null,
+      waitingIssue: null,
+      heldSteerIds: new SvelteSet<string>()
+    }
+    this.#threads.set(key, created)
+    this.threads.set(key, { ...created })
+    this.structureMessages.set(key, created.messages)
+    this.#evictUnobserved()
+    return created
+  }
+
+  /**
+   * Drop the least-recently-read transcripts past the cap.
+   *
+   * A mounted reader, a load in flight and a pending reveal are all reasons a
+   * thread is still being used, so those are skipped and the next candidates are
+   * considered instead. Eviction reuses `clear`, so every per-thread side table
+   * goes with the entry it belongs to and nothing is left pointing at a row that
+   * no longer exists.
+   */
+  #evictUnobserved(): void {
+    if (this.#threads.size <= ThreadMessagesCache.MAX_CACHED_THREADS) return
+    for (const key of [...this.#threads.keys()]) {
+      if (this.#threads.size <= ThreadMessagesCache.MAX_CACHED_THREADS) return
+      if (this.#observedKeys.has(key) || this.#revealPending.has(key)) continue
+      const entry = this.#threads.get(key)
+      if (!entry || entry.loading) continue
+      const separator = key.indexOf(':')
+      if (separator <= 0) continue
+      this.clear(key.slice(0, separator), key.slice(separator + 1))
+    }
   }
 
   /** Current message list for a thread, safe to use in deriveds/effects. */

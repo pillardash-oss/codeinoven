@@ -135,3 +135,60 @@ describe('ThreadMessagesCache.latestUserMessageId', () => {
     expect(cache.latestUserMessageId(PROJECT, THREAD)).toBe('m1')
   })
 })
+
+describe('ThreadMessagesCache bounds', () => {
+  let cache: ThreadMessagesCache
+
+  beforeEach(() => {
+    cache = new ThreadMessagesCache()
+  })
+
+  it('keeps at most the cached-thread cap of unobserved transcripts', () => {
+    const cap = ThreadMessagesCache.MAX_CACHED_THREADS
+    for (let index = 0; index < cap + 5; index += 1) {
+      cache.reconcile(PROJECT, `thread-${index}`, [message(`m-${index}`)], null)
+      cache.entry(PROJECT, `thread-${index}`)
+    }
+    // Every extra thread beyond the cap must have pushed an older one out, not
+    // added to the pile: a session over dozens of threads is what grew the
+    // renderer by hundreds of megabytes.
+    const kept = Array.from({ length: cap + 5 }, (_unused, index) =>
+      cache.entry(PROJECT, `thread-${index}`)
+    ).filter((entry) => entry.loaded || entry.messages.length > 0)
+    expect(kept.length).toBeLessThanOrEqual(cap)
+  })
+
+  it('never evicts a transcript a mounted reader holds', () => {
+    const held = cache.entry(PROJECT, 'held-thread')
+    cache.reconcile(PROJECT, 'held-thread', [message('held-message')], null)
+    const release = cache.retain(PROJECT, 'held-thread')
+    try {
+      for (let index = 0; index < ThreadMessagesCache.MAX_CACHED_THREADS + 5; index += 1) {
+        cache.reconcile(PROJECT, `other-${index}`, [message(`m-${index}`)], null)
+        cache.entry(PROJECT, `other-${index}`)
+      }
+      // The reader on screen must still see its own conversation.
+      expect(cache.messages(PROJECT, 'held-thread').map((entry) => entry.id)).toEqual([
+        'held-message'
+      ])
+      expect(cache.entry(PROJECT, 'held-thread')).toBe(held)
+    } finally {
+      release()
+    }
+  })
+
+  it('drops the least recently read transcript first', () => {
+    const cap = ThreadMessagesCache.MAX_CACHED_THREADS
+    for (let index = 0; index < cap; index += 1) {
+      cache.reconcile(PROJECT, `t-${index}`, [message(`m-${index}`)], null)
+      cache.entry(PROJECT, `t-${index}`)
+    }
+    // Touch the oldest one, so it is no longer the least recently read.
+    cache.entry(PROJECT, 't-0')
+    cache.reconcile(PROJECT, 'fresh', [message('fresh-message')], null)
+    cache.entry(PROJECT, 'fresh')
+
+    expect(cache.messages(PROJECT, 't-0')).toHaveLength(1)
+    expect(cache.messages(PROJECT, 't-1')).toHaveLength(0)
+  })
+})
