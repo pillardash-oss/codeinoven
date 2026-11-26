@@ -91,6 +91,20 @@ describe('delegated report delivery', () => {
     expect(boot).toContain("this.host.units['delegation-reports'].restoreQueues()")
   })
 
+  it('refuses a pawn spawn that would saturate one account', async () => {
+    const pawns = await readSource(
+      'src/main/chat/chat-engine/chat-engine-assignment-workers/chat-engine-assignment-workers-pawns.ts'
+    )
+    // The refusal must run before the thread is created, so a saturated account
+    // costs one tool call instead of a failed run the user has to clean up.
+    expect(pawns).toContain('await this.refuseWhenAccountSaturated(settings)')
+    expect(pawns.indexOf('await this.refuseWhenAccountSaturated(settings)')).toBeLessThan(
+      pawns.lastIndexOf('this.host.threadManager.createThread({')
+    )
+    expect(pawns).toContain('pawnAdmissionRefusal')
+    expect(pawns).toContain('assignment_id IS NULL')
+  })
+
   it('reports a retry that is days away instead of waiting for it', async () => {
     const grace = await readSource('src/main/chat/delegation/delegation-report-grace.ts')
     expect(grace).toContain('DELEGATION_REPORT_RETRY_HORIZON_MS')
