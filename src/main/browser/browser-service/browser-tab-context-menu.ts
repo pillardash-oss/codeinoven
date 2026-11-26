@@ -25,6 +25,12 @@ export function showBrowserTabContextMenu(
     }
     const appendSeparator = (): void => menu.append(new MenuItem({ type: 'separator' }))
 
+    // The menu is laid out in four sections so the same kind of move always
+    // lives in the same place: the actions on this tab, then everything that
+    // makes a new tab, then everything that reopens one, then everything that
+    // moves one, and close on its own at the bottom. Inside each section the
+    // items run tab, group, box, in that order, so a target is always reached
+    // the same way down the menu.
     menu.append(new MenuItem({ label: input.title || input.url || 'Blank tab', enabled: false }))
     appendSeparator()
     if (!input.threadScoped) {
@@ -48,9 +54,11 @@ export function showBrowserTabContextMenu(
     // put and the item greys out, the way the bookmark and reopen items already
     // do, so the menu does not change shape under the pointer.
     append('Put tab to sleep', { action: 'sleep' }, canSleepTab(input))
+
+    // New: the tab first, then the group it can land in, then the box.
     appendSeparator()
-    append('New tab before this tab', { action: 'newBefore' })
     append('New tab', { action: 'newTab' })
+    append('New tab before this tab', { action: 'newBefore' })
 
     const boxPlacement = new Menu()
     if (input.boxId === null) {
@@ -85,8 +93,6 @@ export function showBrowserTabContextMenu(
         })
       )
     }
-    menu.append(new MenuItem({ label: 'New tab in box', submenu: boxPlacement }))
-
     if (!input.threadScoped) {
       const groupPlacement = new Menu()
       if (input.groupId === null) {
@@ -122,39 +128,18 @@ export function showBrowserTabContextMenu(
         )
       }
       menu.append(new MenuItem({ label: 'New tab in group', submenu: groupPlacement }))
-      appendSeparator()
       append(
         'New tab group',
         { action: 'createGroup' },
         input.groups.length < MAX_GLOBAL_BROWSER_GROUPS
       )
-      if (input.groupId !== null) {
-        append('Edit tab group', { action: 'editGroup' })
-        append('Remove from group', { action: 'removeFromGroup' })
-      }
-      const movePlacement = new Menu()
-      const moveTargets = input.groups.filter((candidate) => candidate.id !== input.groupId)
-      if (moveTargets.length === 0) {
-        movePlacement.append(new MenuItem({ label: 'No other groups', enabled: false }))
-      } else {
-        for (const group of moveTargets) {
-          movePlacement.append(
-            new MenuItem({
-              label: group.name,
-              click: () => choose({ action: 'moveToGroup', groupId: group.id })
-            })
-          )
-        }
-      }
-      menu.append(new MenuItem({ label: 'Move tab to group', submenu: movePlacement }))
-      // Moving a page beside the page on screen is the one way to read two pages at
-      // once, so the move sits with the other moves and greys out for a tab that has
-      // no page to carry.
-      append('Move tab to side panel', { action: 'moveToSidePanel' }, canMoveTabToSide(input))
     }
+    menu.append(new MenuItem({ label: 'New tab in box', submenu: boxPlacement }))
 
+    // Reopen: the closed tab first, then the box it can come back in.
+    appendSeparator()
+    append('Reopen closed tab', { action: 'reopenClosed' }, input.canReopenClosedTab)
     if (input.boxes.length > 0 || input.boxId !== null) {
-      appendSeparator()
       const boxMenu = new Menu()
       if (input.boxId !== null) {
         boxMenu.append(
@@ -175,8 +160,36 @@ export function showBrowserTabContextMenu(
       menu.append(new MenuItem({ label: 'Reopen in box', submenu: boxMenu }))
     }
 
-    appendSeparator()
-    append('Reopen closed tab', { action: 'reopenClosed' }, input.canReopenClosedTab)
+    // Move: the tab's own move first, then the group it can join or leave.
+    if (!input.threadScoped) {
+      appendSeparator()
+      // Moving a page beside the page on screen is the one way to read two pages at
+      // once, so the move sits with the other moves and greys out for a tab that has
+      // no page to carry.
+      append('Move tab to side panel', { action: 'moveToSidePanel' }, canMoveTabToSide(input))
+      const movePlacement = new Menu()
+      const moveTargets = input.groups.filter((candidate) => candidate.id !== input.groupId)
+      if (moveTargets.length === 0) {
+        movePlacement.append(new MenuItem({ label: 'No other groups', enabled: false }))
+      } else {
+        for (const group of moveTargets) {
+          movePlacement.append(
+            new MenuItem({
+              label: group.name,
+              click: () => choose({ action: 'moveToGroup', groupId: group.id })
+            })
+          )
+        }
+      }
+      menu.append(new MenuItem({ label: 'Move tab to group', submenu: movePlacement }))
+      if (input.groupId !== null) {
+        append('Remove from group', { action: 'removeFromGroup' })
+        append('Edit tab group', { action: 'editGroup' })
+      }
+    }
+
+    // Close sits alone at the bottom so it is never next to a move that looks
+    // like it.
     appendSeparator()
     append('Close tab', { action: 'close' })
     menu.popup({ window, x, y, callback: () => resolve(choice) })
