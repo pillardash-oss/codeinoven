@@ -150,15 +150,25 @@ function userMessagePresentation(message: AgentMessage): UserMessagePresentation
   return part?.type === 'user-presentation' ? part.presentation : undefined
 }
 
-/** One older page fetched to reach the newest turn's opening prompt. A long
- *  working trace spans dozens of rows (one row per step), so this is sized to
- *  cover a whole turn in one or two round trips instead of walking it twelve
- *  rows at a time from the raw tail window. */
-const TURN_ALIGNMENT_PAGE_SIZE = 100
-/** How many older pages a bounded load may add to reach that prompt. A turn
- *  longer than this is left to the reader's own paging rather than turning a
- *  navigation into an unbounded read. */
-const MAX_TURN_ALIGNMENT_PAGES = 4
+/**
+ * One older page fetched to reach the newest turn's opening prompt.
+ *
+ * The first version of this was a hundred rows, four pages deep: an open could
+ * therefore read, reconcile and deeply proxy more than four hundred messages
+ * before painting anything, which is the work that made a click feel like it
+ * hammered the machine. A turn that long is rare, and the reader's own paging
+ * reaches it in one gesture, so the alignment walk is now small enough to be
+ * affordable on every open and bounded so it can never become the whole cost.
+ */
+const TURN_ALIGNMENT_PAGE_SIZE = 24
+/**
+ * How many older pages a bounded load may add to reach that prompt.
+ *
+ * Two pages of `TURN_ALIGNMENT_PAGE_SIZE` plus the mounted window caps an open at
+ * roughly sixty messages. Past that the conversation is left to the reader's own
+ * paging rather than turning a navigation into an unbounded read.
+ */
+const MAX_TURN_ALIGNMENT_PAGES = 2
 
 class ThreadMessagesStore {
   #loadPromises = new Map<string, Promise<void>>()
