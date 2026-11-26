@@ -1018,6 +1018,21 @@ export class ChatEngineThreadLifecycle {
     const projectId = validateEntityId(record.projectId, 'Project ID')
     const threadId = validateEntityId(record.threadId, 'Thread ID')
     const { sessionId } = record
+    // A nested sub-agent is not its thread's session, so the thread resume below
+    // would refuse it. Its own child resume is the manual retry path: send the
+    // continuation into the child session the harness already owns.
+    const childOwner = this.host.state.childSessionOwners.get(sessionId)
+    if (childOwner?.parentSessionId !== undefined) {
+      if (await this.host.threadManager.wasStoppedByUser(projectId, threadId)) {
+        this.host.state.retryScheduler?.clear(sessionId)
+        this.host.state.retryScheduler?.resumed(sessionId)
+        return
+      }
+      this.host.state.retryScheduler?.clear(sessionId)
+      updateRetryWakeWindow(sessionId, null)
+      await this.host.units['assignment-workers'].retryChildSession(projectId, threadId, sessionId)
+      return
+    }
     const thread = await this.host.threadManager.getThread(projectId, threadId)
     if (
       !thread ||

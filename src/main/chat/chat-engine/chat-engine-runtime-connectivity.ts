@@ -20,7 +20,7 @@ import {
   parseUsageResetAt,
   TRANSIENT_PROVIDER_RETRY_MS
 } from '../../../lib/provider-issue'
-import type { SessionInfo } from './chat-engine-types'
+import type { ChildSessionInfo, SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
 import {
   CONNECTION_LOSS_GRACE_MS,
@@ -311,11 +311,18 @@ export class ChatEngineRuntimeConnectivity {
     const scheduler = this.host.state.retryScheduler
     if (!scheduler) return 'refused'
     const info = this.host.sessionRegistry.get(sessionId)
+    const childOwner = this.host.state.childSessionOwners.get(sessionId)
+    if (!info) {
+      // A nested sub-agent has no registered session of its own; it still gets
+      // the app's retry when the failure is clearly transient, so the parent is
+      // not told a worker died while it is about to run again.
+      if (!childOwner || childOwner.parentSessionId === undefined) return 'refused'
+      return this.scheduleNestedSubagentRetry(sessionId, issue, childOwner)
+    }
     // A nested sub-agent shares its parent's thread and turn, so a wait parked
     // on its session would resume the parent. A pawn is a child session that
     // owns its own thread, and it takes the same retry as any other thread.
-    const childOwner = this.host.state.childSessionOwners.get(sessionId)
-    if (!info || info.ephemeral === true || !retryResumesOwnThread(childOwner, info.threadId))
+    if (info.ephemeral === true || !retryResumesOwnThread(childOwner, info.threadId))
       return 'refused'
     // An assistant task whose assistant carries fallback models moves onto the
     // next model and re-runs at once. The fallback exists so a failed model
@@ -494,6 +501,58 @@ export class ChatEngineRuntimeConnectivity {
       }
       this.host.sessionStatuses.set(sessionId, status)
       this.host.broadcast({ type: 'session.status', sessionId, status })
+    }
+    return 'scheduled'
+  }
+
+  /**
+   * Park a nested sub-agent's transient failure and resume that child session
+   * later. The parent thread is never paused: the harness owns that turn, so
+   * this only keeps the worker alive and stops its failure being final.
+   * `continueScheduledThread` resumes it through `retryChildSession`.
+   */
+  private async scheduleNestedSubagentRetry(
+    sessionId: string,
+    issue: AgentProviderIssue,
+    owner: ChildSessionInfo
+  ): Promise<AutomaticRetrySchedule> {
+    const scheduler = this.host.state.retryScheduler
+    if (!scheduler) return 'refused'
+    const transient = issue.kind === 'network' || isUsageResetWaitIssue(issue)
+    if (!transient) return 'refused'
+    if (await this.host.threadManager.wasStoppedByUser(owner.projectId, owner.threadId))
+      return 'refused'
+    let retryAt = issue.retryAt
+    let cooldownAttempt: number | undefined
+    let retryCooldown = false
+    if (retryAt === undefined && issue.kind === 'rate_limit') {
+      // The child's own session is the streak key: sibling sub-agents under the
+      // same parent must not share one cooldown budget.
+      const reservation = scheduler.reserveRateLimitCooldown(sessionId)
+      if (!reservation) return 'cooldown-exhausted'
+      retryAt = reservation.retryAt
+      cooldownAttempt = reservation.attempt
+      retryCooldown = true
+    } else if (retryAt === undefined) {
+      retryAt = Date.now() + (issue.kind === 'network' ? 3_000 : TRANSIENT_PROVIDER_RETRY_MS)
+    }
+    const tracked = await scheduler.track({
+      sessionId,
+      projectId: owner.projectId,
+      threadId: owner.threadId,
+      harnessId: owner.driverId,
+      retryAt,
+      resetAt: issue.retryAt ?? retryAt,
+      ...(retryCooldown && cooldownAttempt !== undefined
+        ? { retryCooldown: true, cooldownAttempt }
+        : {}),
+      issueKind: issue.kind,
+      issueMessage: issue.message,
+      ...(issue.rawError === undefined ? {} : { rawError: issue.rawError })
+    })
+    if (!tracked) {
+      if (retryCooldown) scheduler.clearRateLimitCooldown(sessionId)
+      return 'refused'
     }
     return 'scheduled'
   }

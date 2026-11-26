@@ -272,8 +272,12 @@ export class ChatEngineLifecycleBoot {
     )
     ipcMain.handle(
       'agent:retryChildSession',
-      (_, projectId: string, threadId: string, sessionId: string) =>
-        this.host.retryChildSession(projectId, threadId, sessionId)
+      (_, projectId: string, threadId: string, sessionId: string) => {
+        // A deliberate retry is a fresh try, not another step of the cooldown
+        // the automatic retry was walking.
+        this.host.state.retryScheduler?.clearRateLimitCooldown(sessionId)
+        return this.host.retryChildSession(projectId, threadId, sessionId)
+      }
     )
     ipcMain.handle('agent:retryPawnRun', (_, projectId: string, threadId: string) =>
       this.host.retryPawnRun(projectId, threadId)
