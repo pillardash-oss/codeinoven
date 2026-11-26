@@ -15,7 +15,6 @@
   open={browser.clearDataConfirmOpen}
   title="Clear browser data?"
   onClose={() => browser.cancelDataClear()}
-  closeOnBackdrop={!browser.clearing}
 >
   <p class="text-sm leading-relaxed text-muted">
     This clears cookies, local storage, service workers, caches, and other site data for
@@ -28,21 +27,19 @@
   {#snippet footer()}
     <button
       type="button"
-      class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated disabled:opacity-50"
+      class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       title="Keep browser data"
-      disabled={browser.clearing}
       onclick={() => browser.cancelDataClear()}
     >
       Cancel
     </button>
     <button
       type="button"
-      class="bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger-hover disabled:opacity-50"
+      class="bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger-hover"
       title="Clear browser cookies and site data"
-      disabled={browser.clearing}
-      onclick={() => void browser.clearData()}
+      onclick={() => browser.clearData()}
     >
-      {browser.clearing ? 'Clearing…' : 'Clear data'}
+      Clear data
     </button>
   {/snippet}
 </Modal>
