@@ -5,10 +5,12 @@ import {
   PERF_MAX_CONTEXT_VALUE_CHARS,
   PERF_MAX_NAME_CHARS,
   PERF_MAX_PROCESS_SAMPLES,
+  PERF_SLOW_RECORD_MS,
   createPerfRecordId,
   sanitizePerfBatch,
   sanitizePerfContext,
-  sanitizePerfRecord
+  sanitizePerfRecord,
+  shouldRecordPerf
 } from '../../src/lib/perf-trace'
 
 /** A minimal valid record, so each test can break exactly one field. */
@@ -144,5 +146,42 @@ describe('sanitizePerfBatch', () => {
   it('answers an empty batch for a value that is not a list', () => {
     expect(sanitizePerfBatch(undefined)).toEqual([])
     expect(sanitizePerfBatch({ records: [] })).toEqual([])
+  })
+})
+
+describe('recording policy', () => {
+  const fast = { kind: 'span' as const, durationMs: 12, outcome: 'ok' as const }
+  const slow = { kind: 'span' as const, durationMs: 400, outcome: 'ok' as const }
+  const failed = { kind: 'ipc' as const, durationMs: 2, outcome: 'error' as const }
+  const memory = { kind: 'memory' as const, durationMs: 0, outcome: 'ok' as const }
+  const mark = { kind: 'mark' as const, durationMs: 0, outcome: 'ok' as const }
+
+  it('records everything when the full trace is on', () => {
+    for (const record of [fast, slow, failed, memory, mark]) {
+      expect(shouldRecordPerf(record, true)).toBe(true)
+    }
+  })
+
+  it('drops fast operations in a shipped build', () => {
+    expect(shouldRecordPerf(fast, false)).toBe(false)
+    expect(shouldRecordPerf(mark, false)).toBe(false)
+  })
+
+  it('keeps a slow operation and anything that failed', () => {
+    expect(shouldRecordPerf(slow, false)).toBe(true)
+    expect(shouldRecordPerf(failed, false)).toBe(true)
+  })
+
+  it('keeps the memory sample, whose value is the trend', () => {
+    expect(shouldRecordPerf(memory, false)).toBe(true)
+  })
+
+  it('keeps an operation exactly at the threshold', () => {
+    expect(
+      shouldRecordPerf({ kind: 'span', durationMs: PERF_SLOW_RECORD_MS, outcome: 'ok' }, false)
+    ).toBe(true)
+    expect(
+      shouldRecordPerf({ kind: 'span', durationMs: PERF_SLOW_RECORD_MS - 1, outcome: 'ok' }, false)
+    ).toBe(false)
   })
 })

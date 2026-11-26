@@ -285,3 +285,39 @@ export interface PerfMemoryReport {
   /** One row per app process, with its own working set and CPU share. */
   processes: PerfProcessSample[]
 }
+
+/**
+ * A shipped build records only operations that were actually slow.
+ *
+ * The trace is a diagnostic instrument, and an instrument that writes a line for
+ * every keystroke on every user's machine is background work nobody asked for.
+ * In production the rule is therefore: an operation at or above this many
+ * milliseconds is recorded, a failed one is recorded whatever its duration, and
+ * the periodic memory sample is recorded because it is the one reading whose
+ * value is in the trend rather than in any single line. Everything faster is
+ * dropped at the producer, before it costs a byte.
+ */
+export const PERF_SLOW_RECORD_MS = 250
+
+/** Memory-sample cadence when the full trace is on (a dev, probe or test build). */
+export const PERF_MEMORY_INTERVAL_FULL_MS = 5_000
+
+/** Memory-sample cadence in a shipped build, where only the trend matters. */
+export const PERF_MEMORY_INTERVAL_PRODUCTION_MS = 60_000
+
+/**
+ * Whether one record survives the recording policy.
+ *
+ * `full` is the dev/probe build, which records everything. Otherwise the rule
+ * above applies, and it applies identically on both sides of the IPC boundary so
+ * a renderer can never flood a production trace that the main sink would keep.
+ */
+export function shouldRecordPerf(
+  record: Pick<PerfRecord, 'kind' | 'durationMs' | 'outcome'>,
+  full: boolean
+): boolean {
+  if (full) return true
+  if (record.kind === 'memory') return true
+  if (record.outcome === 'error') return true
+  return record.durationMs >= PERF_SLOW_RECORD_MS
+}

@@ -1,6 +1,13 @@
 import type { PerfContext, PerfOutcome, PerfRecord, PerfRecordKind } from '$shared/perf-trace'
-import { createPerfRecordId, sanitizePerfContext } from '$shared/perf-trace'
+import { createPerfRecordId, sanitizePerfContext, shouldRecordPerf } from '$shared/perf-trace'
 import { PERF_RECORDS_SEND_CHANNEL } from '$shared/ipc-contract'
+import type { AppBridge } from '../../preload/index'
+
+declare global {
+  interface Window {
+    api: AppBridge
+  }
+}
 
 /**
  * Renderer-side performance tracing.
@@ -69,6 +76,16 @@ function describeError(error: unknown): string {
 
 class PerfTracer {
   private queue: PerfRecord[] = []
+  /**
+   * Whether this build records every operation.
+   *
+   * Read from the build environment the preload already resolved, so the renderer
+   * applies exactly the rule the main sink applies. Without this a production
+   * window would keep measuring every click and hand the records to a sink that
+   * drops them, paying the whole cost of the trace for none of it.
+   */
+  private readonly fullTrace: boolean =
+    typeof window === 'undefined' || window.api?.windowInfo.buildEnvironment !== 'production'
   private timer: ReturnType<typeof setTimeout> | null = null
   private dropped = 0
   /** The span that is open right now, for linking children to their parent. */
@@ -84,6 +101,7 @@ class PerfTracer {
   record(record: PerfRecord): void {
     const bridge = typeof window === 'undefined' ? undefined : window.api
     if (!bridge) return
+    if (!shouldRecordPerf(record, this.fullTrace)) return
     if (this.queue.length >= MAX_QUEUED_RECORDS) {
       this.queue.shift()
       this.dropped += 1

@@ -5,7 +5,7 @@ import type {
   PerfRecord,
   PerfRecordKind
 } from '../../lib/perf-trace'
-import { createPerfRecordId, sanitizePerfContext } from '../../lib/perf-trace'
+import { createPerfRecordId, sanitizePerfContext, shouldRecordPerf } from '../../lib/perf-trace'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from './logger'
 import { PERF_TRACE_LOG_FILE, dailyLogRelativePath } from './log-paths'
@@ -49,6 +49,15 @@ export class PerfTraceSink {
   private dropped = 0
   /** Whether to also mirror slow operations into the general log. */
   private announceSlow = true
+  /**
+   * Whether every operation is recorded.
+   *
+   * A development or probe launch records everything: that is what makes a
+   * regression visible before it ships. A shipped build records only what was
+   * slow, because an instrument that writes a line per keystroke on every user's
+   * machine is background work nobody asked for.
+   */
+  private fullTrace = true
 
   /**
    * Point the trace at the app's storage engine.
@@ -71,9 +80,15 @@ export class PerfTraceSink {
     this.announceSlow = enabled
   }
 
+  /** Choose between recording everything and recording only what was slow. */
+  setFullTrace(enabled: boolean): void {
+    this.fullTrace = enabled
+  }
+
   /** Record one operation. Never throws, never blocks. */
   record(record: PerfRecord): void {
     if (!this.storage) return
+    if (!shouldRecordPerf(record, this.fullTrace)) return
     if (this.queue.length >= MAX_QUEUED_RECORDS) {
       this.queue.shift()
       this.dropped += 1

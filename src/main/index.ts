@@ -9,6 +9,7 @@ import { hasCaptionOverlay } from '../lib/traffic-light'
 import { Logger } from './system/logger'
 import { perfTrace } from './system/perf-trace'
 import { startPerfMemorySampling, stopPerfMemorySampling } from './system/perf-memory-sampler'
+import { PERF_MEMORY_INTERVAL_FULL_MS, PERF_MEMORY_INTERVAL_PRODUCTION_MS } from '../lib/perf-trace'
 import { installApplicationMenu } from './system/app-menu'
 import { captureScreenshotForAgent } from './system/screenshot-service'
 import { usageAnalytics } from './system/usage-analytics'
@@ -1282,7 +1283,14 @@ void app
     // the first thing worth measuring, and a sampler started after the window
     // appears has already missed the most expensive minute of the session.
     perfTrace.initialize(storage)
-    startPerfMemorySampling()
+    // A shipped build keeps the trace to operations that were actually slow, on a
+    // one-minute memory cadence. A checkout or probe launch records everything:
+    // that is where a regression has to become visible before it ships.
+    const fullTrace = !isShippedBuild()
+    perfTrace.setFullTrace(fullTrace)
+    startPerfMemorySampling(
+      fullTrace ? PERF_MEMORY_INTERVAL_FULL_MS : PERF_MEMORY_INTERVAL_PRODUCTION_MS
+    )
     logConfiguredDataRoot()
     if (!startHidden && splashOutcome !== 'ready' && splashOutcome !== 'deadline') {
       Logger.error('Splash did not reach visual readiness before startup continued', {
