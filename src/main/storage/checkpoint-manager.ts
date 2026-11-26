@@ -15,6 +15,7 @@ import type { Database } from '../database/database'
 import type { WorkerLane } from '../database/database-worker'
 import { CrossProcessMutex } from '../system/cross-process-mutex'
 import { Logger } from '../system/logger'
+import { perfSpan } from '../system/perf-trace'
 import {
   ChangeTrackingService,
   isBinary,
@@ -1377,6 +1378,11 @@ export class CheckpointManager {
   ): Promise<TurnCheckpointSummary[]> {
     assertId(projectId)
     assertId(threadId)
+    // This read runs once per thread open and it is the most expensive read an
+    // open performs: each row carries the checkpoint's whole `data` blob, which
+    // is a project-wide diff. Measuring it here names that cost instead of
+    // leaving it inside `ipc:checkpoint:list` with nothing to attribute it to.
+    const span = perfSpan('checkpoint.list', { projectId, threadId })
     const requested =
       typeof limit === 'number' && Number.isFinite(limit) ? limit : CHECKPOINT_LIST_DEFAULT_ROWS
     const rows = Math.min(CHECKPOINT_LIST_MAX_ROWS, Math.max(1, Math.floor(requested)))
@@ -1398,11 +1404,12 @@ export class CheckpointManager {
           turnIds: viaWorker.failed
         })
       }
+      span.end('ok', { rows: rows, returned: viaWorker.summaries.length, via: 'worker' })
       return viaWorker.summaries
     }
-    return (await this.list(projectId, threadId))
-      .slice(0, rows)
-      .map((checkpoint) => toTurnCheckpointSummary(checkpoint))
+    const fallback = (await this.list(projectId, threadId)).slice(0, rows)
+    span.end('ok', { rows: rows, returned: fallback.length, via: 'primary' })
+    return fallback.map((checkpoint) => toTurnCheckpointSummary(checkpoint))
   }
 
   /**

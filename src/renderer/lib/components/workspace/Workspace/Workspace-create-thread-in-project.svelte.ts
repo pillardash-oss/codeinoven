@@ -3,6 +3,7 @@ import { markConversationPainted } from '$lib/conversation-painted'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 
 import { invoke, waitForFeatures } from '$lib/ipc.svelte'
+import { perfSpan } from '$lib/perf-trace'
 import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
 import { reportError } from '$lib/stores/app-errors.svelte'
 import { assistants } from '$lib/stores/assistants.svelte'
@@ -737,6 +738,16 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
     // Instant mount: create optimistic thread locally so the composer
     // paints on the same tick as the click   no IPC on the critical path.
     // Git branch and persistence hydrate async via the thread:update broadcast.
+    //
+    // Measured as two spans on purpose. The first ends when the composer has a
+    // thread to draw; the second covers the background persistence the user is
+    // not waiting for. Reporting them as one number would blame the click for
+    // work that finishes after the screen has already updated.
+    const createSpan = perfSpan('thread.create', {
+      projectId: project.id,
+      assistant: assistantId !== undefined,
+      scopeBucket: requestedBucketId !== undefined
+    })
     const optimisticId = this.root.markThreadReadAndApply.newOptimisticThreadId()
     const optimisticThread = {
       id: optimisticId,
@@ -780,8 +791,10 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
     // the centered composer head start even if the project holds other threads.
     // Threads created from an existing thread never get the marker.
     if (!activeThread) workspaceState.markThreadFreshFromEmptyState(thread.id)
+    createSpan.end('ok')
     // Persist in background with the same stable id   no ID swap, branch
     // detection runs after the first thread:update broadcast, never blocking typing.
+    const persistSpan = perfSpan('thread.create.persist', { projectId: project.id })
     void invoke('thread:create', {
       id: optimisticId,
       projectId: project.id,
@@ -795,6 +808,7 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
       ...(gettingStarted ? { titleSource: 'manual' as const, assistantGettingStarted: true } : {})
     })
       .then((created) => {
+        persistSpan.end('ok')
         // Server confirms with same id; upsert the authoritative row (now with branch when ready)
         const confirmed = activeThread?.settings
           ? threadWithInheritedSettings(created, inheritedSettings)
@@ -813,6 +827,7 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
         // row that would not change.
       })
       .catch((error) => {
+        persistSpan.fail(error)
         // Creation failed   remove the optimistic thread so the UI does not strand on a phantom
         const idx = this.allThreads.findIndex((t) => t.id === optimisticId)
         if (idx !== -1) this.allThreads.splice(idx, 1)

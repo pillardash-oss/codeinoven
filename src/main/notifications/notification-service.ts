@@ -7,6 +7,8 @@ import { NotificationInboxStore, familyOf } from './notification-inbox-store'
 import { notificationIdentityVerdict } from './notification-identity'
 import { APP_ID, APP_NAME, APP_SLUG } from '../../lib/brand'
 import { Logger } from '../system/logger'
+import { perfSpan, recordPerfOperation } from '../system/perf-trace'
+import { sanitizePerfContext } from '../../lib/perf-trace'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { Database } from '../database/database'
@@ -938,6 +940,15 @@ export class NotificationService {
     }
 
     try {
+      // Creating and showing an OS notification is a cross-process handoff to the
+      // platform's own service, so it can stall for reasons nothing in this app
+      // controls — and when it does, the turn behind it looks late. Measured
+      // from the request to the platform confirming the card is on screen.
+      const span = perfSpan('notification.show', {
+        ...sanitizePerfContext(options.logContext),
+        ...(options.logLabel ? { label: options.logLabel } : {}),
+        retain: options.retainKey !== undefined
+      })
       const notification = new Notification({
         id: compactNotificationId(options.id),
         // A unique group per notification prevents Notification Center from stacking alerts.
@@ -951,10 +962,12 @@ export class NotificationService {
       if (options.onClick) notification.on('click', options.onClick)
       if (options.onClose) notification.on('close', options.onClose)
       notification.on('show', (): void => {
+        span.end('ok')
         this.recordNotificationOutcome('shown')
         Logger.info(`${options.logLabel} system notification shown`, options.logContext ?? {})
       })
       notification.on('failed', (_event, error): void => {
+        span.fail(error)
         this.recordNotificationOutcome('failed', error)
         Logger.error(`${options.logLabel} system notification failed:`, error)
       })
@@ -962,6 +975,14 @@ export class NotificationService {
       this.retainNotification(options.retainKey, notification)
       notification.show()
     } catch (error) {
+      recordPerfOperation({
+        kind: 'span',
+        name: 'notification.show',
+        startedAt: Date.now(),
+        durationMs: 0,
+        outcome: 'error',
+        error: error instanceof Error ? error.message : String(error)
+      })
       Logger.error(`${options.logLabel} notification could not be shown:`, error)
     }
   }

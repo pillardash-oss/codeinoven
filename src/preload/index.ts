@@ -34,7 +34,17 @@ type MissingInvokeChannel = Exclude<InvokeChannel, (typeof INVOKE_CHANNELS)[numb
 const allInvokeChannelsRegistered: [MissingInvokeChannel] extends [never] ? true : never = true
 void allInvokeChannelsRegistered
 
-const SEND_CHANNELS = ['pty:resize', 'pty:write', 'pty:ack', 'terminal:focusState'] as const
+const SEND_CHANNELS = [
+  'pty:resize',
+  'pty:write',
+  'pty:ack',
+  'terminal:focusState',
+  // The performance trace's batch. A `send` because a measurement must never
+  // wait on an answer: the renderer has nothing to do with the reply, and
+  // blocking a click behind its own telemetry is the one thing measurement may
+  // never do.
+  'perf:records'
+] as const
 
 /* Every main-to-renderer event channel in the IPC contract is exposed here.
  * The list is derived from the contract itself, so an event and its

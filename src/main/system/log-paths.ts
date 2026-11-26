@@ -40,6 +40,13 @@ export const PTY_EVENTS_LOG_FILE = 'pty-events.jsonl'
 export const UTILITY_EVENTS_LOG_FILE = 'utility-events.jsonl'
 /** TypeSafe auxiliary-judgment decisions. */
 export const TYPESAFE_DECISIONS_LOG_FILE = 'typesafe-decisions.jsonl'
+/**
+ * The performance trace: one line per measured operation, and the periodic
+ * whole-app memory sample. Kept out of `main.jsonl` on purpose — a trace is read
+ * as a timeline (sort it, sum it, graph it) rather than grepped for a message,
+ * and mixing it into the general log would bury both.
+ */
+export const PERF_TRACE_LOG_FILE = 'perf.jsonl'
 
 const LOG_DAY_NAME_PATTERN = /^\d{4}-\d{2}-\d{2}$/u
 const LOG_FILE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u

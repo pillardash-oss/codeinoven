@@ -22,6 +22,7 @@ import { invokeCioCleanupContract } from './ipc/invoke-cio-cleanup'
 import { invokeSearchContract } from './ipc/invoke-search'
 import { invokeOrchestrationContract } from './ipc/invoke-orchestration'
 import { invokeReceiptContract } from './ipc/invoke-receipt'
+import { invokePerfTraceContract } from './ipc/perf-trace'
 import { invokeSecretsContract } from './ipc/invoke-secrets'
 import { invokeStorageManagerContract } from './ipc/invoke-storage-manager'
 import { IPC_EVENT_CONTRACT } from './ipc/events'
@@ -40,6 +41,7 @@ export * from './ipc/invoke-cio-cleanup'
 export * from './ipc/invoke-search'
 export * from './ipc/invoke-orchestration'
 export * from './ipc/invoke-receipt'
+export * from './ipc/perf-trace'
 export * from './ipc/invoke-secrets'
 export * from './ipc/invoke-storage-manager'
 
@@ -68,6 +70,7 @@ export const IPC_INVOKE_CONTRACT = {
   ...invokeSearchContract,
   ...invokeOrchestrationContract,
   ...invokeReceiptContract,
+  ...invokePerfTraceContract,
   ...invokeSecretsContract,
   ...invokeStorageManagerContract
 }

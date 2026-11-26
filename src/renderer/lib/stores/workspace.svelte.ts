@@ -18,6 +18,8 @@ import { openComposerFocusWindow } from '$lib/focus/composer-focus'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { relativeTimeClock } from '$lib/relative-time.svelte'
 import { preloadThreadConversation } from './thread-preload'
+import { threadMessages } from './thread-messages.svelte'
+import { perfSpan } from '$lib/perf-trace'
 import { scopeState } from './scope.svelte'
 import { invoke } from '$lib/ipc.svelte'
 import { prewarmThreadOven } from '$lib/ovens/oven-prewarm'
@@ -260,6 +262,20 @@ class WorkspaceState {
     iconUrl?: string | null,
     options: { deferContextPanel?: boolean } = {}
   ): void {
+    // One span covers the whole selection path, with a mark at every stage, so a
+    // slow open can be attributed to the stage that caused it instead of to
+    // "opening a thread" as a single unhelpful number. `cold` is the field that
+    // separates a first open from a revisit: the two do different work.
+    const openStartedAt = Date.now()
+    const span = perfSpan('thread.open', {
+      projectId: thread.projectId,
+      threadId: thread.id,
+      status: thread.status,
+      cold: !threadMessages.loaded(thread.projectId, thread.id),
+      deferredPanel: options.deferContextPanel === true
+    })
+    const mark = (name: string, context?: Record<string, string | number | boolean | null>): void =>
+      span.mark(name, { atMs: Date.now() - openStartedAt, ...context })
     // The chat composer owns keyboard focus after any thread switch. Open the
     // guard window so sidebar tools re-attaching around the switch (terminal
     // panels, action terminals) never steal focus back from the composer.
@@ -271,6 +287,7 @@ class WorkspaceState {
     // "Loading conversation…". The bounded trace read is warmed in the same
     // pass, so a live thread's tail paints instead of arriving seconds later.
     preloadThreadConversation(thread)
+    mark('preload')
     recentVisits.recordThread(thread)
     // The sidebar rows stamp their last-activity age against the shared clock,
     // so opening a thread re-reads it on the spot: the row the user just entered
@@ -281,6 +298,7 @@ class WorkspaceState {
     // user touches anything: the file tree, Git status and composer all read
     // through it on mount.
     prewarmThreadOven(thread)
+    mark('oven')
     this.activeProject = project
     this.activeProjectIconUrl = iconUrl ?? null
     this.rememberContentViewThread(thread)
@@ -299,6 +317,7 @@ class WorkspaceState {
     } else {
       contextSidebarState.activateThread(thread.projectId, thread.id, thread.title, rowThreadId)
     }
+    mark('contextPanel', { deferred: options.deferContextPanel === true })
     rendererRecovery.setSelectedThread(thread.projectId, thread.id)
     // Opening a thread re-anchors the project's active scope (file manager,
     // terminal, and action roots follow the thread's scope bucket).
@@ -307,18 +326,21 @@ class WorkspaceState {
     // tells the git store the project is in use, so it can refresh status and
     // the connection-gated PR indicators without any polling.
     gitState.notifyThreadOpened(project, thread)
+    mark('git')
     // The moment a thread is opened every notice it carried is acknowledged:
     // once its conversation is on screen there is nothing left for the panel to
     // report, so a read thread never lingers there waiting to be dismissed by
     // hand. The retire is durable, so neither a restart nor a scope reload can
     // rebuild it.
     notificationPanelState.acknowledgeOpenThread(thread)
+    mark('notices')
     // The live process count is a badge, and reading it walks a session's
     // process table. It must never share the switch instant with the
     // conversation mount.
     scheduleDeferredWork('workspace:sourceProcessCount', () => {
       void this.refreshSourceProcessCount(thread.projectId, thread.id)
     })
+    span.end('ok')
   }
 
   /**

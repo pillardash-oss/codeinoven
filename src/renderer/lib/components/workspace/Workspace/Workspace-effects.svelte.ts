@@ -4,6 +4,7 @@ import { viewShowsWorkspaceShell } from '$lib/content-view-projects'
 import { deletedThreadLanding } from '$shared/thread-deletion-landing'
 import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { perfSpan } from '$lib/perf-trace'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import { motionDuration } from '$lib/motion'
 import { openInBrowser } from '$lib/open-in-browser'
@@ -480,6 +481,19 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
     $effect(() => {
       return subscribe('thread:updated', (...args: unknown[]) => {
         const updated = args[0] as Thread
+        // The moment a turn finishes is the moment the whole sidebar reacts:
+        // badge, order, read state, and the selected thread's own row. It is
+        // the second-most-felt operation in the app after opening a thread, so
+        // it is measured whole — from the broadcast arriving to every store
+        // having taken it — rather than per store, where no single number would
+        // explain a stall.
+        const span = perfSpan('thread.updated', {
+          projectId: updated.projectId,
+          threadId: updated.id,
+          status: updated.status,
+          read: updated.read === true,
+          selected: workspaceState.selectedThread?.id === updated.id
+        })
         // A thread that reads as read by any path ends a deliberate unread mark.
         if (updated.read) threadUnreadIntent.clear(updated.id)
         scopeState.updateThread(updated)
@@ -503,6 +517,7 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
             this.root.markThreadReadAndApply.requestThreadRead(updated.projectId, updated.id)
           }
         }
+        span.end('ok')
       })
     })
 

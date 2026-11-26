@@ -2,6 +2,7 @@ import { unarchivedThreadSql } from '../../lib/archives'
 import type { IpcMainInvokeEvent } from 'electron'
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { registerRendererLogIpcHandler } from './renderer-log-ipc'
+import { registerPerfTraceIpcHandlers } from './perf-trace-ipc'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
 import { ProjectManager } from '../../lib/engines/project-manager'
@@ -52,6 +53,10 @@ export function registerHydrationIpcHandlers(
   // Renderer error capture runs from the first renderer statement, so the
   // durable logging bridge must exist before BrowserWindow navigation.
   registerRendererLogIpcHandler()
+  // The performance trace is fed from the renderer's first statement too: a
+  // boot that is only measured after hydration is a boot whose slowest part is
+  // invisible.
+  registerPerfTraceIpcHandlers()
   const projectManager = new ProjectManager(database)
   const projectRepo = new ProjectRepo(database)
   const scopeManager = new ScopeManager(database)

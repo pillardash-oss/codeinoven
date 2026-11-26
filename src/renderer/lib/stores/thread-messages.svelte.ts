@@ -10,6 +10,7 @@
  * application in `thread-messages-events.svelte.ts`.
  */
 import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
+import { perfSpan } from '$lib/perf-trace'
 import { ipcErrorMessage } from '$lib/ipc-errors'
 import { composeMarkAttachments } from '$lib/annotation-composite'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -403,6 +404,17 @@ class ThreadMessagesStore {
 
   async #load(projectId: string, threadId: string, recentLimit?: number): Promise<void> {
     const entry = this.cache.entry(projectId, threadId)
+    // The conversation read is the operation a user actually waits on, so it is
+    // measured as a whole: the IPC call, the alignment pages, and the reconcile
+    // that makes the rows renderable. `window` separates a bounded tail read
+    // from an unbounded transcript read, and `attempt` shows a retry, which is
+    // the difference between a slow boot and a failed one.
+    const span = perfSpan('thread.messages.load', {
+      projectId,
+      threadId,
+      window: recentLimit === undefined ? 'all' : recentLimit,
+      cached: this.cache.messages(projectId, threadId).length
+    })
     entry.loading = true
     entry.error = ''
     this.cache.notify(projectId, threadId)
@@ -435,11 +447,19 @@ class ThreadMessagesStore {
           this.reconcile(projectId, threadId, serverMessages)
           entry.loaded = true
           entry.error = ''
+          span.end('ok', {
+            messages: serverMessages.length,
+            attempts: attempt + 1,
+            hasOlder: entry.hasOlder
+          })
           return
         } catch (err) {
           entry.error = err instanceof Error ? err.message : 'Could not load messages.'
           this.cache.notify(projectId, threadId)
-          if (attempt > 0) return
+          if (attempt > 0) {
+            span.fail(err, { attempts: attempt + 1 })
+            return
+          }
           await new Promise((resolve) => setTimeout(resolve, 200))
           // A newer load replaced this one (or the thread was dropped); its own
           // outcome owns the entry now.

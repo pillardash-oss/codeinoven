@@ -7,6 +7,8 @@ import { isWindowsStorePackage, skipsOsKeyring } from '../lib/utils'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { hasCaptionOverlay } from '../lib/traffic-light'
 import { Logger } from './system/logger'
+import { perfTrace } from './system/perf-trace'
+import { startPerfMemorySampling, stopPerfMemorySampling } from './system/perf-memory-sampler'
 import { installApplicationMenu } from './system/app-menu'
 import { captureScreenshotForAgent } from './system/screenshot-service'
 import { usageAnalytics } from './system/usage-analytics'
@@ -1275,6 +1277,12 @@ void app
       architecture: process.arch,
       electronVersion: process.versions.electron
     })
+    // The performance trace writes beside the durable log, through the same
+    // storage engine, and starts sampling memory immediately: the boot itself is
+    // the first thing worth measuring, and a sampler started after the window
+    // appears has already missed the most expensive minute of the session.
+    perfTrace.initialize(storage)
+    startPerfMemorySampling()
     logConfiguredDataRoot()
     if (!startHidden && splashOutcome !== 'ready' && splashOutcome !== 'deadline') {
       Logger.error('Splash did not reach visual readiness before startup continued', {
@@ -1662,4 +1670,9 @@ app.on('will-quit', () => {
   // force-exit losing the session's localStorage writes.
   flushSessionStorage()
   setNotificationService(null)
+  // The trace is queued, not immediate: without this the last two hundred
+  // milliseconds of a session   the part where the app was being quit because
+  // it had become unusable   is the part that never reaches disk.
+  stopPerfMemorySampling()
+  void perfTrace.flush()
 })
