@@ -32,7 +32,7 @@ interface AppMetricRow {
   pid: number
   type?: string
   cpu?: { percentCPUUsage?: number }
-  memory?: { workingSetSize?: number }
+  memory?: { workingSetSize?: number; privateBytes?: number }
 }
 
 /** Physical memory of this machine, or null where the OS will not say. */
@@ -74,7 +74,15 @@ export function readAppMemory(): AppMemorySample {
       pid: row.pid,
       kind: typeof row.type === 'string' && row.type ? row.type : 'unknown',
       memoryBytes,
-      cpuPercent: typeof cpu === 'number' && Number.isFinite(cpu) ? Math.round(cpu * 10) / 10 : null
+      cpuPercent:
+        typeof cpu === 'number' && Number.isFinite(cpu) ? Math.round(cpu * 10) / 10 : null,
+      // Private bytes are the part this process cannot share with its siblings:
+      // a renderer whose private share climbs is holding its own data, while one
+      // whose working set climbs alone is sharing more code and bitmaps.
+      privateBytes:
+        typeof row.memory?.privateBytes === 'number' && Number.isFinite(row.memory.privateBytes)
+          ? Math.trunc(row.memory.privateBytes) * KIBIBYTES_IN_BYTES
+          : null
     })
   }
   return { processes, totalBytes, deviceBytes: deviceMemoryBytes() }

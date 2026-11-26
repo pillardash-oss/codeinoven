@@ -99,6 +99,8 @@ class PerfTracer {
   private currentSpanName: string | undefined
   /** How often the heartbeat checks whether the renderer stopped running. */
   private heartbeat: ReturnType<typeof setInterval> | null = null
+  /** The memory sampler: the JS heap *and* what the window holds outside it. */
+  private memoryTimer: ReturnType<typeof setInterval> | null = null
   private lastBeatAt = 0
   private installed = false
 
@@ -304,6 +306,44 @@ class PerfTracer {
     this.heartbeat.unref?.()
   }
 
+  /**
+   * Record what this window costs, split by where it is held.
+   *
+   * A working set alone cannot say whether a renderer is fat in JavaScript or in
+   * DOM, layout, strings and decoded images — and the heap snapshot answers only
+   * the first half. Blink's allocators answer the second, so both are recorded
+   * side by side every few seconds: a window whose JS heap is flat while its
+   * partition allocator climbs is a DOM problem, and one whose discardable bytes
+   * climb is holding decoded pixels.
+   */
+  private startMemorySampling(): void {
+    if (this.memoryTimer !== null) return
+    const sample = (): void => {
+      try {
+        const heap = (performance as Performance & { memory?: ChromiumPerformanceMemory }).memory
+        const blink = window.api?.blinkMemory?.() ?? null
+        const context: PerfContext = {}
+        if (heap) {
+          context['jsHeapUsedBytes'] = Math.trunc(heap.usedJSHeapSize)
+          context['jsHeapTotalBytes'] = Math.trunc(heap.totalJSHeapSize)
+        }
+        if (blink) {
+          context['mallocBytes'] = blink.malloc
+          context['discardableBytes'] = blink.discardable
+          context['partitionAllocBytes'] = blink.partitionAlloc
+          context['blinkGcBytes'] = blink.blinkGc
+        }
+        if (Object.keys(context).length === 0) return
+        this.pushAt('memory', 'renderer.memory', Date.now(), 0, 'ok', undefined, context)
+      } catch {
+        // A runtime that will not report must cost this sample, never the app.
+      }
+    }
+    sample()
+    this.memoryTimer = setInterval(sample, 5_000)
+    this.memoryTimer.unref?.()
+  }
+
   private schedule(): void {
     if (this.timer !== null) return
     this.timer = setTimeout(() => {
@@ -322,6 +362,7 @@ class PerfTracer {
     if (this.installed || typeof window === 'undefined') return
     this.installed = true
     this.startHeartbeat()
+    this.startMemorySampling()
     window.addEventListener('pagehide', () => this.flush())
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) this.flush()

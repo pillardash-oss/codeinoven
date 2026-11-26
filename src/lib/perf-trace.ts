@@ -55,6 +55,8 @@ export interface PerfProcessSample {
   memoryBytes: number | null
   /** CPU percentage over the last sampling window, or null when unknown. */
   cpuPercent: number | null
+  /** Working set the process cannot share with its siblings, in bytes. */
+  privateBytes?: number | null
 }
 
 /** One line of `logs/<day>/perf.jsonl`. */
@@ -189,12 +191,15 @@ function sanitizeProcessSample(raw: unknown): PerfProcessSample | null {
   if (pid === null || pid === 0) return null
   const kind = typeof source['kind'] === 'string' ? clip(source['kind'], 40) : 'unknown'
   const cpuPercent = finiteNumber(source['cpuPercent'])
-  return {
+  const sample: PerfProcessSample = {
     pid,
     kind,
     memoryBytes: nonNegativeInteger(source['memoryBytes']),
     cpuPercent: cpuPercent === null ? null : Math.round(cpuPercent * 10) / 10
   }
+  const privateBytes = nonNegativeInteger(source['privateBytes'])
+  if (privateBytes !== null) sample.privateBytes = privateBytes
+  return sample
 }
 
 /**
