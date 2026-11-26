@@ -51,6 +51,25 @@ describe('commit handoff rule', () => {
     expect(prompt).toContain('If no agent in the chain is allowed to commit')
   })
 
+  it('names the class every agent runs as, so a commit obligation is never misapplied', () => {
+    // An agent once read "the primary agent commits the files you report" and
+    // concluded it was the reporter, even though it was the primary: no rule
+    // told it which side of the handoff it stood on. Each contract now opens by
+    // naming itself, and the two identities never agree.
+    expect(DEFAULT_AGENT_BEHAVIOR_PROMPT).toContain('You are the primary agent of this thread')
+    expect(WORKER_AGENT_BEHAVIOR_PROMPT).toContain(
+      'You are a delegated worker, not the primary agent'
+    )
+    expect(WORKER_AGENT_BEHAVIOR_PROMPT).not.toContain('You are the primary agent')
+    expect(PAWN_AGENT_CONTRACT).toContain('You are a pawn agent working on your own thread')
+    // A pawn thread is the one class that reads the primary's rules and still
+    // does not commit, so the primary's opener has to name that exception
+    // instead of leaving the pawn with two contradicting instructions.
+    expect(DEFAULT_AGENT_BEHAVIOR_PROMPT).toContain(
+      'The one agent this does not describe is a pawn thread'
+    )
+  })
+
   it('does not let a verified change end the run uncommitted', () => {
     // The failure this locks: a turn that finished on "fix verified, three
     // states render correctly" and ended there, with no commit step and no
