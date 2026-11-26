@@ -252,6 +252,23 @@ export class ChatEngineTurnsSessions {
         driverId,
         accountId
       )
+      // The session that ran on the previous harness is closed by this switch, so
+      // it is recorded as a checkpoint of its own: the thread's windows stay
+      // complete no matter which harness ended them.
+      if (switchedRuntime && previousSessionId) {
+        await this.host.units['checkpoints']
+          .recordClosedSession({
+            projectId,
+            threadId,
+            sessionId: previousSessionId,
+            harnessId: previousHarnessId ?? driverId,
+            nextSessionId: sessionId,
+            kind: 'harness-switch',
+            projectPath,
+            label: 'Moved to another harness'
+          })
+          .catch(() => {})
+      }
       if (parked) {
         nativeHistoryBound = true
         this.host.state.parkedSessionReplay.set(sessionId, {
@@ -383,6 +400,19 @@ export class ChatEngineTurnsSessions {
         projectPath,
         thread.settings
       )
+      // The session may already be at its checkpoint line. Close it and continue
+      // on a successor before this turn is dispatched, instead of running the
+      // work inside a window that is already at its limit and letting the
+      // harness compact (or refuse) mid-turn.
+      const checkpointed = await this.host.units['checkpoints'].checkpointBeforeTurn({
+        projectId,
+        threadId,
+        sessionId,
+        driver,
+        projectPath,
+        settings: thread.settings
+      })
+      if (checkpointed) sessionId = checkpointed
     }
 
     // The switch succeeded (a replacement session is bound). Best-effort release

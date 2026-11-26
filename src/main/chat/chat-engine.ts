@@ -132,6 +132,7 @@ import type {
   VirtualTaskOptions
 } from './chat-engine/chat-engine-types'
 import { buildChatEngineUnits } from './chat-engine/chat-engine-units'
+import { ThreadCheckpointRepo } from '../database/repositories/thread-checkpoint-repo'
 import type { DirectReplyInput } from './chat-engine/chat-engine-direct-reply'
 
 /**
@@ -288,6 +289,16 @@ export class ChatEngine {
    */
   readonly units = buildChatEngineUnits(this)
   readonly state = new ChatEngineState(this)
+  private checkpointRepo?: ThreadCheckpointRepo
+
+  /**
+   * The thread's context checkpoints: the record of every closed session and of
+   * a fork's lineage. Built on first use so it cannot depend on the order of the
+   * constructor's parameter properties.
+   */
+  get checkpoints(): ThreadCheckpointRepo {
+    return (this.checkpointRepo ??= new ThreadCheckpointRepo(this.database))
+  }
   /**
    * How long a "can the TypeSafe capability answer?" reading is reused.
    *

@@ -225,4 +225,33 @@ export class ThreadCheckpointRepo {
     const [row] = result.rows
     return row ? rowToCheckpoint(row) : undefined
   }
+
+  /** The last mirrored message a closing session saw, for the boundary marker. */
+  async boundaryViaWorker(
+    threadId: string
+  ): Promise<{ id: string; createdAt: number } | undefined> {
+    const result = await this.db.queryViaWorker(
+      `SELECT id, created_at FROM agent_messages
+        WHERE thread_id = ? AND session_id IS NULL
+          AND visibility IN ('conversation', 'working_trace')
+        ORDER BY created_at DESC, id DESC LIMIT 1`,
+      [threadId],
+      1
+    )
+    if (!result.ok) return undefined
+    const row = result.rows[0]
+    const id = row?.['id']
+    const createdAt = row?.['created_at']
+    if (typeof id !== 'string' || typeof createdAt !== 'number') return undefined
+    return { id, createdAt }
+  }
+
+  /**
+   * Remove a checkpoint that could not be completed. A row whose successor was
+   * never created describes a boundary that lost its continuation, and every
+   * reader would treat it as a real window that ended.
+   */
+  delete(id: string): void {
+    this.db.run('DELETE FROM thread_checkpoints WHERE id = ?', id)
+  }
 }
