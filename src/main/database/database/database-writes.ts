@@ -1,6 +1,7 @@
 import { Logger } from '../../system/logger'
 import type { DatabaseWorker, WorkerLane } from '../database-worker'
 import type { HistoryAppendArgs } from '../repositories/history-repo'
+import { isLockContention } from './database-lock-contention'
 
 /** Everything a batched write needs from the database it belongs to. */
 export interface DatabaseWritesHost {
@@ -39,7 +40,7 @@ export class DatabaseWrites {
     if (worker?.isRunning()) {
       const response = await worker.execute(sql, params, options.lane)
       if (response.ok) return { ok: true }
-      if (options.allowPrimaryFallback === false)
+      if (options.allowPrimaryFallback === false || isLockContention(response.error))
         return { ok: false, error: response.error ?? 'Database worker execution failed' }
       if (response.error) {
         Logger.error(
@@ -71,6 +72,7 @@ export class DatabaseWrites {
     if (worker?.isRunning()) {
       const response = await worker.transaction(statements, options.lane)
       if (response.ok) return { ok: true }
+      if (isLockContention(response.error)) return { ok: false, error: response.error }
       if (response.error) {
         Logger.error(
           'Database worker transaction failed; falling back to primary connection',
@@ -108,6 +110,7 @@ export class DatabaseWrites {
     if (worker?.isRunning()) {
       const response = await worker.appendHistory(id, threadId, role, content, metadata, timestamp)
       if (response.ok) return { ok: true, sequence: response.sequence }
+      if (isLockContention(response.error)) return { ok: false, error: response.error }
       if (response.error) {
         Logger.error(
           'Database worker history append failed; falling back to primary connection',

@@ -6,6 +6,7 @@ import {
   mapUserMessageRows,
   type ProviderDeltaSyncResult
 } from '../repositories/agent-message-repo'
+import { isLockContention } from './database-lock-contention'
 import { raceWorkerQuery, runLocalBoundedQuery } from './database-sql-fallbacks'
 import type { QueryLane, WorkerLane } from '../database-worker'
 
@@ -94,7 +95,12 @@ export class DatabaseQueries {
     const worker = asyncWorker?.isRunning() ? asyncWorker : this.host.getWorker()
     if (worker?.isRunning()) {
       const response = await raceWorkerQuery(
-        worker.query(sql, params, maxRows, asyncWorker ? 'interactive' : backgroundOrInteractive(lane)),
+        worker.query(
+          sql,
+          params,
+          maxRows,
+          asyncWorker ? 'interactive' : backgroundOrInteractive(lane)
+        ),
         options.deadlineMs
       )
       if (response === null)
@@ -108,7 +114,7 @@ export class DatabaseQueries {
       if (response.ok) {
         return { ok: true, rows: response.rows ?? [], truncated: response.truncated ?? false }
       }
-      if (options.allowPrimaryFallback === false)
+      if (options.allowPrimaryFallback === false || isLockContention(response.error))
         return {
           ok: false,
           rows: [],
@@ -150,6 +156,8 @@ export class DatabaseQueries {
           truncated: response.truncated ?? false
         }
       }
+      if (isLockContention(response.error))
+        return { ok: false, messages: [], truncated: false, error: response.error }
       if (response.error) {
         Logger.error(
           'Database worker query-messages failed; falling back to primary connection',
@@ -182,6 +190,8 @@ export class DatabaseQueries {
           truncated: response.truncated ?? false
         }
       }
+      if (isLockContention(response.error))
+        return { ok: false, messages: [], truncated: false, error: response.error }
       if (response.error) {
         Logger.error(
           'Database worker query-user-messages failed; falling back to primary connection',
@@ -241,6 +251,8 @@ export class DatabaseQueries {
       if (response.ok && response.result) {
         return response.result
       }
+      // The caller already treats a thrown sync as a failed reconciliation.
+      if (isLockContention(response.error)) throw new Error(response.error)
       if (response.error) {
         Logger.error(
           'Database worker delta sync failed; falling back to primary connection',
