@@ -167,6 +167,11 @@ slot becomes: the reason, and the one control that actually moves the work on. -
           <CardNotice icon={CioAttention} tone="danger">
             <span class="select-text break-words">{failureText}</span>
           </CardNotice>
+        {:else if !retryable}
+          <p>
+            This thread is a {subject} its parent agent spawns and steers. It reports to that agent, and
+            a new instruction goes there.
+          </p>
         {/if}
         {#if actionError}
           <CardNotice icon={CioAttention} tone="danger">
