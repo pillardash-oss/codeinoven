@@ -382,7 +382,8 @@ export class ThreadViewUnmirroredTraceStartTime extends BoardUnit<ThreadView> {
         id: entry.id,
         text: entry.text,
         attachments: entry.attachments.length,
-        waitsOn: entry.startAfterThreads.length
+        waitsOn: entry.startAfterThreads.length,
+        hasPresentation: entry.presentation !== undefined
       }))
   )
 
@@ -466,10 +467,6 @@ export class ThreadViewUnmirroredTraceStartTime extends BoardUnit<ThreadView> {
     this.assistantRecapDismissed = this.root.switchProject.assistantDraftSignature
   }
 
-  /** Delete the queued message. */
-  deleteQueuedMessage(): void {
-    this.root.steerQueuedMessage.clearQueuedState()
-  }
   async openCheckpointFile(checkpointId: string, path: string): Promise<void> {
     await projectFilesWorkspace.loadDirectory(this.root.handleAgentEvent.thread.projectId, '')
     contextSidebarState.openFiles(

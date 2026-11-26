@@ -968,6 +968,29 @@ export class RendererRecoveryStore {
     return true
   }
 
+  /**
+   * Drop one queued message by its id, leaving the rest of the queue exactly as
+   * it was. This is how a single row is edited or deleted: the queue is not a
+   * stack of one message, so removing a row must never empty it.
+   */
+  removeQueuedMessage(projectId: string, threadId: string, entryId: string): boolean {
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return false
+    const key = recoveryDraftKey(projectId, threadId)
+    const queue = this.queuedMessages[key]
+    if (!queue || queue.length === 0) return false
+    const remaining = queue.filter((entry) => entry.id !== entryId)
+    if (remaining.length === queue.length) return false
+    const next = { ...this.queuedMessages }
+    if (remaining.length > 0) {
+      next[key] = remaining
+    } else {
+      delete next[key]
+    }
+    this.queuedMessages = next
+    this.persistQueuedNow()
+    return true
+  }
+
   /** Drop the oldest queued message once it has been consumed or discarded. */
   clearQueuedMessage(projectId: string, threadId: string): void {
     if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return

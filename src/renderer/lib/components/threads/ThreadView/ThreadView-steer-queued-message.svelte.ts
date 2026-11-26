@@ -700,7 +700,19 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
    * the thread's next turn and over the hold that is keeping it back. Without
    * that second path the button did nothing on a low-resource card.
    */
-  async steerQueuedMessage(): Promise<void> {
+  async steerQueuedMessage(entryId?: string): Promise<void> {
+    // Send now on a row that is not the head: the queue is a FIFO and the send
+    // path always leaves from its head, so the chosen message moves to the front
+    // and the rest keep their order behind it. Only this one message leaves.
+    if (entryId) {
+      const { projectId, id } = this.root.handleAgentEvent.thread
+      const head = rendererRecovery.queuedMessageFor(projectId, id)
+      if (head?.id !== entryId) {
+        if (!rendererRecovery.moveQueuedMessage(projectId, id, entryId, 0)) return
+        queuedResourceWait.clear(projectId, id)
+        this.syncQueuedFromStore()
+      }
+    }
     const msg = this.queuedMessage
     const attachments = this.queuedAttachments
     const promptContext = this.queuedPromptContext
@@ -799,25 +811,44 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
     }
   }
 
-  /** Return the queued message to the composer for editing. */
-  editQueuedMessage(): void {
-    if (!this.queuedMessage && !this.queuedHasContent) return
+  /** Return one queued message to the composer for editing.
+   *
+   *  Editing a row takes only that row out of the queue: the messages behind it
+   *  stay queued, and the card keeps showing them instead of collapsing to
+   *  nothing the moment one message opens in the composer. Without an id the
+   *  head is edited, which is the one-message case. */
+  editQueuedMessage(entryId?: string): void {
+    const { projectId, id } = this.root.handleAgentEvent.thread
+    const queue = rendererRecovery.queuedMessagesFor(projectId, id)
+    const entry = entryId
+      ? (queue.find((queued) => queued.id === entryId) ?? null)
+      : (queue[0] ?? null)
+    if (!entry) return
     rendererRecovery.setDraft(
-      this.root.handleAgentEvent.thread.projectId,
-      this.root.handleAgentEvent.thread.id,
-      this.queuedMessage,
-      this.queuedAttachments,
-      this.queuedProjectReferences,
-      this.queuedTaskReferences
+      projectId,
+      id,
+      entry.text,
+      entry.attachments,
+      entry.projectReferences,
+      entry.taskReferences
     )
-    responseReferencesState.setForThread(
-      this.root.handleAgentEvent.thread.projectId,
-      this.root.handleAgentEvent.thread.id,
-      this.queuedPromptReferences
-    )
-    this.scheduleResponseHighlightRestore(this.queuedPromptReferences)
-    this.clearQueuedState()
+    responseReferencesState.setForThread(projectId, id, entry.promptReferences)
+    this.scheduleResponseHighlightRestore(entry.promptReferences)
+    rendererRecovery.removeQueuedMessage(projectId, id, entry.id)
+    // The rest of the queue stays on screen: only the edited message leaves it.
+    this.syncQueuedFromStore()
     this.root.currentWorkingTraceAttribution.composerRestoreKey += 1
+  }
+
+  /** Delete one queued message, leaving every other message in the queue. */
+  deleteQueuedMessage(entryId?: string): void {
+    const { projectId, id } = this.root.handleAgentEvent.thread
+    const entry = entryId
+      ? rendererRecovery.queuedMessagesFor(projectId, id).find((queued) => queued.id === entryId)
+      : rendererRecovery.queuedMessageFor(projectId, id)
+    if (!entry) return
+    rendererRecovery.removeQueuedMessage(projectId, id, entry.id)
+    this.syncQueuedFromStore()
   }
 
   /** Delete every queued message for the thread. */

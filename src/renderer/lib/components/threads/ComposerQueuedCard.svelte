@@ -62,8 +62,14 @@
     /** Opens one of the queued message's files fullscreen. */
     onPreviewAttachment?: (attachment: PromptAttachment) => void
     onSteer: () => void
+    /** Send one queued row now, without waiting for its turn in the queue. */
+    onSendQueued: (id: string) => void
     onEdit: () => void
+    /** Open one queued row in the composer for editing. */
+    onEditQueued: (id: string) => void
     onDelete: () => void
+    /** Delete one queued row, leaving the rest of the queue. */
+    onDeleteQueued: (id: string) => void
     onDeleteAll: () => void
     /** Move a queued message to a new slot in the queue. */
     onReorder: (id: string, targetIndex: number) => void
@@ -90,8 +96,11 @@
     stackedAbove = false,
     onPreviewAttachment,
     onSteer,
+    onSendQueued,
     onEdit,
+    onEditQueued,
     onDelete,
+    onDeleteQueued,
     onDeleteAll,
     onReorder,
     onAddStartAfter,
@@ -101,6 +110,8 @@
   }: Props = $props()
 
   let queueMenuOpen = $state(false)
+  /** The one row whose own actions menu is open, if any. */
+  let rowMenuOpenId = $state<string | null>(null)
   let hasQueuedPayload = $derived(text.trim().length > 0 || hasContent)
   /** How many messages wait behind the running turn, head included. */
   const count = $derived(queue.length)
@@ -150,7 +161,13 @@
   }
 
   function toggleQueueMenu(): void {
+    rowMenuOpenId = null
     queueMenuOpen = !queueMenuOpen
+  }
+
+  function toggleRowMenu(id: string): void {
+    queueMenuOpen = false
+    rowMenuOpenId = rowMenuOpenId === id ? null : id
   }
 
   function runMenuAction(action: () => void): void {
@@ -215,9 +232,10 @@
 
 <!-- A message waiting behind the running turn. It stacks on the composer's top
 edge, so it drops its own bottom rule and the composer's dashed top rule carries
-the join. Its one action, Send now (the steer key), is a head control: a card
-that only needs one action has no foot, and deleting the message already lives in
-the head's menu. -->
+the join. One message keeps Send now (the steer key) in the head, with edit and
+delete in its menu. Several messages move Send now onto every row, each with its
+own menu, and the head's menu only empties the queue: a row sends itself, never
+the whole queue. -->
 <CardStack
   label="Queued message"
   icon={CioClock}
@@ -281,29 +299,29 @@ the head's menu. -->
           class="absolute bottom-8 right-0 z-50 w-36 border border-border-strong bg-surface p-1 shadow-lg"
           role="menu"
         >
-          {#if !presentation}
+          {#if count === 1}
+            {#if !presentation}
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-elevated"
+                role="menuitem"
+                onclick={() => runMenuAction(onEdit)}
+              >
+                <CioPencil size={13} class="text-muted" />
+                Edit
+              </button>
+              <div class="mx-2 my-1 border-t"></div>
+            {/if}
             <button
               type="button"
-              class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-elevated"
+              class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm text-danger transition-colors hover:bg-danger/10"
               role="menuitem"
-              onclick={() => runMenuAction(onEdit)}
+              onclick={() => runMenuAction(onDelete)}
             >
-              <CioPencil size={13} class="text-muted" />
-              Edit
+              <CioTrash size={13} />
+              Delete
             </button>
-            <div class="mx-2 my-1 border-t"></div>
-          {/if}
-          <button
-            type="button"
-            class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm text-danger transition-colors hover:bg-danger/10"
-            role="menuitem"
-            onclick={() => runMenuAction(onDelete)}
-          >
-            <CioTrash size={13} />
-            Delete
-          </button>
-          {#if count > 1}
-            <div class="mx-2 my-1 border-t"></div>
+          {:else}
             <button
               type="button"
               class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm text-danger transition-colors hover:bg-danger/10"
@@ -317,14 +335,16 @@ the head's menu. -->
         </div>
       {/if}
     </div>
-    <CardButton
-      label="Send now"
-      title={`Send this message to the agent now (${steerModifierLabel}Enter) without waiting for the turn to end or for this device to free up`}
-      icon={CioSend}
-      size="xs"
-      disabled={!hasQueuedPayload}
-      onclick={onSteer}
-    />
+    {#if count === 1}
+      <CardButton
+        label="Send now"
+        title={`Send this message to the agent now (${steerModifierLabel}Enter) without waiting for the turn to end or for this device to free up`}
+        icon={CioSend}
+        size="xs"
+        disabled={!hasQueuedPayload}
+        onclick={onSteer}
+      />
+    {/if}
   {/snippet}
 
   {#snippet body()}
@@ -502,6 +522,81 @@ the head's menu. -->
               </div>
             {/if}
           </div>
+          {#if count > 1}
+            <!-- With more than one message waiting, each row owns its actions:
+                 it can send itself now without sending the rest, and its own
+                 menu edits or deletes just this row. The head's Send now is
+                 gone, so no button ever drains the whole queue at once. -->
+            <div class="flex shrink-0 items-start gap-0.5">
+              <button
+                type="button"
+                class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                title="Send this message now, without sending the rest of the queue"
+                aria-label={`Send queued message ${index + 1} of ${queue.length} now`}
+                onclick={() => onSendQueued(row.id)}
+              >
+                <CioSend size={12} />
+              </button>
+              <div class="relative">
+                <button
+                  type="button"
+                  class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                  title={`Actions for queued message ${index + 1}`}
+                  aria-label={`Actions for queued message ${index + 1} of ${queue.length}`}
+                  aria-haspopup="menu"
+                  aria-expanded={rowMenuOpenId === row.id}
+                  onclick={() => toggleRowMenu(row.id)}
+                  oncontextmenu={(event: MouseEvent) => {
+                    event.preventDefault()
+                    queueMenuOpen = false
+                    rowMenuOpenId = row.id
+                  }}
+                >
+                  <CioEllipsis size={12} />
+                </button>
+                {#if rowMenuOpenId === row.id}
+                  <button
+                    type="button"
+                    class="fixed inset-0 z-50 cursor-default"
+                    aria-label="Close menu"
+                    onclick={() => (rowMenuOpenId = null)}
+                  ></button>
+                  <div
+                    class="absolute right-0 top-7 z-50 w-32 border border-border-strong bg-surface p-1 shadow-lg"
+                    role="menu"
+                  >
+                    {#if !(row.hasPresentation || (index === 0 && presentation))}
+                      <button
+                        type="button"
+                        class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-elevated"
+                        role="menuitem"
+                        onclick={() => {
+                          rowMenuOpenId = null
+                          onEditQueued(row.id)
+                        }}
+                      >
+                        <CioPencil size={13} class="text-muted" />
+                        Edit
+                      </button>
+                      <div class="mx-2 my-1 border-t"></div>
+                    {/if}
+                    <button
+                      type="button"
+                      class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm text-danger transition-colors hover:bg-danger/10"
+                      role="menuitem"
+                      onclick={() => {
+                        rowMenuOpenId = null
+                        onDeleteQueued(row.id)
+                      }}
+                    >
+                      <CioTrash size={13} />
+                      Delete
+                    </button>
+                  </div>
+                {/if}
+              </div>
+            </div>
+          {/if}
         </li>
       {/each}
     </ol>

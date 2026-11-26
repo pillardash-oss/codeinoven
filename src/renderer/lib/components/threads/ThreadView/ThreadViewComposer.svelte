@@ -109,8 +109,11 @@
     stackedAbove={board.unmirroredTraceStartTime.stackedAboveSlot('queued')}
     onPreviewAttachment={board.studioTemporaryChatContext.openQueuedAttachment}
     onSteer={() => void board.steerQueuedMessage.steerQueuedMessage()}
+    onSendQueued={(id) => void board.steerQueuedMessage.steerQueuedMessage(id)}
     onEdit={board.steerQueuedMessage.editQueuedMessage}
-    onDelete={board.unmirroredTraceStartTime.deleteQueuedMessage}
+    onEditQueued={board.steerQueuedMessage.editQueuedMessage}
+    onDelete={board.steerQueuedMessage.deleteQueuedMessage}
+    onDeleteQueued={board.steerQueuedMessage.deleteQueuedMessage}
     onDeleteAll={board.steerQueuedMessage.deleteAllQueuedMessages}
     onReorder={board.steerQueuedMessage.moveQueuedMessage}
     onAddStartAfter={() => (board.state.queuedStartAfterPickerOpen = true)}
