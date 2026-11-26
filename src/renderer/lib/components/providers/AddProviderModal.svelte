@@ -83,6 +83,14 @@
   let hiddenIds = $state<string[]>([])
   let togglingHide = $state(false)
   let notice = $state('')
+  /**
+   * Progress the user has to act on, not a result.
+   *
+   * An ACP agent without credentials opens its own browser and answers only when
+   * the user is done. That instruction belongs beside the busy state, in neutral
+   * text: painted green it read as "signed in" a minute before anything was.
+   */
+  let info = $state('')
   let actionWarning = $state('')
   let actionError = $state('')
   let accountLabel = $state('')
@@ -163,6 +171,7 @@
       actionError = ''
       actionWarning = ''
       notice = ''
+      info = ''
     },
     setActionError: (message) => (actionError = message),
     bindSignInAccount: async (providerId) => (await preparePendingAccount(providerId)).id,
@@ -483,6 +492,7 @@
     actionError = ''
     actionWarning = ''
     notice = ''
+    info = ''
     step = 'picking'
     if (offered.length === 0) void loadOffered()
   }
@@ -501,6 +511,7 @@
     actionError = ''
     actionWarning = ''
     notice = ''
+    info = ''
     const key = apiKey.trim()
     if (!key) {
       actionWarning = `Enter an API key for ${selectedProvider.name}.`
@@ -529,6 +540,7 @@
     actionError = ''
     actionWarning = ''
     notice = ''
+    info = ''
     if (isAcpHarness) {
       if (!provider) {
         openPicker()
@@ -539,9 +551,10 @@
       // opens the browser itself and answers only when the user is done, so the
       // panel says where the sign-in went instead of spinning silently.
       storingKey = true
-      notice = `${provider.name} opens your browser when it needs credentials. Finish the sign-in there and this panel follows the result.`
+      info = `${provider.name} opens your browser when it needs credentials. Finish the sign-in there and this panel follows the result.`
       try {
         const status = await invoke('acpAgents:authenticate', harness.id, provider.id)
+        info = ''
         await loadAcpAuth()
         const signedIn = status.state === 'authenticated'
         notice = signedIn ? `Signed in to ${provider.name}.` : ''
@@ -562,6 +575,7 @@
             ? ''
             : `${provider.name} finished, but ${harness.name} still refuses a session.`
       } catch (authError) {
+        info = ''
         notice = ''
         actionError =
           authError instanceof Error ? authError.message : `${provider.name} could not run.`
@@ -828,6 +842,7 @@
       {actionError}
       {actionWarning}
       {notice}
+      {info}
       {authenticatedProvider}
       bind:accountLabel
       {loginHandoff}

@@ -29,6 +29,12 @@
     actionError: string
     actionWarning: string
     notice: string
+    /**
+     * Progress the user has to act on but which is not a result, such as the
+     * agent opening its browser to sign in. Rendered neutrally so it is never
+     * mistaken for the confirmation that follows it.
+     */
+    info: string
     authenticatedProvider: { id: string; name: string } | null
     accountLabel: string
     loginHandoff: ProviderAccountLoginHandoff | null
@@ -71,6 +77,7 @@
     actionError,
     actionWarning,
     notice,
+    info,
     authenticatedProvider,
     accountLabel = $bindable(),
     loginHandoff,
@@ -219,6 +226,11 @@
   {#if actionWarning}
     <p class="border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning" role="alert">
       {actionWarning}
+    </p>
+  {/if}
+  {#if info}
+    <p class="border bg-surface px-3 py-2 text-xs text-muted" role="status">
+      {info}
     </p>
   {/if}
   {#if notice}
