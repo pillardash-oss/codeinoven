@@ -1,6 +1,6 @@
 import { SvelteMap } from 'svelte/reactivity'
 import { threadVisitKey } from '$lib/stores/recent-visits.svelte'
-import type { Thread } from '$shared/types'
+import type { Thread, ThreadStatus } from '$shared/types'
 
 /**
  * How long a sidebar list waits for the activity to stop before it applies a
@@ -14,6 +14,23 @@ const QUIET_MS = 450
  * follow the sort only once that work stopped.
  */
 const MAX_DELAY_MS = 1500
+/**
+ * How long a thread that has just started waiting to retry keeps the slot it
+ * already had.
+ *
+ * A retry is a run that stopped, waited, and started again: the status flips to
+ * `working-paused` and back to `working` every few seconds for as long as the
+ * provider keeps refusing, and every flip is a status change, so the list would
+ * re-sort on each one and rows a reader is watching would fight over slots. A
+ * retry wait that has actually lasted this long is one the reader has to see; a
+ * flash shorter than this moved nothing at all. Measured from the first retry
+ * held, so a thread that keeps retrying settles into its retry slot once and
+ * never keeps postponing it, and every retry that lands inside the same window
+ * commits with it.
+ */
+const RETRY_PAUSE_SETTLE_MS = 4000
+/** The status a retry wait holds back, and the only one held. */
+const RETRY_PAUSE_STATUS = 'working-paused'
 
 /** Book-keeping for one list. Plain fields: never read reactively. */
 interface SettledList {
@@ -21,8 +38,17 @@ interface SettledList {
   desired: readonly Thread[]
   /** Position-relevant field signature per row, to tell a moved row from a tick. */
   keys: Map<string, string>
+  /** The status each row had at the last sync, to spot a retry being entered. */
+  statuses: Map<string, ThreadStatus>
   /** When the pending move was first held back, so the cap can be measured. */
   pendingSince: number
+  /**
+   * When the first retry was held back, undefined while no retry is held.
+   *
+   * Undefined rather than zero, because zero is a real timestamp: a retry held
+   * on the very first tick of a clock would otherwise look like no hold at all.
+   */
+  retrySince: number | undefined
   timer: ReturnType<typeof setTimeout> | undefined
 }
 
@@ -31,6 +57,10 @@ interface SettledList {
  *
  * Anything else arriving on a `thread:updated` broadcast - above all the activity
  * stamp every tick rewrites - is what {@link ThreadOrderSettle} holds back.
+ *
+ * The status leads, so the rest of a row's position can be compared without it
+ * (see `rowLayoutKey`): that is how a retry, which changes nothing but the
+ * status, is told apart from a real move.
  */
 export function threadRowPositionKey(
   thread: Thread,
@@ -64,6 +94,13 @@ export function threadRowPositionKey(
  * - A change that is only the order of the same rows on the same fields is
  *   recency noise. It is held until the activity stops for {@link QUIET_MS}, so a
  *   burst becomes one clean move, capped at {@link MAX_DELAY_MS}.
+ * - A status change into `working-paused` is the one status change that is not a
+ *   move on its own. A provider retry flips a thread in and out of that status
+ *   every few seconds, so the change is held for {@link RETRY_PAUSE_SETTLE_MS}
+ *   from the first retry of the burst: a flash that is back to work before then
+ *   moved nothing, and every retry inside the window settles in one commit.
+ *   Every other change in the window still commits at once, and a row leaving
+ *   the status is free to move straight away.
  *
  * `sync` is the write side and belongs in an effect; `view` is the read side and
  * belongs in a derivation.
@@ -90,7 +127,9 @@ export class ThreadOrderSettle {
       list = {
         desired,
         keys: positionKeys(desired, draftThreadKeys),
+        statuses: statusMap(desired),
         pendingSince: 0,
+        retrySince: undefined,
         timer: undefined
       }
       this.#lists.set(key, list)
@@ -104,19 +143,45 @@ export class ThreadOrderSettle {
     if (sameRows(list.desired, desired)) return
 
     const previousKeys = list.keys
+    const previousStatuses = list.statuses
     list.desired = desired
     list.keys = positionKeys(desired, draftThreadKeys)
+    list.statuses = statusMap(desired)
 
     const ids = threadIds(desired)
     const order = this.#orders.get(key)
+    const structural = order === undefined || order.length !== ids.length
+    const keysChanged = !sameKeys(previousKeys, list.keys)
+    // A retry is the one status change that is held back, and only while it is
+    // the whole of what changed: a row that appeared, a read, a pin, a drop, a
+    // thread settling into Done, or a row leaving the retry is a move on its own.
+    const retryOnly =
+      !structural &&
+      keysChanged &&
+      isRetryEntryOnlyChange(previousKeys, list.keys, previousStatuses, list.statuses)
+    // A move that is not the retry itself ends any hold the retry opened: the
+    // wait is no longer the reason this list stood still, so the row is free to
+    // go wherever the move puts it.
+    if (structural || keysChanged) {
+      if (!retryOnly) this.#releaseRetry(list)
+    }
     // The pane is already showing this arrangement: nothing moved, so there is
     // nothing to commit and nothing to hold.
     if (order !== undefined && sameOrder(order, ids)) return
-
-    if (order === undefined || order.length !== ids.length || !sameKeys(previousKeys, list.keys)) {
+    if (retryOnly) {
+      this.#holdRetry(key, list)
+      return
+    }
+    if (structural || keysChanged) {
       this.#commit(key, list, desired)
       return
     }
+
+    // Activity while a retry is held is part of the move that retry will make,
+    // not a second move: the held commit carries the freshest list, so nothing
+    // may be committed ahead of it or the row would settle into its retry slot
+    // before the window elapsed.
+    if (list.retrySince !== undefined) return
 
     this.#schedule(key, list)
   }
@@ -176,10 +241,47 @@ export class ThreadOrderSettle {
     }, delay)
   }
 
+  /**
+   * Drop a hold a retry opened, because something else is moving the list now.
+   *
+   * While a retry is held its timer is the only one armed, so this ends that
+   * timer and nothing else: the row keeps the slot it has until the move that
+   * superseded the retry commits.
+   */
+  #releaseRetry(list: SettledList): void {
+    if (list.retrySince === undefined) return
+    list.retrySince = undefined
+    if (list.timer !== undefined) clearTimeout(list.timer)
+    list.timer = undefined
+  }
+
+  /**
+   * Hold a retry back until the wait has lasted {@link RETRY_PAUSE_SETTLE_MS}.
+   *
+   * One timer per list, armed from the first retry of the burst: a second thread
+   * entering the same wait does not extend the window, it waits out the one
+   * already running, so a project where several retries overlap still makes one
+   * move when the window elapses.
+   */
+  #holdRetry(key: string, list: SettledList): void {
+    const now = Date.now()
+    if (list.retrySince === undefined) list.retrySince = now
+    if (list.timer !== undefined) clearTimeout(list.timer)
+    // A quiet hold this retry replaced is over: its cap measured a wait the list
+    // is no longer making, and the retry window bounds this one instead.
+    list.pendingSince = 0
+    const waited = now - list.retrySince
+    const delay = Math.max(0, RETRY_PAUSE_SETTLE_MS - waited)
+    list.timer = setTimeout(() => {
+      this.#commit(key, list, list.desired)
+    }, delay)
+  }
+
   #commit(key: string, list: SettledList, desired: readonly Thread[]): void {
     if (list.timer !== undefined) clearTimeout(list.timer)
     list.timer = undefined
     list.pendingSince = 0
+    list.retrySince = undefined
     const ids = threadIds(desired)
     const order = this.#orders.get(key)
     if (order !== undefined && sameOrder(order, ids)) return
@@ -187,10 +289,67 @@ export class ThreadOrderSettle {
   }
 }
 
+/**
+ * Whether the only thing that changed about this list is one or more rows
+ * entering a retry wait.
+ *
+ * The list is held back for that and nothing else, so the check is deliberately
+ * strict: every row still has to be there with the same read, pin, anchor and
+ * draft, and each row that moved has to have moved from another status *into*
+ * `working-paused`. A row that left the status, or a retry that arrived with any
+ * other change, is not a retry to hold.
+ */
+function isRetryEntryOnlyChange(
+  previousKeys: ReadonlyMap<string, string>,
+  nextKeys: ReadonlyMap<string, string>,
+  previousStatuses: ReadonlyMap<string, ThreadStatus>,
+  nextStatuses: ReadonlyMap<string, ThreadStatus>
+): boolean {
+  if (previousKeys.size !== nextKeys.size) return false
+  let entered = false
+  for (const [id, key] of nextKeys) {
+    const keyBefore = previousKeys.get(id)
+    const statusBefore = previousStatuses.get(id)
+    const statusNow = nextStatuses.get(id)
+    if (keyBefore === undefined || statusBefore === undefined || statusNow === undefined)
+      return false
+    if (statusBefore === statusNow) {
+      // A row that did not change status has to be otherwise untouched too,
+      // otherwise the status change is not the only thing this sync carries.
+      if (keyBefore !== key) return false
+      continue
+    }
+    if (statusNow !== RETRY_PAUSE_STATUS) return false
+    // The rest of a row's position (read, pin, anchor, draft) has to match: only
+    // the status may have moved.
+    if (rowLayoutKey(keyBefore) !== rowLayoutKey(key)) return false
+    entered = true
+  }
+  return entered
+}
+
 function threadIds(threads: readonly Thread[]): string[] {
   const ids: string[] = []
   for (const thread of threads) ids.push(thread.id)
   return ids
+}
+
+/**
+ * The part of a row's position key after the status it leads with.
+ *
+ * {@link threadRowPositionKey} puts the status first on purpose, so a retry that
+ * changed nothing but the status can be told apart from the rest of a move.
+ */
+function rowLayoutKey(key: string): string {
+  return key.slice(key.indexOf('|') + 1)
+}
+
+/** The status per row, compared as one map. Never read reactively. */
+function statusMap(threads: readonly Thread[]): Map<string, ThreadStatus> {
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  const statuses = new Map<string, ThreadStatus>()
+  for (const thread of threads) statuses.set(thread.id, thread.status)
+  return statuses
 }
 
 /** A position signature per row, compared as one map. Never read reactively. */
