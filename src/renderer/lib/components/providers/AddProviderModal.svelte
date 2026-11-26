@@ -542,11 +542,14 @@
       try {
         const status = await invoke('acpAgents:authenticate', harness.id, provider.id)
         await loadAcpAuth()
-        notice = ''
+        notice = status.state === 'authenticated' ? `Signed in to ${provider.name}.` : ''
         // A successful sign-in changes the models the agent reports, so the
         // picker's cached (refused) catalog has to be dropped and re-probed now.
         providerCatalog.invalidateAll()
         void providerStore.checkOne(harness.id).catch(() => undefined)
+        // The picker that opened this panel re-probes its own project's catalog
+        // on this signal, so its empty list becomes the agent's models now.
+        if (status.state === 'authenticated') onProviderConnected?.()
         step = 'idle'
         selectedProvider = null
         actionWarning =
@@ -554,6 +557,7 @@
             ? ''
             : `${provider.name} finished, but ${harness.name} still refuses a session.`
       } catch (authError) {
+        notice = ''
         actionError =
           authError instanceof Error ? authError.message : `${provider.name} could not run.`
       } finally {

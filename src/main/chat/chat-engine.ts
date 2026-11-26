@@ -656,6 +656,10 @@ export class ChatEngine {
   async refreshAcpHarnesses(): Promise<void> {
     return this.units['providers-catalog'].refreshAcpHarnesses()
   }
+  /** Replace an ACP agent's process after a sign-in, so it reads the new credentials. */
+  async restartAcpAgent(harnessId: string): Promise<void> {
+    return this.units['providers-catalog'].restartAcpAgent(harnessId)
+  }
   async restartHarnessRuntime(
     harnessId: string,
     options: { force?: boolean } = {}

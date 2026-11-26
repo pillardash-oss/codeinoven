@@ -1565,6 +1565,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         await state.chatEngine?.invalidateProviderCatalogs()
         void state.providerConnection?.checkAll(true).catch(() => undefined)
       },
+      onAgentSignedIn: async (harnessId) => {
+        // The agent process that served catalogs and turns predates the new
+        // credentials, so it has to be replaced before anything is re-probed.
+        await state.chatEngine?.restartAcpAgent(harnessId)
+      },
       ensureDrivers: async () => {
         await state.chatEngine?.refreshAcpHarnesses()
       }
