@@ -570,6 +570,17 @@ class ThreadMessagesStore {
     this.cache.setActive(projectId, threadId)
   }
 
+  /**
+   * Take a conversation off the stack of what is on screen, handing the live
+   * slot back to the surface below it.
+   *
+   * A temporary side chat uses this: it opens over the thread that spawned it,
+   * so closing it must make that thread live again instead of leaving it frozen.
+   */
+  releaseActive(projectId: string, threadId: string): void {
+    this.cache.releaseActive(projectId, threadId)
+  }
+
   /** Whether a thread's transcript is held frozen: in a slot, not on screen. */
   isFrozen(projectId: string, threadId: string): boolean {
     return this.cache.isFrozen(projectId, threadId)

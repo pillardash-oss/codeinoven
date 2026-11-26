@@ -177,19 +177,20 @@ describe('ThreadMessagesCache bounds', () => {
     }
   })
 
-  it('drops the least recently read transcript first', () => {
+  it('decides by the open stack, not by which transcript was touched last', () => {
     const cap = ThreadMessagesCache.MAX_CACHED_THREADS
     for (let index = 0; index < cap; index += 1) {
       cache.reconcile(PROJECT, `t-${index}`, [message(`m-${index}`)], null)
-      cache.entry(PROJECT, `t-${index}`)
+      cache.setActive(PROJECT, `t-${index}`)
     }
-    // Touch the oldest one, so it is no longer the least recently read.
+    // Touching the oldest one does not buy it a slot: only opening does.
     cache.entry(PROJECT, 't-0')
     cache.reconcile(PROJECT, 'fresh', [message('fresh-message')], null)
-    cache.entry(PROJECT, 'fresh')
+    cache.setActive(PROJECT, 'fresh')
 
-    expect(cache.messages(PROJECT, 't-0')).toHaveLength(1)
-    expect(cache.messages(PROJECT, 't-1')).toHaveLength(0)
+    expect(cache.messages(PROJECT, 't-0')).toHaveLength(0)
+    expect(cache.messages(PROJECT, 't-1')).toHaveLength(1)
+    expect(cache.messages(PROJECT, 'fresh')).toHaveLength(1)
   })
 })
 
@@ -228,5 +229,74 @@ describe('ThreadMessagesCache frozen slots', () => {
     }
     // The live transcript survives the pressure from everything opened after it.
     expect(cache.messages(PROJECT, 'a').map((entry) => entry.id)).toEqual(['a1'])
+  })
+})
+
+describe('ThreadMessagesCache open stack', () => {
+  let cache: ThreadMessagesCache
+
+  beforeEach(() => {
+    cache = new ThreadMessagesCache()
+  })
+
+  it('does not let a background thread claim a slot the reader opened', () => {
+    for (const thread of ['a', 'b', 'c']) {
+      cache.reconcile(PROJECT, thread, [message(`${thread}1`)], null)
+      cache.setActive(PROJECT, thread)
+    }
+    // Eight threads nobody opened stream in behind the three on the stack.
+    for (let index = 0; index < 8; index += 1) {
+      cache.reconcile(PROJECT, `background-${index}`, [message(`bg-${index}`)], null)
+    }
+
+    expect(cache.messages(PROJECT, 'a').map((entry) => entry.id)).toEqual(['a1'])
+    expect(cache.messages(PROJECT, 'b').map((entry) => entry.id)).toEqual(['b1'])
+    expect(cache.messages(PROJECT, 'c').map((entry) => entry.id)).toEqual(['c1'])
+  })
+
+  it('drops the oldest opened conversation when a fourth is opened', () => {
+    for (const thread of ['a', 'b', 'c', 'd']) {
+      cache.reconcile(PROJECT, thread, [message(`${thread}1`)], null)
+      cache.setActive(PROJECT, thread)
+    }
+
+    expect(cache.messages(PROJECT, 'a')).toHaveLength(0)
+    expect(cache.messages(PROJECT, 'd').map((entry) => entry.id)).toEqual(['d1'])
+  })
+
+  it('re-opening a conversation keeps its place instead of adding a second one', () => {
+    for (const thread of ['a', 'b', 'c']) {
+      cache.reconcile(PROJECT, thread, [message(`${thread}1`)], null)
+      cache.setActive(PROJECT, thread)
+    }
+    cache.setActive(PROJECT, 'a')
+
+    expect(cache.messages(PROJECT, 'a')).toHaveLength(1)
+    expect(cache.messages(PROJECT, 'b')).toHaveLength(1)
+  })
+
+  it('gives every slot back on the empty state', () => {
+    for (const thread of ['a', 'b', 'c']) {
+      cache.reconcile(PROJECT, thread, [message(`${thread}1`)], null)
+      cache.setActive(PROJECT, thread)
+    }
+    cache.setActive(null, null)
+
+    expect(cache.messages(PROJECT, 'a')).toHaveLength(0)
+    expect(cache.messages(PROJECT, 'c')).toHaveLength(0)
+  })
+
+  it('hands the live slot back to the surface a side chat was covering', () => {
+    cache.reconcile(PROJECT, 'thread', [message('t1')], null)
+    cache.setActive(PROJECT, 'thread')
+    cache.reconcile(PROJECT, 'side-chat', [message('s1')], null)
+    cache.setActive(PROJECT, 'side-chat')
+    expect(cache.isFrozen(PROJECT, 'thread')).toBe(true)
+
+    cache.releaseActive(PROJECT, 'side-chat')
+
+    expect(cache.activeKey).toBe(`${PROJECT}:thread`)
+    expect(cache.isFrozen(PROJECT, 'thread')).toBe(false)
+    expect(cache.isFrozen(PROJECT, 'side-chat')).toBe(true)
   })
 })

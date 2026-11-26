@@ -623,6 +623,9 @@ class WorkspaceState {
     }
     this.sourceProcessCountRequestId += 1
     this.selectedThread = null
+    // Nothing is on screen, so no transcript stays live and no frozen slot is
+    // kept: the reader is not coming back to any of them from here.
+    threadMessages.setActive(null, null)
     this.activeProject = null
     this.activeProjectIconUrl = null
     contextSidebarState.deactivateThread()

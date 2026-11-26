@@ -1,6 +1,7 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import type { AgentMessage, AgentProviderIssue } from '$shared/types'
 import { isTurnTransparentUserMessage } from '../components/threads/thread-turn-parts'
+import { CONVERSATION_SLOTS, planSlots, pushOpenedSlot } from './thread-conversation-slots'
 import {
   EMPTY_MESSAGES,
   mergePageMessages,
@@ -120,26 +121,73 @@ export class ThreadMessagesCache {
    * entries are evicted past this, never one with a mounted reader: a thread on
    * screen is never the one that gets dropped, so the conversation cannot blank.
    */
-  static readonly MAX_CACHED_THREADS = 3
+  static readonly MAX_CACHED_THREADS = CONVERSATION_SLOTS
 
   /** The transcript the user is looking at. Everything else is frozen. */
   #activeKey: string | null = null
 
   /**
-   * Point the store at the transcript on screen.
+   * Every conversation that is on screen, oldest below, the one on top live.
+   *
+   * A stack rather than a single key because surfaces do stack: a temporary side
+   * chat opens over the thread that spawned it, and while it is up that thread is
+   * behind it   frozen, correctly   and when the side chat closes the thread
+   * underneath is the one on screen again without anyone having to reopen it.
+   * With one key, closing the side chat left its thread frozen and stale until
+   * the reader left and came back.
+   */
+  #activeStack: string[] = []
+
+  /**
+   * The conversations the reader opened, oldest first.
+   *
+   * This, and not the map's own order, is what fills a slot. `entry()` is called
+   * by every agent event and every preload, so insertion order records *touches*:
+   * a thread streaming in the background   one nobody has opened and nobody can
+   * see   would otherwise count as the most recently used conversation and push a
+   * frozen slot the reader is actually switching between out of the cache. Only
+   * an open moves a conversation, which is what makes "the last three" true.
+   */
+  #openOrder: string[] = []
+
+  /**
+   * Put a conversation on top of the stack of what is on screen.
    *
    * One thread is live; the other two slots are snapshots that must not be fed.
-   * `null` is the empty state, where nothing is on screen and no transcript may
-   * keep working in the background.
+   * `null` is the empty state, where nothing is on screen, no transcript may keep
+   * working in the background, and every slot is given back because there is no
+   * conversation the reader is coming back to.
    */
   setActive(projectId: string | null, threadId: string | null): void {
     if (projectId === null || threadId === null) {
+      this.#activeStack = []
       this.#activeKey = null
+      this.#openOrder = []
+      this.#enforceSlots()
       return
     }
-    this.#activeKey = threadKey(projectId, threadId)
-    // Touching the active entry keeps it at the young end of the eviction order.
-    this.entry(projectId, threadId)
+    const key = threadKey(projectId, threadId)
+    this.#activeStack = this.#activeStack.filter((candidate) => candidate !== key)
+    this.#activeStack.push(key)
+    this.#activeKey = key
+    this.#openOrder = pushOpenedSlot(this.#openOrder, key)
+    // Opening is the one moment the stack changes, and the one moment the memory
+    // an evicted slot held is worth reclaiming.
+    this.#enforceSlots()
+  }
+
+  /**
+   * Take a conversation off the stack of what is on screen.
+   *
+   * The surface below it becomes live again, which is what a side chat closing
+   * over its thread needs: the thread was frozen while the side chat was up and
+   * must start receiving its own run's events the moment it is visible again.
+   */
+  releaseActive(projectId: string, threadId: string): void {
+    const key = threadKey(projectId, threadId)
+    if (!this.#activeStack.includes(key)) return
+    this.#activeStack = this.#activeStack.filter((candidate) => candidate !== key)
+    this.#activeKey = this.#activeStack[this.#activeStack.length - 1] ?? null
   }
 
   /** The active transcript's key, or null when the app is showing an empty state. */
@@ -166,13 +214,7 @@ export class ThreadMessagesCache {
   entry(projectId: string, threadId: string): ThreadMessagesEntry {
     const key = threadKey(projectId, threadId)
     const existing = this.#threads.get(key)
-    if (existing !== undefined) {
-      // Re-inserting moves the key to the end of the map, which makes insertion
-      // order the LRU order the eviction below relies on.
-      this.#threads.delete(key)
-      this.#threads.set(key, existing)
-      return existing
-    }
+    if (existing !== undefined) return existing
     const created: ThreadMessagesEntry = {
       messages: [],
       revision: 0,
@@ -187,27 +229,38 @@ export class ThreadMessagesCache {
     this.#threads.set(key, created)
     this.threads.set(key, { ...created })
     this.structureMessages.set(key, created.messages)
-    this.#evictUnobserved()
+    // A transcript nobody opened arrives here from a preload or a background
+    // event. Creating one is how the cache grows, so it is also the moment to
+    // bring it back to the open stack; the headroom keeps a burst of new entries
+    // from running the whole pass once per event.
+    if (this.#threads.size > CONVERSATION_SLOTS * 2) this.#enforceSlots()
     return created
   }
 
   /**
-   * Drop the least-recently-read transcripts past the cap.
+   * Bring the resident transcripts back to the open stack.
    *
    * A mounted reader, a load in flight and a pending reveal are all reasons a
-   * thread is still being used, so those are skipped and the next candidates are
-   * considered instead. Eviction reuses `clear`, so every per-thread side table
-   * goes with the entry it belongs to and nothing is left pointing at a row that
-   * no longer exists.
+   * transcript is still being used, so the plan holds them whatever the stack
+   * says and the stack itself is untouched by them. Everything else outside the
+   * last {@link CONVERSATION_SLOTS} opened conversations is dropped.
    */
-  #evictUnobserved(): void {
-    if (this.#threads.size <= ThreadMessagesCache.MAX_CACHED_THREADS) return
-    for (const key of [...this.#threads.keys()]) {
-      if (this.#threads.size <= ThreadMessagesCache.MAX_CACHED_THREADS) return
-      if (key === this.#activeKey) continue
-      if (this.#observedKeys.has(key) || this.#revealPending.has(key)) continue
-      const entry = this.#threads.get(key)
-      if (!entry || entry.loading) continue
+  #enforceSlots(): void {
+    if (this.#threads.size === 0) return
+    const held = [...this.#threads.keys()].filter(
+      (key) =>
+        key === this.#activeKey ||
+        this.#observedKeys.has(key) ||
+        this.#revealPending.has(key) ||
+        this.#threads.get(key)?.loading === true
+    )
+    const plan = planSlots({
+      openOrder: this.#openOrder,
+      resident: [...this.#threads.keys()],
+      held
+    })
+    this.#openOrder = plan.openOrder
+    for (const key of plan.evicted) {
       const separator = key.indexOf(':')
       if (separator <= 0) continue
       this.clear(key.slice(0, separator), key.slice(separator + 1))

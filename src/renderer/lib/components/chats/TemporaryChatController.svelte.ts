@@ -187,6 +187,12 @@ export class TemporaryChatController implements ConversationController {
     if (this.#mounted) return
     this.#mounted = true
 
+    // A side chat is what the reader is looking at, so it is the live transcript
+    // until it closes: without this the thread that spawned it stayed the active
+    // slot and every event of this chat was dropped as frozen, which left a side
+    // chat that never streamed.
+    threadMessages.setActive(this.projectId, this.conversationId)
+
     // A side chat opened from a question or secret card is the user working to
     // understand that card, so it holds the card's countdown for as long as the
     // chat is in use. Activity is re-pinged under the app's activity grace
@@ -256,6 +262,9 @@ export class TemporaryChatController implements ConversationController {
 
   unmount(): void {
     this.#mounted = false
+    // The side chat is leaving the screen, so the thread underneath it becomes
+    // the live transcript again (see `setActive` in `mount`).
+    threadMessages.releaseActive(this.projectId, this.conversationId)
     this.#stopActivityPing()
     this.#unsubscribeExpiry?.()
     this.#unsubscribeEvent?.()
