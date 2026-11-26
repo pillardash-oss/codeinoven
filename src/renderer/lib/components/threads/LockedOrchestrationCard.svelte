@@ -122,6 +122,15 @@
   const failureText = $derived(
     pawnFailure === null ? null : presentProviderError(pawnFailure).message
   )
+  /**
+   * Retry exists for one situation only: a pawn whose run stopped on a real
+   * failure. A finished run is finished   offering to run it again invites the
+   * reader to repeat work that already landed   and a live run is not the
+   * reader's to restart. The model picker belongs to that same failure, because
+   * a run that died on a rate limit or on the wrong model has to be able to move
+   * before it is retried.
+   */
+  const retryable = $derived(pawn !== undefined && pawnFailure !== null && !pawnRunning)
   const chip = $derived.by(() => {
     if (pawnRunning) return { text: 'Running', tone: 'default' as const }
     if (pawnFailure !== null) return { text: 'Failed', tone: 'urgent' as const }
@@ -191,10 +200,8 @@ composer that only collects a rejected message. This card is what the composer's
 slot becomes: the reason, and the one control that actually moves the work on. -->
 <CardFrame placement="replace" label="Coordinated thread" {stackedAbove} {joinsBelow}>
   <CardHead
-    icon={kind === 'pawn' && pawnFailure !== null ? CioAttention : CioLock}
-    title={kind === 'pawn' && pawnFailure !== null
-      ? 'Pawn run stopped'
-      : 'Driven by its coordinator'}
+    icon={kind === 'pawn' && retryable ? CioAttention : CioLock}
+    title={kind === 'pawn' && retryable ? 'Pawn run failed' : 'Driven by its coordinator'}
     {chip}
     bind:folded={foldState.folded}
     foldLabel="coordinated thread"
@@ -220,11 +227,13 @@ slot becomes: the reason, and the one control that actually moves the work on. -
           This thread is a {subject} its parent agent spawns and steers. It reports to that agent, and
           a new instruction goes there.
         </p>
-        <p>
-          Its run is still yours to fix: retry it, or change the model and thinking level it runs
-          on, without sending it a message.
-        </p>
-        {#if failureText}
+        {#if retryable}
+          <p>
+            Its run stopped on an error, so it can be retried here, on the model and thinking level
+            this thread carries, without sending it a message.
+          </p>
+        {/if}
+        {#if retryable && failureText}
           <CardNotice icon={CioAttention} tone="danger">
             <span class="select-text break-words">{failureText}</span>
           </CardNotice>
