@@ -1,5 +1,10 @@
 import type { PerfContext, PerfOutcome, PerfRecord, PerfRecordKind } from '$shared/perf-trace'
-import { createPerfRecordId, sanitizePerfContext, shouldRecordPerf } from '$shared/perf-trace'
+import {
+  createPerfRecordId,
+  isRenderFreeze,
+  sanitizePerfContext,
+  shouldRecordPerf
+} from '$shared/perf-trace'
 import { PERF_RECORDS_SEND_CHANNEL } from '$shared/ipc-contract'
 import type { AppBridge } from '../../preload/index'
 
@@ -90,6 +95,11 @@ class PerfTracer {
   private dropped = 0
   /** The span that is open right now, for linking children to their parent. */
   private currentSpanId: string | undefined
+  /** The open span's name, so a freeze can name what it interrupted. */
+  private currentSpanName: string | undefined
+  /** How often the heartbeat checks whether the renderer stopped running. */
+  private heartbeat: ReturnType<typeof setInterval> | null = null
+  private lastBeatAt = 0
   private installed = false
 
   /**
@@ -162,8 +172,9 @@ class PerfTracer {
     return this.currentSpanId
   }
 
-  setCurrentSpan(id: string | undefined): void {
+  setCurrentSpan(id: string | undefined, name?: string): void {
     this.currentSpanId = id
+    this.currentSpanName = name
   }
 
   /** Write a record that has no duration. */
@@ -206,12 +217,17 @@ class PerfTracer {
     const startedAt = Date.now()
     const parentId = this.currentSpanId
     const outer = this.currentSpanId
+    const outerName = this.currentSpanName
     this.currentSpanId = id
+    this.currentSpanName = name
     let closed = false
     const close = (outcome: PerfOutcome, error?: string, extra?: PerfContext): void => {
       if (closed) return
       closed = true
-      if (this.currentSpanId === id) this.currentSpanId = outer
+      if (this.currentSpanId === id) {
+        this.currentSpanId = outer
+        this.currentSpanName = outerName
+      }
       this.pushAt(
         'span',
         name,
@@ -261,6 +277,33 @@ class PerfTracer {
     this.record(record)
   }
 
+  /**
+   * Notice when the UI thread stopped running.
+   *
+   * A frozen renderer cannot record its own freeze while it is frozen, so this
+   * heartbeat measures how late it woke up instead. A gap of a second or more is
+   * recorded as `renderer.freeze`, with the span that was open when the thread
+   * stalled — which is the only evidence a freeze leaves, and the thing that
+   * turns "everything is slow at once" into one operation to look at.
+   */
+  private startHeartbeat(): void {
+    if (this.heartbeat !== null) return
+    this.lastBeatAt = Date.now()
+    this.heartbeat = setInterval(() => {
+      const now = Date.now()
+      const gap = now - this.lastBeatAt
+      this.lastBeatAt = now
+      if (!isRenderFreeze(gap)) return
+      const heap = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory
+        ?.usedJSHeapSize
+      this.pushAt('mark', 'renderer.freeze', now - gap, gap, 'abandoned', this.currentSpanId, {
+        interrupted: this.currentSpanName ?? 'idle',
+        ...(typeof heap === 'number' ? { heapUsedBytes: heap } : {})
+      })
+    }, 250)
+    this.heartbeat.unref?.()
+  }
+
   private schedule(): void {
     if (this.timer !== null) return
     this.timer = setTimeout(() => {
@@ -278,6 +321,7 @@ class PerfTracer {
   private install(): void {
     if (this.installed || typeof window === 'undefined') return
     this.installed = true
+    this.startHeartbeat()
     window.addEventListener('pagehide', () => this.flush())
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) this.flush()

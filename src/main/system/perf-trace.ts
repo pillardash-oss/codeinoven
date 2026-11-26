@@ -47,8 +47,6 @@ export class PerfTraceSink {
   private timer: ReturnType<typeof setTimeout> | null = null
   private flushing = false
   private dropped = 0
-  /** Whether to also mirror slow operations into the general log. */
-  private announceSlow = true
   /**
    * Whether every operation is recorded.
    *
@@ -69,17 +67,6 @@ export class PerfTraceSink {
     this.storage = storage
   }
 
-  /**
-   * Keep the general log told about genuinely slow operations.
-   *
-   * The trace itself stays in `perf.jsonl`, but an operator reading `main.jsonl`
-   * should still see the one operation that took seconds without having to know
-   * the trace exists. Anything under the threshold is trace-only.
-   */
-  announceSlowOperations(enabled: boolean): void {
-    this.announceSlow = enabled
-  }
-
   /** Choose between recording everything and recording only what was slow. */
   setFullTrace(enabled: boolean): void {
     this.fullTrace = enabled
@@ -94,15 +81,6 @@ export class PerfTraceSink {
       this.dropped += 1
     }
     this.queue.push(record)
-    if (this.announceSlow && record.durationMs >= ANNOUNCE_SLOW_MS) {
-      Logger.info('Slow operation', {
-        operation: record.name,
-        actor: record.actor,
-        kind: record.kind,
-        durationMs: record.durationMs,
-        outcome: record.outcome
-      })
-    }
     this.schedule()
   }
 
@@ -148,9 +126,6 @@ export class PerfTraceSink {
     this.timer.unref?.()
   }
 }
-
-/** Operations at or above this are also named in the general log. */
-const ANNOUNCE_SLOW_MS = 250
 
 /** The one trace sink the main process writes through. */
 export const perfTrace = new PerfTraceSink()

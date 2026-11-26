@@ -321,3 +321,22 @@ export function shouldRecordPerf(
   if (record.outcome === 'error') return true
   return record.durationMs >= PERF_SLOW_RECORD_MS
 }
+
+/**
+ * A gap this long between two heartbeat ticks is a frozen renderer.
+ *
+ * Electron's renderer runs the UI on one thread. When that thread is busy for
+ * tens of seconds — not slow, *stopped* — every promise it is waiting on resolves
+ * late, so every operation appears slow by exactly the same amount, and the
+ * screen keeps scrolling because scrolling is composited off that thread. The
+ * trace cannot see a freeze from the inside, because the code that would record
+ * it is the code that is not running. A heartbeat that notices how late it woke
+ * up is what turns "everything is slow" into "the renderer stopped for 84
+ * seconds, here is what it was doing".
+ */
+export const PERF_FREEZE_MIN_MS = 1_000
+
+/** Whether a heartbeat gap is long enough to report as a freeze. */
+export function isRenderFreeze(gapMs: number): boolean {
+  return Number.isFinite(gapMs) && gapMs >= PERF_FREEZE_MIN_MS
+}

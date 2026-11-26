@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PerfRecord } from '../../src/lib/perf-trace'
 import { perfTrace, PerfTraceSink } from '../../src/main/system/perf-trace'
 import { PERF_TRACE_LOG_FILE, logDayName } from '../../src/main/system/log-paths'
@@ -36,12 +36,6 @@ function writtenIds(appendRaw: ReturnType<typeof vi.fn<AppendRaw>>): string[] {
 }
 
 describe('performance trace sink', () => {
-  beforeEach(() => {
-    // Announcements go through the durable Logger, which needs an initialized
-    // log directory. The trace's own behaviour is what this file checks.
-    perfTrace.announceSlowOperations(false)
-  })
-
   afterEach(async () => {
     await perfTrace.flush()
     vi.restoreAllMocks()

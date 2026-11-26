@@ -4,9 +4,11 @@ import {
   PERF_MAX_CONTEXT_KEYS,
   PERF_MAX_CONTEXT_VALUE_CHARS,
   PERF_MAX_NAME_CHARS,
+  PERF_FREEZE_MIN_MS,
   PERF_MAX_PROCESS_SAMPLES,
   PERF_SLOW_RECORD_MS,
   createPerfRecordId,
+  isRenderFreeze,
   sanitizePerfBatch,
   sanitizePerfContext,
   sanitizePerfRecord,
@@ -183,5 +185,18 @@ describe('recording policy', () => {
     expect(
       shouldRecordPerf({ kind: 'span', durationMs: PERF_SLOW_RECORD_MS - 1, outcome: 'ok' }, false)
     ).toBe(false)
+  })
+})
+
+describe('renderer freeze detection', () => {
+  it('reports a gap at or above the threshold', () => {
+    expect(isRenderFreeze(PERF_FREEZE_MIN_MS)).toBe(true)
+    expect(isRenderFreeze(84_000)).toBe(true)
+  })
+
+  it('ignores a normal heartbeat gap', () => {
+    expect(isRenderFreeze(250)).toBe(false)
+    expect(isRenderFreeze(PERF_FREEZE_MIN_MS - 1)).toBe(false)
+    expect(isRenderFreeze(Number.NaN)).toBe(false)
   })
 })
