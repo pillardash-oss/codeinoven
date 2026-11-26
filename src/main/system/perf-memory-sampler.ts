@@ -152,3 +152,54 @@ export function stopPerfMemorySampling(): void {
   clearInterval(samplerTimer)
   samplerTimer = null
 }
+
+/**
+ * How late the main process's own timer woke up.
+ *
+ * The memory sampler proved main was alive during the renderer's longest stalls,
+ * but a five-second cadence is far too coarse to see a two-second block. This
+ * heartbeat is the fine-grained answer: a timer that should fire every second
+ * and reports how late it actually did. A late tick means main's event loop was
+ * occupied — a synchronous call, a flood of callbacks — and the record names the
+ * lag, which is exactly the delay every IPC reply behind it pays.
+ *
+ * It exists because the two possibilities look identical from the renderer: "the
+ * main process was busy" and "our message never reached it" both show up as one
+ * slow call. This is the measurement that tells them apart.
+ */
+const LOOP_LAG_INTERVAL_MS = 1_000
+
+/** Lag at or above this is worth a record; a healthy timer is a few milliseconds. */
+const LOOP_LAG_REPORT_MS = 200
+
+let lagTimer: ReturnType<typeof setInterval> | null = null
+
+/** Start the main-process event-loop lag heartbeat. Idempotent. */
+export function startMainLoopLagSampling(intervalMs: number = LOOP_LAG_INTERVAL_MS): void {
+  if (lagTimer !== null) return
+  let expected = Date.now() + intervalMs
+  lagTimer = setInterval(() => {
+    const now = Date.now()
+    const lag = now - expected
+    expected = now + intervalMs
+    if (lag < LOOP_LAG_REPORT_MS) return
+    perfTrace.record({
+      id: `loop-lag-${now}`,
+      kind: 'mark',
+      actor: 'main',
+      name: 'main.loop.lag',
+      startedAt: now - lag,
+      durationMs: lag,
+      outcome: 'abandoned',
+      context: { lagMs: lag }
+    })
+  }, intervalMs)
+  lagTimer.unref?.()
+}
+
+/** Stop the lag heartbeat. Used by the quit path and by tests. */
+export function stopMainLoopLagSampling(): void {
+  if (lagTimer === null) return
+  clearInterval(lagTimer)
+  lagTimer = null
+}

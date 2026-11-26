@@ -8,7 +8,12 @@ import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { hasCaptionOverlay } from '../lib/traffic-light'
 import { Logger } from './system/logger'
 import { perfTrace } from './system/perf-trace'
-import { startPerfMemorySampling, stopPerfMemorySampling } from './system/perf-memory-sampler'
+import {
+  startMainLoopLagSampling,
+  startPerfMemorySampling,
+  stopMainLoopLagSampling,
+  stopPerfMemorySampling
+} from './system/perf-memory-sampler'
 import { PERF_MEMORY_INTERVAL_FULL_MS, PERF_MEMORY_INTERVAL_PRODUCTION_MS } from '../lib/perf-trace'
 import { installApplicationMenu } from './system/app-menu'
 import { captureScreenshotForAgent } from './system/screenshot-service'
@@ -1291,6 +1296,7 @@ void app
     startPerfMemorySampling(
       fullTrace ? PERF_MEMORY_INTERVAL_FULL_MS : PERF_MEMORY_INTERVAL_PRODUCTION_MS
     )
+    startMainLoopLagSampling()
     logConfiguredDataRoot()
     if (!startHidden && splashOutcome !== 'ready' && splashOutcome !== 'deadline') {
       Logger.error('Splash did not reach visual readiness before startup continued', {
@@ -1682,5 +1688,6 @@ app.on('will-quit', () => {
   // milliseconds of a session   the part where the app was being quit because
   // it had become unusable   is the part that never reaches disk.
   stopPerfMemorySampling()
+  stopMainLoopLagSampling()
   void perfTrace.flush()
 })
