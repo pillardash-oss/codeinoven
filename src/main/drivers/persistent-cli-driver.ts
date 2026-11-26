@@ -877,6 +877,25 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     return !!child && !hasProcessExited(child)
   }
 
+  /**
+   * Whether this session has a turn whose process is still alive.
+   *
+   * The chat engine asks this before it hands a message to `steerPrompt`. A
+   * one-process-per-turn harness removes the child the instant the turn's
+   * process exits, while the idle event that moves the thread's row follows a
+   * beat later. A message landing in that gap used to be steered into a turn
+   * that no longer existed, which failed the whole dispatch with "no active
+   * turn to steer" and left the words unanswered   including a finished pawn's
+   * report to the agent that spawned it. A restart already under way (a steer
+   * stopping the old process to resume the turn) still counts as live, so a
+   * second message queues behind it instead of starting a rival turn.
+   */
+  hasActiveTurn(sessionId: string): boolean {
+    if (this.steeringSessions.has(sessionId)) return true
+    const child = this.activeProcesses.get(sessionId)
+    return Boolean(child && !child.killed && !hasProcessExited(child))
+  }
+
   async listProviders(_projectPath: string): Promise<ProviderCatalog[]> {
     void _projectPath
     return []

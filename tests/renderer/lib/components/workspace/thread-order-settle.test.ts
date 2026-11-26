@@ -308,3 +308,83 @@ describe('thread order settle: descent', () => {
     expect(rows(settle, mixed)).toEqual(['c', 'a', 'b'])
   })
 })
+
+/**
+ * The Threads view draws a row under a heading chosen from its status, so a
+ * status change is a move between headings as well as between slots - and the
+ * heading has to follow the arrangement on screen, never the status the row has
+ * already picked up. These pin that: a row settling into Done keeps its Working
+ * heading until its descent is committed, so a thread that starts its next turn
+ * a moment later never leaves Working at all.
+ */
+describe('thread order settle: grouped headings', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('keeps the heading a row had until its descent commits', () => {
+    const settle = new ThreadOrderSettle()
+    const a = makeThread('a')
+    const b = makeThread('b')
+    const c = makeThread('c')
+    settle.sync('threads', [a, b, c])
+    expect(settle.groupingStatuses('threads').get('b')).toBe('executing')
+
+    // The row's own badge says Done the moment the run settles, but the heading
+    // it is drawn under is the one the reader can see it in.
+    const settled = [a, c, makeThread('b', 'completed')]
+    settle.sync('threads', settled)
+    expect(settle.groupingStatuses('threads').get('b')).toBe('executing')
+
+    vi.advanceTimersByTime(DESCENT_HOLD_MS + 1)
+    expect(settle.groupingStatuses('threads').get('b')).toBe('completed')
+  })
+
+  it('keeps the heading a row had when it comes straight back', () => {
+    const settle = new ThreadOrderSettle()
+    const a = makeThread('a')
+    const b = makeThread('b')
+    const c = makeThread('c')
+    settle.sync('threads', [a, b, c])
+
+    settle.sync('threads', [a, c, makeThread('b', 'completed')])
+    vi.advanceTimersByTime(DESCENT_HOLD_MS - 1)
+
+    // The next turn starts inside the window: the row never left its heading and
+    // the status it settles under is the one it had all along.
+    const resumed = [makeThread('b', 'executing'), a, c]
+    settle.sync('threads', resumed)
+    expect(settle.groupingStatuses('threads').get('b')).toBe('executing')
+
+    vi.advanceTimersByTime(DESCENT_HOLD_MS * 2)
+    expect(settle.groupingStatuses('threads').get('b')).toBe('executing')
+  })
+
+  it('records a status change that moved no row at once', () => {
+    const settle = new ThreadOrderSettle()
+    const a = makeThread('a')
+    const b = makeThread('b')
+    settle.sync('threads', [a, b])
+
+    // A thread parked on the user keeps its slot, so there is no descent to
+    // hold: the heading it is drawn under changes with the status it reports.
+    const parked = [makeThread('a', 'awaiting_approval'), b]
+    settle.sync('threads', parked)
+    expect(settle.groupingStatuses('threads').get('a')).toBe('awaiting_approval')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it("drops a list's headings when the list is pruned", () => {
+    const settle = new ThreadOrderSettle()
+    settle.sync('threads', [makeThread('a')])
+    expect(settle.groupingStatuses('threads').size).toBe(1)
+
+    settle.prune(new Set())
+    expect(settle.groupingStatuses('threads').size).toBe(0)
+  })
+})

@@ -453,6 +453,46 @@ describe('RendererRecoveryStore', () => {
     expect(reloaded.moveQueuedMessage('project-1', 'thread-1', 'delivered-already', 0)).toBe(false)
   })
 
+  it('removes one queued message without emptying the queue', () => {
+    const storage = new MemoryStorage()
+    const store = new RendererRecoveryStore(storage)
+    const ids: string[] = []
+    for (const text of ['One', 'Two', 'Three']) {
+      store.setQueuedMessage('project-1', 'thread-1', {
+        text,
+        attachments: [],
+        promptReferences: [],
+        projectReferences: [],
+        taskReferences: [],
+        startAfterThreads: []
+      })
+      const head = store.queuedMessagesFor('project-1', 'thread-1').at(-1)
+      if (head) ids.push(head.id)
+    }
+
+    // Editing or deleting one row takes only that row out, in any position.
+    expect(store.removeQueuedMessage('project-1', 'thread-1', ids[1])).toBe(true)
+    expect(store.queuedMessagesFor('project-1', 'thread-1').map((entry) => entry.text)).toEqual([
+      'One',
+      'Three'
+    ])
+    expect(store.queuedMessageFor('project-1', 'thread-1')?.text).toBe('One')
+
+    // The queue is what survives a restart, exactly as it was left.
+    const reloaded = new RendererRecoveryStore(storage)
+    expect(reloaded.queuedMessagesFor('project-1', 'thread-1').map((entry) => entry.text)).toEqual([
+      'One',
+      'Three'
+    ])
+
+    // A row that was already delivered, or an empty queue, reports no change.
+    expect(reloaded.removeQueuedMessage('project-1', 'thread-1', ids[1])).toBe(false)
+    expect(reloaded.removeQueuedMessage('project-1', 'thread-1', ids[0])).toBe(true)
+    expect(reloaded.removeQueuedMessage('project-1', 'thread-1', ids[2])).toBe(true)
+    expect(reloaded.removeQueuedMessage('project-1', 'thread-1', ids[2])).toBe(false)
+    expect(reloaded.queuedMessageCount('project-1', 'thread-1')).toBe(0)
+  })
+
   it('delete-all clears every queued message for a thread', () => {
     const storage = new MemoryStorage()
     const store = new RendererRecoveryStore(storage)

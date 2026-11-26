@@ -5,7 +5,7 @@
   import type { SvelteMap } from 'svelte/reactivity'
   import { ovenRootKey } from '$lib/oven-root-target'
   import { fly } from 'svelte/transition'
-  import type { Thread } from '$shared/types'
+  import { delegationSpawnerRow, type Thread } from '$shared/types'
   import { panelReveal } from '$lib/components/layout/page-reveal'
   import { appPanelSlot } from '$lib/app-panel-portal'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
@@ -114,6 +114,11 @@
     selectedThread?.boundScope?.scopeBucketId ?? gitPanelScopeBucketId
   )
 
+  /** The row that created the open thread, when this view was opened on a pawn or
+   *  a dispatched run. A coordinator board belongs to that row, not to the project
+   *  on screen, so it is the reason a foreign board may be shown here. */
+  let spawnerRow = $derived(selectedThread ? delegationSpawnerRow(selectedThread) : null)
+
   let activeContextTab = $derived.by(() => {
     const tab = contextSidebarState.sidebarActiveTab
     if (!tab) return null
@@ -122,7 +127,17 @@
     // followed the thread on screen yet (see `ensureDockedThread`), and drawing
     // the older project's panel in the meantime is what put another project's
     // coordinator board on screen. Refusing the tab drops it instead.
-    if (activeProject && 'projectId' in tab && tab.projectId !== evidenceProjectId) return null
+    if (activeProject && 'projectId' in tab && tab.projectId !== evidenceProjectId) {
+      // A spawned thread keeps the board of the row that created it, even when that
+      // row lives in another project: the tab names that row, and the open thread
+      // is the reason it is here at all.
+      const ownedBySpawner =
+        tab.kind === 'coordinator' &&
+        spawnerRow !== null &&
+        spawnerRow.projectId === tab.projectId &&
+        spawnerRow.threadId === tab.threadId
+      if (!ownedBySpawner) return null
+    }
     return tab
   })
 
@@ -176,9 +191,20 @@
   const boardRegistrations = new LastKnown<CoordinatorDockRegistration>()
   let boardRegistration = $derived.by(() => {
     const known = boardRegistrations.get(tabCoordinator)
+    if (!known) return null
     // A board belongs to the project it was published for, so it is refused when
-    // the workspace is showing another one.
-    if (known && activeProject && known.projectId !== activeProject.id) return null
+    // the workspace is showing another one. The exception is the board of the row
+    // that created the open thread: that row may live anywhere, and the tab in
+    // front is what says so.
+    if (activeProject && known.projectId !== activeProject.id) {
+      const tab = activeContextTab
+      const ownedBySpawner =
+        tab?.kind === 'coordinator' &&
+        spawnerRow !== null &&
+        spawnerRow.projectId === known.projectId &&
+        spawnerRow.threadId === known.threadId
+      if (!ownedBySpawner) return null
+    }
     return known
   })
 

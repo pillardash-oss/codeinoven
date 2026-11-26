@@ -595,11 +595,54 @@ class NotificationPanelState {
    * The main-process store is told too, because the durable record is what
    * survives the next restart: without the tombstone, a failure or a parked
    * request would be rebuilt from its thread row on the next launch.
+   *
+   * Dismissing a failure also clears the failed status it reports. The notice is
+   * the row's "needs attention" mark, so retiring it while the row still says
+   * `failed` left the thread stuck on an error the user had just acknowledged.
    */
   dismiss(id: string): void {
+    const entry = this._notifications.find((n) => n.id === id)
+    this.retire(id)
+    if (entry) this.clearFailedThread(entry)
+  }
+
+  /** Retire one entry without interpreting what it reported. */
+  private retire(id: string): void {
     this._dismissed.add(id)
     this._notifications = this._notifications.filter((n) => n.id !== id)
     void invoke('notification:dismissInbox', id).catch(() => {})
+  }
+
+  /**
+   * Clear the failure an error notice stands for.
+   *
+   * The thread card path does the same through `agent:dismissSessionError`, which
+   * resets the row from `failed` to `completed` and drops the cached session
+   * error. A dismissal from the panel has to reach that same state, otherwise the
+   * panel and the thread row disagree about whether the failure still needs the
+   * user.
+   *
+   * A side chat's failure belongs to that chat, not to the thread it was opened
+   * from, so its notice never clears the parent row.
+   */
+  private clearFailedThread(entry: InAppNotification): void {
+    if (entry.kind !== 'error' || entry.source === 'temporary-chat') return
+    void (async () => {
+      try {
+        const thread = await invoke('thread:get', entry.projectId, entry.threadId)
+        if (!thread || thread.status !== 'failed') return
+        await invoke(
+          'agent:dismissSessionError',
+          entry.projectId,
+          entry.threadId,
+          thread.sessionId ?? ''
+        )
+      } catch {
+        // The panel entry still leaves. A thread that could not be read or reset
+        // is corrected by its next status update rather than trapping the user
+        // behind a notice they already dismissed.
+      }
+    })()
   }
 
   dismissAll(): void {
@@ -634,8 +677,12 @@ class NotificationPanelState {
   private retireBy(keep: (n: InAppNotification) => boolean): void {
     const kept: InAppNotification[] = []
     for (const n of this._notifications) {
-      if (keep(n)) kept.push(n)
-      else this._dismissed.add(n.id)
+      if (keep(n)) {
+        kept.push(n)
+        continue
+      }
+      this._dismissed.add(n.id)
+      this.clearFailedThread(n)
     }
     this._notifications = kept
   }
@@ -646,10 +693,12 @@ class NotificationPanelState {
    * Opening a thread is reading it, and reading it is its acknowledgement:
    * whatever notice was waiting there (a settled run, a parked gate, a ready
    * spec, a failure) has done its job the moment its conversation is on screen.
-   * Each entry is retired through `dismiss`, so the tombstone reaches the
-   * durable inbox too and neither a restart nor thread-state hydration can put
-   * a notification back on a thread that was already read. An unattended run
-   * that executed on this very thread is acknowledged with it.
+   * Each entry is retired, so the tombstone reaches the durable inbox too and
+   * neither a restart nor thread-state hydration can put a notification back on
+   * a thread that was already read. An unattended run that executed on this very
+   * thread is acknowledged with it. Reading a failed thread keeps its `failed`
+   * status: the failure is the thread's own outcome until the user dismisses it
+   * or a new run settles over it.
    *
    * Missed scheduled fires are deliberately not acknowledged here: their row
    * carries the Run now and Dismiss actions, and opening the task is not the
@@ -659,7 +708,7 @@ class NotificationPanelState {
     const entries = this._notifications.filter(
       (entry) => entry.projectId === thread.projectId && entry.threadId === thread.id
     )
-    for (const entry of entries) this.dismiss(entry.id)
+    for (const entry of entries) this.retire(entry.id)
     for (const run of assistants.recentBackgroundRuns) {
       if (run.runThreadId === thread.id) void assistants.dismissBackgroundRun(run.runThreadId)
     }

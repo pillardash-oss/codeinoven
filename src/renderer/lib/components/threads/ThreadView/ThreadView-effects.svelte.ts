@@ -32,7 +32,7 @@ import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
 import { reportError } from '$lib/stores/app-errors.svelte'
-import { WORKING_TRACE_PAGE_SIZE, isGroupThread } from '$shared/types'
+import { WORKING_TRACE_PAGE_SIZE, delegationSpawnerRow, isGroupThread } from '$shared/types'
 import type { Thread, AgentEvent, RemoteAgentEventPayload, AgentMessage } from '$shared/types'
 import { releaseAnnotationHighlights } from '$lib/selection-anchors'
 import { registerSelectionAnnotationClaim, trackLiveSelection } from '$lib/selection-menu'
@@ -57,6 +57,14 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
 
   constructor(root: ThreadView) {
     super(root)
+  }
+
+  /** Whether one thread row has spawned agents of either kind to list. */
+  private hasDelegatedWork(row: { projectId: string; threadId: string }): boolean {
+    return (
+      pawnAgentsState.hasWorkers(row.threadId) ||
+      orchestrationCoordinatorState.hasDispatches(row.projectId, row.threadId)
+    )
   }
 
   /**
@@ -354,6 +362,11 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
         thread.projectId,
         this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
       )
+      // A spawned thread shows the board of the row that created it, and that
+      // row's dispatch ledger is keyed by the row, not by the thread on screen.
+      const spawner = delegationSpawnerRow(thread)
+      if (spawner !== null)
+        void orchestrationCoordinatorState.refresh(spawner.projectId, spawner.threadId)
     })
 
     $effect(() => {
@@ -400,13 +413,21 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     })
 
     /**
-     * Keep the delegation board docked on the row that started real work.
+     * Keep the delegation board docked on the row that started real work, and on
+     * that row alone, wherever in the chain the reader is.
      *
      * The board lists threads this one created, and only threads: a pawn it spawned
      * for itself, which is hidden from the thread list, and a run it dispatched into
      * any project. A nested sub-agent is not one of them, so it neither docks this
      * board nor appears in it: a sub-agent has no thread of its own and is reached
      * from the trace of the turn that spawned it.
+     *
+     * A thread that was itself created (a pawn, a dispatched run) opens the board of
+     * the thread that created it when it has started no work of its own. Those
+     * threads appear in no list of their own, so that board is the only way to move
+     * between siblings, and it must not cost a walk back up to the parent first.
+     * The spawner may live in another project: the board is still published under
+     * that row, and the tab points at the row rather than at the project on screen.
      *
      * Both kinds are published from data the row already holds, which is what makes
      * the board appear the moment the work exists and survive a reopen without a
@@ -420,27 +441,40 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       // reply, so a board of spawned threads beside it would duplicate what the
       // transcript already says. The reply carries the link to the work instead.
       if (isGroupThread(thread)) return
-      const rowThreadId = this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
-      const hasPawns = pawnAgentsState.hasWorkers(rowThreadId)
-      if (!hasPawns && !orchestrationCoordinatorState.hasDispatches(thread.projectId, rowThreadId))
-        return
-      coordinatorDockState.register({
+      // The sidebar's own row for this view: a worker/auditor child stands for its
+      // coordinator, every other thread for itself.
+      const anchor = {
         projectId: thread.projectId,
-        threadId: rowThreadId,
+        threadId: this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
+      }
+      // The row whose board this view publishes: the thread's own work first, then
+      // the row that created it.
+      const row = this.hasDelegatedWork(anchor) ? anchor : (delegationSpawnerRow(thread) ?? null)
+      if (row === null || !this.hasDelegatedWork(row)) return
+      coordinatorDockState.register({
+        projectId: row.projectId,
+        threadId: row.threadId,
         label: 'Spawned agents',
         icon: CioSubagent,
         panel: {
           component: 'delegation',
-          props: { projectId: thread.projectId, threadId: rowThreadId }
+          props: { projectId: row.projectId, threadId: row.threadId }
         }
       })
-      // Docks itself the first time a thread starts work of its own, unless the user
-      // closed it before; later work is a no-op because the tab already exists.
+      // Docks itself the first time a thread starts work of its own, or the first
+      // time one of its threads is opened, unless the user closed it before; later
+      // work is a no-op because the tab already exists.
       if (
-        coordinatorDockState.canAutoOpen(thread.projectId, rowThreadId) &&
-        !contextSidebarState.hasCoordinator(thread.projectId, rowThreadId)
+        coordinatorDockState.canAutoOpen(row.projectId, row.threadId) &&
+        !contextSidebarState.hasCoordinator(anchor.projectId, anchor.threadId)
       ) {
-        contextSidebarState.openCoordinator(thread.projectId, rowThreadId, 'Spawned agents')
+        contextSidebarState.openCoordinatorRow(
+          anchor.projectId,
+          anchor.threadId,
+          row.projectId,
+          row.threadId,
+          'Spawned agents'
+        )
       }
     })
 
@@ -465,22 +499,34 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       // from here dropped the board the moment the user stepped into the auditor,
       // leaving the sidebar saying "Coordinator unavailable".
       if (this.root.currentWorkingTraceAttribution.orchestrationChild) return
+      const thread = this.root.handleAgentEvent.thread
       // A row that started real work has a coordinator of its own: the delegation
       // board. A nested sub-agent does not dock one, so it does not hold it open.
-      const ownedRowId = this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
-      if (
-        pawnAgentsState.hasWorkers(ownedRowId) ||
-        orchestrationCoordinatorState.hasDispatches(
-          this.root.handleAgentEvent.thread.projectId,
-          ownedRowId
+      const anchorRowId = this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
+      const anchor = { projectId: thread.projectId, threadId: anchorRowId }
+      if (this.hasDelegatedWork(anchor)) return
+      // A spawned thread publishes the board of the row that created it, and that
+      // board is withdrawn here too once neither row has anything left to list.
+      const spawner = delegationSpawnerRow(thread)
+      if (spawner === null) {
+        coordinatorDockState.withdraw(
+          anchor.projectId,
+          anchor.threadId,
+          ORCHESTRATION_COORDINATOR_COMPONENTS
         )
-      )
         return
+      }
+      if (this.hasDelegatedWork(spawner)) return
       // Only the orchestration boards this view publishes. An authored-work board on
       // the same row belongs to the design store and must survive this cleanup.
       coordinatorDockState.withdraw(
-        this.root.handleAgentEvent.thread.projectId,
-        this.root.currentWorkingTraceAttribution.coordinatorDockThreadId,
+        anchor.projectId,
+        anchor.threadId,
+        ORCHESTRATION_COORDINATOR_COMPONENTS
+      )
+      coordinatorDockState.withdraw(
+        spawner.projectId,
+        spawner.threadId,
         ORCHESTRATION_COORDINATOR_COMPONENTS
       )
     })

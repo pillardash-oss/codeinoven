@@ -5,7 +5,8 @@ import {
   GLOBAL_BROWSER_PROJECT_ID,
   isConversationContainer,
   type Thread,
-  type ThreadSearchResult
+  type ThreadSearchResult,
+  type ThreadStatus
 } from '$shared/types'
 import {
   coordinatorHasActiveDelegates,
@@ -38,11 +39,17 @@ import { threadVisitKey } from '$lib/stores/recent-visits.svelte'
  * thread the user has to come back to. Both sets come from the workspace; asking
  * the recovery store about every thread instead would materialize an empty draft
  * entry per row on each keystroke.
+ *
+ * `statuses` is the status each row is *shown* under, which is not always the one
+ * it carries: the Threads view hands over the arrangement on screen (see
+ * `ThreadOrderSettle.groupingStatuses`), so a status change the settle is holding
+ * cannot move a row between headings before it moves it between slots.
  */
 export function groupThreadsByStatus(
   threads: Thread[],
   draftThreadKeys?: ReadonlySet<string> | null,
-  typingThreadKeys?: ReadonlySet<string> | null
+  typingThreadKeys?: ReadonlySet<string> | null,
+  statuses?: ReadonlyMap<string, ThreadStatus> | null
 ): { label: ThreadGroup; threads: Thread[] }[] {
   // The record's keys are the canonical membership; the order they are drawn in
   // comes from `threadGroupingState.order`, which the user arranges by dragging a
@@ -62,18 +69,24 @@ export function groupThreadsByStatus(
     Done: []
   }
   for (const thread of threads) {
+    const shown = statuses?.get(thread.id)
+    // The group a row is drawn under reads from the status it is shown under.
+    // Only the predicates see this copy; the live row is what gets grouped, so
+    // nothing here can leak a stale status into what a row draws.
+    const judged =
+      shown === undefined || shown === thread.status ? thread : { ...thread, status: shown }
     let group: ThreadGroup
     // A failure is an Error whether or not the user has opened it, exactly as
     // the row's own mark reports it: unread is reserved for a completed run
     // nobody has opened (see `settledThreadReadsUnread`).
-    if (thread.status === 'failed') group = 'Errors'
-    else if (thread.status === 'awaiting_approval') group = 'Attention'
-    else if (thread.status === 'spec') group = 'Spec'
-    else if (isDraftSectionThread(thread, typingThreadKeys)) group = 'Drafts'
+    if (judged.status === 'failed') group = 'Errors'
+    else if (judged.status === 'awaiting_approval') group = 'Attention'
+    else if (judged.status === 'spec') group = 'Spec'
+    else if (isDraftSectionThread(judged, typingThreadKeys)) group = 'Drafts'
     else if (
-      threadHasVisibleWork(thread) ||
-      thread.status === 'working-paused' ||
-      thread.status === 'created' ||
+      threadHasVisibleWork(judged) ||
+      judged.status === 'working-paused' ||
+      judged.status === 'created' ||
       (draftThreadKeys?.has(threadVisitKey(thread)) ?? false) ||
       rendererRecovery.queuedMessageCount(thread.projectId, thread.id) > 0 ||
       rendererRecovery.hasStartAfterPending(thread.projectId, thread.id)
@@ -81,7 +94,7 @@ export function groupThreadsByStatus(
       group = 'Working'
     else if (
       (!isOrchestrationChildThread(thread) &&
-        (settledThreadReadsUnread(thread, thread.read) ||
+        (settledThreadReadsUnread(judged, thread.read) ||
           coordinatorHasUnreadWorkers(thread, scopeState.allScopeThreads))) ||
       temporaryChatUnread.hasUnread(thread.projectId, thread.id)
     )

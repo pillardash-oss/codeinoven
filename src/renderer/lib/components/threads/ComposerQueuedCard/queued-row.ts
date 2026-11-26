@@ -14,4 +14,6 @@ export interface QueuedRowSummary {
   attachments: number
   /** How many threads the entry waits on before it sends. */
   waitsOn: number
+  /** Whether the entry carries a presentation instead of editable text. */
+  hasPresentation: boolean
 }

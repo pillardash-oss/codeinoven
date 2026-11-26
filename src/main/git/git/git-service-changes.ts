@@ -7,7 +7,6 @@ import {
   assertTreeIsh,
   isDirectory,
   isUntracked,
-  pathExists,
   removePath,
   untrackedDiff
 } from './git-service-diffs'
@@ -96,28 +95,31 @@ export class GitServiceChanges {
   }
 
   /**
-   * Stage the given paths, skipping entries with nothing left to stage.
+   * Stage the given paths and let git decide which of them are stageable.
    *
-   * `git add <path>` aborts with "pathspec did not match any files" when the
-   * path matches neither the working tree nor the index. That happens when a
-   * deletion is already staged ("Stage all" and batch selections re-send
-   * already-staged paths), and one such entry used to fail the whole batch.
-   * A path is stageable when it exists on disk (modified, untracked, or
-   * deleted-on-disk-but-tracked resolves through the index match) or it is
-   * still an index entry (covers unstaged deletions and unmerged conflicts);
-   * anything else is a harmless no-op and is filtered out before the add.
+   * `git add <path>` aborts the whole batch with "pathspec did not match any
+   * files" when one path matches neither the working tree nor the index, which
+   * happens whenever a deletion is already staged and "Stage all" or a batch
+   * selection re-sends it. No porcelain flag covers that: `--ignore-errors`
+   * still aborts on the pathspec failure, and `--ignore-missing` is rejected
+   * unless `--dry-run` is also given.
+   *
+   * `update-index` is git's own answer for a path list fed to it by a machine:
+   * `--add` picks up new and modified files, `--remove` drops paths gone from
+   * the work tree, a path that is neither on disk nor in the index is skipped
+   * instead of failing the batch, and an unmerged path is resolved by the
+   * content now on disk. `--stdin -z` keeps the list off the command line, so
+   * its length is bounded by nothing and no path is ever quoted.
+   *
+   * The one porcelain rule it does not apply is `.gitignore`: plumbing stages
+   * exactly the paths it is handed. Every caller passes paths that came from
+   * `git status`, which never lists an ignored file.
    */
   private async stagePaths(directory: string, safePaths: string[]): Promise<void> {
-    const indexEntries = new Set(
-      (await this.core.client(directory).raw(['ls-files', '-z', '--', ...safePaths])).split('\0')
-    )
-    const stageable = await Promise.all(
-      safePaths.map(async (path) => indexEntries.has(path) || (await pathExists(directory, path)))
-    )
-    const pending = safePaths.filter((_, index) => stageable[index])
-    if (pending.length > 0) {
-      await this.core.client(directory).add(pending)
-    }
+    const pathList = safePaths.map((path) => `${path}\0`).join('')
+    await this.core
+      .clientWithInput(directory, pathList)
+      .raw(['update-index', '-z', '--add', '--remove', '--stdin'])
   }
 
   async unstage(projectPath: string, paths: string[]): Promise<GitStatus> {

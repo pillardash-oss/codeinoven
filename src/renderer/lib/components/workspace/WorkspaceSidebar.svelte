@@ -440,6 +440,12 @@
   const settledTimelineThreads = $derived(
     threadOrderSettle.view('threads', unpinnedTimelineThreads)
   )
+  /**
+   * The status each row is drawn under: the one it had in the arrangement on
+   * screen, so a status change that is still being held cannot move a row between
+   * headings before it moves it between slots (see {@link ThreadOrderSettle}).
+   */
+  const timelineGroupingStatuses = $derived(threadOrderSettle.groupingStatuses('threads'))
   /** The Chats list as the settle last committed it. */
   const settledStandaloneThreads = $derived(threadOrderSettle.view('chats', standaloneThreads))
 
@@ -493,7 +499,10 @@
             ? visibleSearchResults.map((result) => result.thread)
             : settledTimelineThreads,
           draftThreadKeys,
-          typingThreadKeys
+          typingThreadKeys,
+          // Search answers over threads this list never settled, so the headings
+          // it draws are the live ones; only the pane's own rows are held.
+          searchPanelActive ? null : timelineGroupingStatuses
         )
       : []
   )

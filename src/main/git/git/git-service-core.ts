@@ -10,6 +10,7 @@ import type { CommandKind, GitRoundTripHooks } from './git-service-runtime'
 import {
   createAuthenticatedGitClient,
   createGitClient,
+  createGitClientWithInput,
   createGitClientWithoutEditor,
   runGitCommand,
   validateRepositoryDirectory
@@ -94,6 +95,11 @@ export class GitServiceCore {
 
   clientWithoutEditor(directory: string): SimpleGit {
     return createGitClientWithoutEditor(directory)
+  }
+
+  /** A client for one plumbing command that takes its path list on stdin. */
+  clientWithInput(directory: string, content: string): SimpleGit {
+    return createGitClientWithInput(directory, content)
   }
 
   withAuthHeader(directory: string, token: string, hooks: GitRoundTripHooks = {}): SimpleGit {

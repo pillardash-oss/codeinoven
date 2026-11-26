@@ -1066,11 +1066,21 @@ export class ChatEngineTurnsSendPrompt {
     // reach the retrying turn instead of colliding with it in the driver.
     // Internal coordinator handoffs are queued above so worker/auditor
     // reports cannot interrupt or confuse the Sr. Engineer's current reasoning.
+    //
+    // A session the row still calls `working` can already be over: a
+    // one-process-per-turn harness removes its child the moment the turn's
+    // process exits, and the idle event that moves the row follows a beat
+    // later. A message arriving in that gap used to be handed to `steerPrompt`,
+    // which threw "no active turn to steer", failed the whole dispatch and left
+    // the message unanswered   a finished pawn's report was lost exactly that
+    // way. When the driver can answer for its own live turn and says it has
+    // none, the message is the next turn on this session, not a steer.
     const driverReportsLiveTurn =
-      activeSessionState === 'waiting' &&
-      driver.hasActiveTurn !== undefined &&
-      driver.hasActiveTurn(sessionId)
-    if (activeSessionState === 'working' || driverReportsLiveTurn) {
+      driver.hasActiveTurn === undefined ? undefined : driver.hasActiveTurn(sessionId)
+    const turnIsLive =
+      driverReportsLiveTurn ??
+      (activeSessionState === 'working' || activeSessionState === 'waiting')
+    if ((activeSessionState === 'working' || activeSessionState === 'waiting') && turnIsLive) {
       if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
         throw new Error(`${driver.name} does not expose native active-turn steering`)
       }

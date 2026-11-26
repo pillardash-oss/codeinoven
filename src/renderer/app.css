@@ -389,6 +389,18 @@ body {
   margin-top: var(--context-rail-band-top, 0px);
 }
 
+/* The host under a native browser page is a surface, not a control.
+
+   It carries `tabindex="-1"` so a keyboard jump can land there, and Chromium's
+   own focus ring then draws the system accent color around the whole page as a
+   rounded gold frame around the browser. That line names no action the reader
+   can take, the page above the host is what answers the pointer and the
+   keyboard, so the host never draws a ring. */
+[data-native-browser-content]:focus,
+[data-native-browser-content]:focus-visible {
+  outline: none;
+}
+
 /* Anything clickable gets a pointer — desktop apps should feel deliberate.
    Zero-specificity (:where) inside the base layer so cursor-* utilities and
    disabled: variants still win. */

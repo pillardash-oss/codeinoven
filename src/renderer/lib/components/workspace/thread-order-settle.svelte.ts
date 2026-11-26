@@ -49,6 +49,8 @@ const DESCENT_HOLD_MS = 1500
 const RETRY_PAUSE_SETTLE_MS = 4000
 /** The status a retry wait holds back, and the only one held. */
 const RETRY_PAUSE_STATUS = 'working-paused'
+/** No committed statuses for a list, so grouping falls back to the live status. */
+const EMPTY_STATUSES: ReadonlyMap<string, ThreadStatus> = new Map()
 
 /** Book-keeping for one list. Plain fields: never read reactively. */
 interface SettledList {
@@ -139,12 +141,24 @@ export function threadRowPositionKey(
  *   that rises is news and commits at once, and a placement the reader made - a
  *   drop, a pin, an unpin - commits at once in either direction.
  *
- * `sync` is the write side and belongs in an effect; `view` is the read side and
- * belongs in a derivation.
+ * A row's status is also the heading it is drawn under, so the headings are read
+ * from the arrangement on screen rather than from the rows as they are now: see
+ * {@link groupingStatuses}.
+ *
+ * `sync` is the write side and belongs in an effect; `view` and
+ * `groupingStatuses` are the read side and belong in a derivation.
  */
 export class ThreadOrderSettle {
   /** Committed row order per list. */
   #orders = new SvelteMap<string, readonly string[]>()
+  /**
+   * The status of every row in the arrangement on screen, per list.
+   *
+   * A SvelteMap because grouping reads it: a status change that is committed
+   * without moving a row still has to re-run the headings, and the order it
+   * does not touch carries no signal for that.
+   */
+  #committedStatuses = new SvelteMap<string, ReadonlyMap<string, ThreadStatus>>()
   // Plain, not a SvelteMap: this is bookkeeping the render never reads, and a
   // signal behind every commit would invalidate the panes for nothing.
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
@@ -204,7 +218,11 @@ export class ThreadOrderSettle {
     // is on screen undid itself, and its hold ends here rather than committing a
     // move the list no longer wants.
     if (order !== undefined && sameOrder(order, ids)) {
-      this.#releaseHold(list)
+      // No row moved, but a status still may have - a thread parked on the user,
+      // a retry entered and left inside the window. Committing it is what keeps
+      // the headings honest (see {@link groupingStatuses}); the commit itself
+      // does no work for an order that already matches the screen.
+      this.#commit(key, list, desired)
       return
     }
     if (retryOnly) {
@@ -266,6 +284,27 @@ export class ThreadOrderSettle {
   }
 
   /**
+   * The status each row is grouped under: the one it carries in the arrangement
+   * on screen, not necessarily the one it carries now.
+   *
+   * The Threads view sorts rows into headings by status, so a status change is a
+   * move between headings as much as a move between slots - and it is the same
+   * descent the settle holds back (see {@link DESCENT_HOLD_MS}). Grouping by the
+   * live status would jump the row to its new heading on the sync whose move was
+   * held, which is the drop the hold exists to keep off screen: a thread settling
+   * into Done and starting its next turn a moment later would go down and come
+   * back up instead of never moving at all. Grouping by the committed status
+   * instead changes a row's heading on the commit that moves it, and nowhere
+   * else.
+   *
+   * Every row whose status is not being held appears here with the status it
+   * already has, so a caller can hand the whole map over.
+   */
+  groupingStatuses(key: string): ReadonlyMap<string, ThreadStatus> {
+    return this.#committedStatuses.get(key) ?? EMPTY_STATUSES
+  }
+
+  /**
    * Let go of every list a caller is no longer handing over, e.g. a project that
    * was removed, so its order and timer cannot outlive it.
    */
@@ -278,6 +317,9 @@ export class ThreadOrderSettle {
     }
     for (const key of [...this.#orders.keys()]) {
       if (!activeKeys.has(key)) this.#orders.delete(key)
+    }
+    for (const key of [...this.#committedStatuses.keys()]) {
+      if (!activeKeys.has(key)) this.#committedStatuses.delete(key)
     }
   }
 
@@ -292,20 +334,6 @@ export class ThreadOrderSettle {
       // move was held is part of it, not a second move.
       this.#commit(key, list, list.desired)
     }, delay)
-  }
-
-  /**
-   * Drop a hold this list opened, because something else is moving it now.
-   *
-   * While a hold is active its timer is the only one armed, so this ends that
-   * timer and nothing else: the rows keep the slots they have until the move
-   * that superseded the hold commits.
-   */
-  #releaseHold(list: SettledList): void {
-    list.retrySince = undefined
-    list.descentSince = undefined
-    if (list.timer !== undefined) clearTimeout(list.timer)
-    list.timer = undefined
   }
 
   /**
@@ -364,8 +392,9 @@ export class ThreadOrderSettle {
     list.retrySince = undefined
     list.descentSince = undefined
     // What is committed is what the reader now sees, so the next sync measures
-    // every row's own move against it.
+    // every row's own move against it, and every heading is chosen from it.
     list.committedKeys = list.keys
+    this.#committedStatuses.set(key, list.statuses)
     const ids = threadIds(desired)
     const order = this.#orders.get(key)
     if (order !== undefined && sameOrder(order, ids)) return

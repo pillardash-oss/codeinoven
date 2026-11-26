@@ -1200,9 +1200,12 @@ export class ChatEngineTurnsSessionIdle {
       const finishedThread = await this.host.threadManager.getThread(info.projectId, info.threadId)
       // A settled run this app dispatched on an agent's behalf is reported back
       // into the thread that asked for it, so the outcome lands where the user
-      // asked for it instead of only on a row they have to go find.
+      // asked for it instead of only on a row they have to go find. The entry is
+      // peeked rather than taken: a run that failed only because a provider
+      // hiccuped is retried by the app, and the report waits for that retry, so
+      // the book has to survive this settle for the retry's own settle to find.
       const settledDispatch = finishedThread
-        ? this.host.orchestration?.dispatches.settle(finishedThread.id)
+        ? this.host.orchestration?.dispatches.peek(finishedThread.id)
         : undefined
       if (settledDispatch) {
         void this.host.units['turns-dispatch'].reportOrchestrationDispatch(

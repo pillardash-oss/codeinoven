@@ -80,11 +80,20 @@
   let selectedTabIds = $state<string[]>([])
   /** The fixed endpoint used by the next Shift-click range. */
   let selectionAnchorId = $state<string | null>(null)
-  let pendingBulkBox = $state<{
+  /**
+   * The reopen in another box the user asked for, waiting on its confirmation.
+   *
+   * It is held here rather than in the row that asked, because the strip is
+   * collapsible: a hover-revealed sidebar unmounts its rows the moment the
+   * pointer leaves it for this dialog, and a dialog owned by a row would close
+   * with the panel before the user could press it.
+   */
+  let pendingBoxReopen = $state<{
     tabIds: string[]
     boxId: string | null
     boxName: string
   } | null>(null)
+  const pendingReopenCount = $derived(pendingBoxReopen?.tabIds.length ?? 0)
   const visibleSelectedTabIds = $derived(
     selectedTabIds.filter((id) => globalBrowser.tabById(id) !== null)
   )
@@ -332,7 +341,7 @@
       return tab !== null && tab.boxId !== boxId
     })
     if (tabsToReopen.length === 0) return
-    pendingBulkBox = {
+    pendingBoxReopen = {
       tabIds: tabsToReopen,
       boxId,
       boxName: boxId
@@ -967,21 +976,33 @@
   <BrowserTabModal tabId={editorTabId} onClose={() => (editorTabId = null)} />
 {/if}
 
-{#if pendingBulkBox}
+{#if pendingBoxReopen}
   <ConfirmDialog
     open
-    variant="primary"
-    title="Reopen selected tabs in another box?"
-    confirmLabel="Reopen tabs"
-    onCancel={() => (pendingBulkBox = null)}
+    variant={pendingReopenCount === 1 ? 'danger' : 'primary'}
+    title={pendingReopenCount === 1
+      ? 'Reopen in another box?'
+      : 'Reopen selected tabs in another box?'}
+    confirmLabel={pendingReopenCount === 1 ? 'Close and reopen' : 'Reopen tabs'}
+    onCancel={() => (pendingBoxReopen = null)}
     onConfirm={() => {
-      if (pendingBulkBox) reopenTabsInBox(pendingBulkBox.tabIds, pendingBulkBox.boxId)
-      pendingBulkBox = null
+      const pending = pendingBoxReopen
+      if (!pending) return
+      pendingBoxReopen = null
+      reopenTabsInBox(pending.tabIds, pending.boxId)
     }}
   >
-    <p>
-      {visibleSelectedTabIds.length} tabs will close and reopen in {pendingBulkBox.boxName}. Each
-      box has separate cookies and sign-ins, and page history will not carry over.
-    </p>
+    {#if pendingReopenCount === 1}
+      <p>
+        This tab closes and its address opens again in {pendingBoxReopen.boxName}. Cookies stay in
+        their own boxes, so the page opens signed out unless that box is already signed in, no
+        matter which browser signed it in. The tab's back and forward history is not carried over.
+      </p>
+    {:else}
+      <p>
+        {pendingReopenCount} tabs will close and reopen in {pendingBoxReopen.boxName}. Each box has
+        separate cookies and sign-ins, and page history will not carry over.
+      </p>
+    {/if}
   </ConfirmDialog>
 {/if}

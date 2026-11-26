@@ -961,6 +961,24 @@ class ContextSidebarState {
     this.tabContexts.openCoordinator(projectId, threadId, title)
   }
 
+  /** Dock a row's coordinator board in the context of the thread on screen.
+   *  A spawned thread in another project keeps the board it came from. */
+  openCoordinatorRow(
+    anchorProjectId: string,
+    anchorThreadId: string,
+    rowProjectId: string,
+    rowThreadId: string,
+    title: string
+  ): void {
+    this.tabContexts.openCoordinatorRow(
+      anchorProjectId,
+      anchorThreadId,
+      rowProjectId,
+      rowThreadId,
+      title
+    )
+  }
+
   /** Whether the coordinator tab is already docked for a thread. */
   hasCoordinator(projectId: string, threadId: string): boolean {
     return this.tabContexts.hasCoordinator(projectId, threadId)

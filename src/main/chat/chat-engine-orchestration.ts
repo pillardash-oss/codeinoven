@@ -99,6 +99,18 @@ export class OrchestrationDispatches {
     return dispatch
   }
 
+  /**
+   * The dispatch for a run thread, without taking it.
+   *
+   * A settle that may still be undone by the app's own retry has to read the
+   * entry and leave it in place: consuming it on a transient failure is what
+   * made a retried dispatch report a failure it had already recovered from, or
+   * report nothing at all when the retry finished.
+   */
+  peek(runThreadId: string): PendingOrchestrationDispatch | undefined {
+    return this.pending.get(runThreadId)
+  }
+
   has(runThreadId: string): boolean {
     return this.pending.has(runThreadId)
   }

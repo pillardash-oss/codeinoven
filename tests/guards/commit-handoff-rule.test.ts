@@ -65,8 +65,10 @@ describe('commit handoff rule', () => {
   })
 
   it('tells the spawning agent that the commit dies with it', async () => {
+    // The pawn lives in its own unit since the delegation split, so the handoff
+    // is read where the spawner's report is actually written.
     const assignmentWorkers = await readSource(
-      'src/main/chat/chat-engine/chat-engine-assignment-workers.ts'
+      'src/main/chat/chat-engine/chat-engine-assignment-workers/chat-engine-assignment-workers-pawns.ts'
     )
     expect(assignmentWorkers).toContain('the commit is yours or nobody makes it')
     const subagents = await readSource('src/main/drivers/pi/tools/core-tools-subagents.ts')
