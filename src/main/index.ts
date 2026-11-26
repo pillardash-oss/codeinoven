@@ -659,7 +659,10 @@ const RENDERER_RECOVERY_WINDOW_MS = 60_000
 
 /** Replace the workspace renderer and leave the main process and its work alone. */
 function restartWorkspace(): void {
-  if (state.quitCleanupStarted) return
+  if (state.quitCleanupStarted) {
+    Logger.info('Restart workspace ignored: the app is quitting')
+    return
+  }
   void requestWorkspaceRestart({ window: () => state.mainWindow, openWindow: openMainWindow })
 }
 

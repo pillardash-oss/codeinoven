@@ -1,6 +1,9 @@
 import {
+  app,
   dialog,
   type BrowserWindow,
+  type MessageBoxOptions,
+  type MessageBoxReturnValue,
   type MenuItemConstructorOptions,
   type WebContents
 } from 'electron'
@@ -22,6 +25,27 @@ export interface WorkspaceRestartTarget {
  */
 const requestedRestarts = new WeakSet<WebContents>()
 let restartPending = false
+
+/**
+ * Put a restart question where the user is looking.
+ *
+ * An unparented box can open behind the frozen window or on another Space, and
+ * while it waits unseen every later click is refused as "already pending", so
+ * the item looks dead. A sheet on the workspace window is drawn by the main
+ * process, answers while the page cannot, and always sits on the window.
+ */
+function showRestartQuestion(
+  window: BrowserWindow,
+  options: MessageBoxOptions
+): Promise<MessageBoxReturnValue> {
+  return dialog.showMessageBox(window, options)
+}
+
+/** Bring the window, and with it any sheet it carries, in front of the user. */
+function bringForward(target: WorkspaceRestartTarget): void {
+  target.openWindow()
+  app.focus({ steal: true })
+}
 
 /**
  * Replace only the workspace renderer. Everything in the main process keeps
@@ -68,16 +92,22 @@ function replaceRenderer(target: WorkspaceRestartTarget): void {
 }
 
 export async function requestWorkspaceRestart(target: WorkspaceRestartTarget): Promise<void> {
-  if (restartPending) return
+  Logger.info('Restart workspace requested from the menu', { pending: restartPending })
+  if (restartPending) {
+    // The question is already open: show it again rather than ignore the click.
+    bringForward(target)
+    return
+  }
   // A parked app has no renderer to replace: opening the window builds a fresh one.
-  if (!liveWindow(target)) {
+  const window = liveWindow(target)
+  if (!window) {
     target.openWindow()
     return
   }
   restartPending = true
   try {
-    // The dialog is native and unparented, so it answers while the page cannot.
-    const { response } = await dialog.showMessageBox({
+    bringForward(target)
+    const { response } = await showRestartQuestion(window, {
       type: 'warning',
       title: 'Restart workspace',
       message: `Restart the ${APP_NAME} workspace?`,
@@ -104,13 +134,14 @@ let openOffer: AbortController | null = null
  * user to find it. Waiting changes nothing, and the menu item stays available.
  */
 export async function offerWorkspaceRestart(target: WorkspaceRestartTarget): Promise<void> {
-  if (restartPending || !liveWindow(target)) return
+  const window = liveWindow(target)
+  if (restartPending || !window) return
   restartPending = true
   const offer = new AbortController()
   openOffer = offer
   const icon = process.platform === 'darwin' ? 'menu bar icon' : 'tray icon'
   try {
-    const { response } = await dialog.showMessageBox({
+    const { response } = await showRestartQuestion(window, {
       type: 'warning',
       title: 'Workspace not responding',
       message: `The ${APP_NAME} workspace is not responding`,
