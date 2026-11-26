@@ -37,7 +37,7 @@ const USAGE_EVENT_FEATURE_LIST_SQL = USAGE_EVENT_FEATURES.map((feature) => `'${f
  * already on disk. A data repair that has to run exactly once per install earns
  * a version the same way, with no DDL in it.
  */
-export const DATABASE_SCHEMA_VERSION = 13
+export const DATABASE_SCHEMA_VERSION = 14
 
 export const SCHEMA_SQL = `
 -- ─── Metadata ────────────────────────────────────────────────────────────
@@ -911,6 +911,58 @@ CREATE TABLE IF NOT EXISTS thread_notes (
 );`
 
 /**
+ * The thread's context checkpoints.
+ *
+ * One row per harness session that ended at a checkpoint. This is the app's
+ * replacement for harness compaction: the session is closed and a successor is
+ * started on the same thread, and this row is the record of where the boundary
+ * was, which session crossed it, and what that session had consumed. The
+ * conversation itself never moves: every message stays in `agent_messages`,
+ * tagged with the session it was written in, so the next window can read the
+ * previous one by id.
+ *
+ * `threads.session_id` keeps pointing at the running session, so a checkpoint
+ * row always describes something that has already ended and the two can never
+ * disagree. `parent_thread_id` is only set on a fork, which records lineage here
+ * instead of copying the parent's rows.
+ */
+export const THREAD_CHECKPOINTS_SQL = `
+-- ─── Thread context checkpoints ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS thread_checkpoints (
+  id                   TEXT PRIMARY KEY NOT NULL,
+  thread_id            TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  -- 1, 2, 3 … per thread: "the window before this one" is a read, not a guess.
+  sequence             INTEGER NOT NULL,
+  kind                 TEXT NOT NULL CHECK(kind IN (
+                         'auto','manual','harness-switch','fork','recovery')),
+  harness_id           TEXT NOT NULL,
+  provider_id          TEXT,
+  model_id             TEXT,
+  account_id           TEXT,
+  -- The session that ENDED here, and the one that continued the thread.
+  session_id           TEXT NOT NULL,
+  next_session_id      TEXT,
+  project_path         TEXT NOT NULL DEFAULT '',
+  -- The last mirrored message the closed session saw.
+  boundary_message_id  TEXT,
+  boundary_created_at  INTEGER,
+  -- What the closed session had consumed, so the next line decision is real.
+  tokens_before        INTEGER,
+  context_window       INTEGER,
+  -- Set only on a fork: the thread this one's history came from.
+  parent_thread_id     TEXT,
+  label                TEXT,
+  created_at           INTEGER NOT NULL,
+  closed_at            INTEGER,
+  UNIQUE (thread_id, sequence)
+);
+
+CREATE INDEX IF NOT EXISTS idx_thread_checkpoints_thread
+  ON thread_checkpoints(thread_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_thread_checkpoints_session
+  ON thread_checkpoints(session_id);`
+
+/**
  * Private user-only notes attached to global browser tabs.
  *
  * Notes are one feature; only the subject differs. A thread note cascades with
@@ -1298,6 +1350,7 @@ export const DATABASE_SCHEMA_SQL = [
   PERSISTENCE_SQL,
   HARNESS_USAGE_SQL,
   THREAD_NOTES_SQL,
+  THREAD_CHECKPOINTS_SQL,
   BROWSER_TAB_NOTES_SQL,
   STICKY_NOTES_SQL,
   THREAD_DESIGNS_SQL,
