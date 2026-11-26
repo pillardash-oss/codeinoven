@@ -2,6 +2,7 @@ import { unarchivedThreadSql } from '../../lib/archives'
 import type { IpcMainInvokeEvent } from 'electron'
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { registerRendererLogIpcHandler } from './renderer-log-ipc'
+import { withoutTransportPartsInPage } from '../chat/chat-engine/chat-engine-message-merge'
 import { registerPerfTraceIpcHandlers } from './perf-trace-ipc'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
@@ -236,22 +237,26 @@ export function registerHydrationIpcHandlers(
           id: validateBoundedString(before.id, 'Message cursor ID', 1, 512)
         }
       }
-      return threadManager.loadMessagePage(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
-        safeBefore,
-        validateBoundedInteger(limit, 'Message page limit', 1, 100)
+      return withoutTransportPartsInPage(
+        await threadManager.loadMessagePage(
+          validateEntityId(projectId, 'Project ID'),
+          validateEntityId(threadId, 'Thread ID'),
+          safeBefore,
+          validateBoundedInteger(limit, 'Message page limit', 1, 100)
+        )
       )
     }
   )
   handle(
     'thread:loadMessagesAround',
-    (_, projectId: unknown, threadId: unknown, anchorId: unknown, limit: unknown = 40) =>
-      threadManager.loadMessagePageAround(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
-        validateBoundedString(anchorId, 'Message ID', 1, 512),
-        validateBoundedInteger(limit, 'Message page limit', 1, 100)
+    async (_, projectId: unknown, threadId: unknown, anchorId: unknown, limit: unknown = 40) =>
+      withoutTransportPartsInPage(
+        await threadManager.loadMessagePageAround(
+          validateEntityId(projectId, 'Project ID'),
+          validateEntityId(threadId, 'Thread ID'),
+          validateBoundedString(anchorId, 'Message ID', 1, 512),
+          validateBoundedInteger(limit, 'Message page limit', 1, 100)
+        )
       )
   )
   handle('thread:loadUserMessages', async (_, projectId: unknown, threadId: unknown) =>

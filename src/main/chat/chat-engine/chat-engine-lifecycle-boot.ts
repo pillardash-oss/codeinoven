@@ -241,7 +241,8 @@ export class ChatEngineLifecycleBoot {
           throw new TypeError('Message limit must be an integer between 1 and 100')
         }
         const messages = await this.host.loadMessages(projectId, threadId)
-        return limit === undefined ? messages : messages.slice(-limit)
+        const page = limit === undefined ? messages : messages.slice(-limit)
+        return page.map(withoutTransportParts)
       }
     )
     ipcMain.handle(
