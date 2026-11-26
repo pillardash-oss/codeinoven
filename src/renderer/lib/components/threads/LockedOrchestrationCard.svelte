@@ -192,10 +192,7 @@ slot becomes: the reason, and the one control that actually moves the work on. -
           <CardNotice icon={CioAttention} tone="danger">
             <span class="select-text break-words">{failureText}</span>
           </CardNotice>
-          <p>
-            Retry runs this pawn again on the model picked below, so a rate limit or a wrong pick is
-            fixed here.
-          </p>
+          
         {:else if !retryable}
           <p>
             This thread is a {subject} its parent agent spawns and steers. It reports to that agent, and
