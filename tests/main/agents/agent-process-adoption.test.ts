@@ -17,9 +17,45 @@ import { INSTANCE_OWNER_ID } from '../../../src/main/system/process-ownership'
  * stop it.
  */
 
+/**
+ * Only these pids answer with an environment, on either of the two probes the
+ * service uses: `ps -E` on macOS and `/proc/<pid>/environ` on Linux. Stubbing
+ * just one of them made this file pass on a developer's Mac and fail on the
+ * Linux runner that actually gates the suite.
+ */
 const owned = vi.hoisted(() => {
   const environment = new Map<number, { owner: string; session: string | null }>()
   return { environment }
+})
+
+function environOf(pid: number): string | null {
+  const stamp = owned.environment.get(pid)
+  if (!stamp) return null
+  const entries = [`CODEINOVEN_OWNED=${stamp.owner}`]
+  if (stamp.session) entries.push(`CODEINOVEN_SESSION=${stamp.session}`)
+  return `${entries.join('\0')}\0`
+}
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    // The Linux ownership probe reads `/proc/<pid>/environ`; every other read is
+    // delegated, so the journal keeps writing and reading its real file.
+    readFile: async (...args: Parameters<typeof actual.readFile>) => {
+      const route = String(args[0])
+      const match = /^\/proc\/(\d+)\/environ$/u.exec(route)
+      if (match?.[1]) {
+        const environ = environOf(Number(match[1]))
+        if (environ === null) {
+          const missing = new Error(`ENOENT: no such file or directory, open '${route}'`)
+          throw Object.assign(missing, { code: 'ENOENT', errno: -2, path: route })
+        }
+        return environ
+      }
+      return actual.readFile(...args)
+    }
+  }
 })
 
 vi.mock('node:child_process', () => ({
@@ -39,10 +75,9 @@ vi.mock('node:child_process', () => ({
           .split(',')
           .map((value) => Number(value))
         const stdout = pids.flatMap((pid) => {
-          const stamp = owned.environment.get(pid)
-          if (!stamp) return []
-          const session = stamp.session ? ` CODEINOVEN_SESSION=${stamp.session}` : ''
-          return [`${pid} node CODEINOVEN_OWNED=${stamp.owner}${session}`]
+          const environ = environOf(pid)
+          if (environ === null) return []
+          return [`${pid} node ${environ.replaceAll('\0', ' ').trim()}`]
         })
         finish?.(null, { stdout: stdout.join('\n'), stderr: '' })
         return
