@@ -8,6 +8,7 @@ import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { hasCaptionOverlay } from '../lib/traffic-light'
 import { Logger } from './system/logger'
 import { perfTrace } from './system/perf-trace'
+import { HEAP_SNAPSHOT_AUTO_TOTAL_BYTES, heapSnapshots } from './system/perf-heap-snapshot'
 import {
   startMainLoopLagSampling,
   startPerfMemorySampling,
@@ -1291,13 +1292,19 @@ void app
     // the first thing worth measuring, and a sampler started after the window
     // appears has already missed the most expensive minute of the session.
     perfTrace.initialize(storage)
+    // Snapshots write into the same day folder, so they are pointed at the same
+    // storage root the trace uses.
+    heapSnapshots.initialize(storage)
     // A shipped build keeps the trace to operations that were actually slow, on a
     // one-minute memory cadence. A checkout or probe launch records everything:
     // that is where a regression has to become visible before it ships.
     const fullTrace = !isShippedBuild()
     perfTrace.setFullTrace(fullTrace)
     startPerfMemorySampling(
-      fullTrace ? PERF_MEMORY_INTERVAL_FULL_MS : PERF_MEMORY_INTERVAL_PRODUCTION_MS
+      fullTrace ? PERF_MEMORY_INTERVAL_FULL_MS : PERF_MEMORY_INTERVAL_PRODUCTION_MS,
+      // Only a build being investigated snapshots itself when it has grown: the
+      // capture pauses every window for as long as V8 needs to write the file.
+      fullTrace ? HEAP_SNAPSHOT_AUTO_TOTAL_BYTES : undefined
     )
     startMainLoopLagSampling()
     logConfiguredDataRoot()

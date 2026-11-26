@@ -3,6 +3,7 @@ import type { PerfRecord } from '../../lib/perf-trace'
 import { sanitizePerfBatch } from '../../lib/perf-trace'
 import { PERF_RECORDS_SEND_CHANNEL } from '../../lib/ipc/perf-trace'
 import { perfTrace } from '../system/perf-trace'
+import { heapSnapshots } from '../system/perf-heap-snapshot'
 import { readAppMemory, sampleAppMemory } from '../system/perf-memory-sampler'
 
 /** How long a renderer's working set is reused before it is read again. */
@@ -52,6 +53,11 @@ export function registerPerfTraceIpcHandlers(): void {
   ipcMain.handle('perf:flush', async () => {
     await perfTrace.flush()
   })
+
+  // The one way to attribute a renderer's working set to the code holding it.
+  // Reachable from the console in a dev build, and bounded on the main side so a
+  // stray call cannot pause every window for minutes.
+  ipcMain.handle('perf:heapSnapshot', async () => heapSnapshots.capture('manual'))
 
   ipcMain.on(PERF_RECORDS_SEND_CHANNEL, (event, raw: unknown) => {
     const records = sanitizePerfBatch(raw)

@@ -1,4 +1,5 @@
 import type { PerfMemoryReport } from '../perf-trace'
+import type { HeapSnapshotResult } from '../../main/system/perf-heap-snapshot-types'
 import type { Contract } from './contract-helpers'
 
 /**
@@ -28,5 +29,14 @@ export const invokePerfTraceContract = {
    * Quitting, and any investigation that wants a trace truncated exactly at the
    * moment of interest, needs a way to force the queued records out.
    */
-  'perf:flush': {} as Contract<[], void>
+  'perf:flush': {} as Contract<[], void>,
+  /**
+   * Write a full V8 heap snapshot of the app's own renderer windows.
+   *
+   * The only way to attribute a renderer's megabytes to the code holding them.
+   * Bounded on the main side (a few per session, ten minutes apart) and safe to
+   * call from the console: `await window.api.invoke('perf:heapSnapshot')` returns
+   * the files it wrote, ready to load in DevTools → Memory.
+   */
+  'perf:heapSnapshot': {} as Contract<[], HeapSnapshotResult[]>
 }

@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { totalmem } from 'node:os'
 import type { PerfProcessSample } from '../../lib/perf-trace'
 import { Logger } from './logger'
+import { heapSnapshots } from './perf-heap-snapshot'
 import { perfTrace, readProcessMemory } from './perf-trace'
 
 /**
@@ -134,11 +135,27 @@ export function sampleAppMemory(): AppMemorySample {
  * gained 900 MB over four minutes, and it was this window". Idempotent: a second
  * call keeps the first timer.
  */
-export function startPerfMemorySampling(intervalMs: number = SAMPLE_INTERVAL_MS): void {
+export function startPerfMemorySampling(
+  intervalMs: number = SAMPLE_INTERVAL_MS,
+  /** Total app memory at or above which a heap snapshot is taken by itself.
+   *  Omitted means the app never snapshots itself: a snapshot pauses the window
+   *  it reads, so it is for a build that is being investigated, not for a user. */
+  autoSnapshotAboveBytes?: number
+): void {
   if (samplerTimer !== null) return
   samplerTimer = setInterval(() => {
     try {
-      sampleAppMemory()
+      const sample = sampleAppMemory()
+      if (
+        autoSnapshotAboveBytes !== undefined &&
+        sample.totalBytes >= autoSnapshotAboveBytes &&
+        heapSnapshots.available
+      ) {
+        // The sampler is the one place that sees the app cross the threshold, so
+        // it is where the snapshot is requested. Its own budget decides whether
+        // this is the moment: a few per session, minutes apart.
+        void heapSnapshots.capture('memory-threshold')
+      }
     } catch (error) {
       Logger.dev('Performance memory sample failed:', error)
     }
