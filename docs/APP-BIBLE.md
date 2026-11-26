@@ -22,6 +22,7 @@ specify → review → approve → implement
 4. **Everything is auditable.** Atomic filesystem writes (`.tmp` then `rename`), chunked history, checkpoints, per-thread branches, and change tracking exist so that any session can be inspected, diffed, and rolled back.
 5. **Bounded resources.** Threads per project are capped (default 70), history chunks are capped (4MB), and cleanup only ever evicts an unpinned, read thread: pinned, unread, working, waiting-on-you and `spec` threads are never destroyed to make room. Growth is always deliberate, never unbounded.
 6. **The workstation feels like a workspace, not a website.** Dense, calm, operator-grade UI. No marketing gloss, no decorative motion, no layout shift.
+7. **Context is a pointer, not a payload.** A conversation outlives the harness sessions that run it, so a rebuilt session is handed a short recap and the ids it needs, never a replay of the transcript. Checkpoints replace summarising compaction, forks keep lineage instead of copies, and what an agent needs to remember it reads back on demand from the durable mirror. See `docs/CONTEXT-CHECKPOINTS.md`.
 
 ### What CodeInOven is made of
 
@@ -487,6 +488,35 @@ confuse the two.
 
 See `docs/bound-assistant-tasks.md` for the model, the park gate and the receipt
 data path.
+
+### 4.8 A conversation survives its harness, and context is a pointer
+
+A thread outlives the harness sessions that run it. A fork, a harness switch, a
+transcript edit and a checkpoint all rebuild a session the same way, and none of
+them may re-feed the conversation through the prompt.
+
+- The durable mirror (`agent_messages`) is the conversation. The prompt carries a
+  short recap — the thread id, what was asked, how the last turn ended, what was
+  done — plus the read-only calls that recover the rest in full. A replayed
+  transcript costs a slice of the window on every rebuild and makes models answer
+  the replayed request instead of the live one.
+- Reads are bounded per call and page backwards by message id, and they return
+  the turn's tool calls with them: the evidence of what was run and changed, not
+  only the assistant's prose. Cost grows with the questions an agent asks, never
+  with the age of the thread.
+- A session that crosses the checkpoint line is **closed**, not summarized: the
+  app records a checkpoint row (thread, sequence, harness, session id, boundary
+  message, tokens at the line), reports it as Checkpointing, and starts the next
+  session on the same thread. Harness compaction on Pi is disabled in favour of
+  it; the emergency rebuild path stays.
+- A fork is lineage, not a copy. It records the parent thread and the message it
+  cut at, copies no rows, and names the parent id in its first turn, so a fork of
+  a fork cannot re-store the same history.
+- Storage stays linear in what is written: every persisted string is capped, and
+  no mechanism in this path duplicates history.
+
+See `docs/CONTEXT-CHECKPOINTS.md` for the brief's contents, the read bounds, the
+checkpoint table and what each harness has to do.
 
 ---
 
