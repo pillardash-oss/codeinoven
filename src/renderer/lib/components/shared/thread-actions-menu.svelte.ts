@@ -1,19 +1,17 @@
 import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
 import { archiveItem } from '$lib/archive-actions'
-import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
 import CioBoard from '@pdslng/cio-icon/CioBoard.svelte'
 import CioBookmark from '@pdslng/cio-icon/CioBookmark.svelte'
-import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
 import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
 import CioEyeOff from '@pdslng/cio-icon/CioEyeOff.svelte'
 import CioFork from '@pdslng/cio-icon/CioFork.svelte'
-import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
 import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
 import CioPin from '@pdslng/cio-icon/CioPin.svelte'
 import CioPinOff from '@pdslng/cio-icon/CioPinOff.svelte'
 import CioSend from '@pdslng/cio-icon/CioSend.svelte'
 import CioCircle from '@pdslng/cio-icon/CioCircle.svelte'
 import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
+import { THREAD_GROUP_MARK } from '$lib/components/threads/thread-state-marks'
 import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
 import { copyText } from '$lib/copy-text'
 import { feature } from '$lib/feature-registry'
@@ -183,6 +181,9 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
     // A row that does not track read has no unread reading: its finished run is
     // simply done, and its mark says so.
     const currentOutcome = settledOutcome === 'unread' && !tracksRead ? 'done' : settledOutcome
+    // The entries wear the inbox's own marks (`THREAD_GROUP_MARK`), the exact
+    // glyphs the Threads view paints on the Unread, Done and Errors group
+    // headers, so the menu and the list it acts on can never disagree.
     const statusItems: MenuItem[] =
       settledOutcome === null
         ? []
@@ -195,7 +196,7 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
                   ? [
                       {
                         label: 'Unread',
-                        icon: CioMessage,
+                        icon: THREAD_GROUP_MARK.Unread.icon,
                         selected: currentOutcome === 'unread',
                         onClick: () => void updateStatus('unread')
                       }
@@ -203,13 +204,13 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
                   : []),
                 {
                   label: 'Done',
-                  icon: CioCheckCircle,
+                  icon: THREAD_GROUP_MARK.Done.icon,
                   selected: currentOutcome === 'done',
                   onClick: () => void updateStatus('done')
                 },
                 {
                   label: 'Error',
-                  icon: CioAlertCircle,
+                  icon: THREAD_GROUP_MARK.Errors.icon,
                   selected: currentOutcome === 'error',
                   onClick: () => void updateStatus('error')
                 }
