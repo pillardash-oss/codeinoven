@@ -24,11 +24,11 @@ const PROBE_TIMEOUT_MS = 30_000
  *
  * `authenticate` is not a capability probe: an agent that needs the browser
  * (Cursor's `cursor_login`) opens it and answers only once the user is done, so
- * the request has to outlive a human's trip to the browser. The client's own
- * 15-minute default is the wrong ceiling for a dialog the user may walk away
- * from, and the probe's 30 seconds is far too short to finish any login.
+ * the request has to outlive a human's trip to the browser. Five minutes is the
+ * span a user is still at the task; past that the dialog is abandoned, and the
+ * probe's 30 seconds is far too short to finish any login.
  */
-const SIGN_IN_TIMEOUT_MS = 10 * 60_000
+const SIGN_IN_TIMEOUT_MS = 5 * 60_000
 /** A probe spawns a process, so a burst of status reads shares one answer. */
 const CACHE_TTL_MS = 30_000
 /**
