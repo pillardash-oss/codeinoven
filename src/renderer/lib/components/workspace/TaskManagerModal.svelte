@@ -1536,26 +1536,6 @@
         <TaskManagerSortMenu {sort} onSortChange={(next) => (sort = next)} />
         <button
           type="button"
-          class="flex h-7 w-7 shrink-0 items-center justify-center border border-border transition-colors {searchOpen
-            ? 'bg-overlay text-foreground'
-            : 'bg-elevated text-dimmed hover:bg-overlay hover:text-foreground'}"
-          aria-pressed={searchOpen}
-          title={searchOpen
-            ? 'Close search and clear the query'
-            : 'Search running processes by pid, port, path, thread, or app name'}
-          aria-label={searchOpen
-            ? 'Close search and clear the query'
-            : 'Search running processes by pid, port, path, thread, or app name'}
-          onclick={toggleSearch}
-        >
-          {#if searchOpen}
-            <CioClose size={13} />
-          {:else}
-            <CioSearch size={13} />
-          {/if}
-        </button>
-        <button
-          type="button"
           class="flex h-7 w-7 shrink-0 items-center justify-center border border-border transition-colors {pollPaused
             ? 'bg-overlay text-foreground'
             : 'bg-elevated text-dimmed hover:bg-overlay hover:text-foreground'}"
@@ -1572,6 +1552,31 @@
             <CioPlay size={13} />
           {:else}
             <CioPause size={13} />
+          {/if}
+        </button>
+        <!-- Search is the panel's default action on purpose: the footer's last
+        enabled button becomes the modal's primary action, so search is what
+        the task manager focuses (and highlights) when it opens. Marking it
+        explicitly keeps that true while a refresh has the toggle disarmed. -->
+        <button
+          type="button"
+          data-modal-primary
+          class="flex h-7 w-7 shrink-0 items-center justify-center border border-border transition-colors {searchOpen
+            ? 'bg-overlay text-foreground'
+            : 'bg-elevated text-dimmed hover:bg-overlay hover:text-foreground'}"
+          aria-pressed={searchOpen}
+          title={searchOpen
+            ? 'Close search and clear the query'
+            : 'Search running processes by pid, port, path, thread, or app name'}
+          aria-label={searchOpen
+            ? 'Close search and clear the query'
+            : 'Search running processes by pid, port, path, thread, or app name'}
+          onclick={toggleSearch}
+        >
+          {#if searchOpen}
+            <CioClose size={13} />
+          {:else}
+            <CioSearch size={13} />
           {/if}
         </button>
       </div>
