@@ -26,6 +26,7 @@ import type {
   UsageEfficiencyKpis,
   UserMessageSummary
 } from '../types'
+import type { ThreadSettledOutcome } from '../thread-status-policy'
 import type { Contract } from './contract-helpers'
 
 /**
@@ -300,6 +301,11 @@ export const invokeThreadContract = {
   >,
   'thread:markRead': {} as Contract<[projectId: string, threadId: string], Thread>,
   'thread:markUnread': {} as Contract<[projectId: string, threadId: string], Thread>,
+  /** Rewrite a settled thread's outcome (done / unread / error) from the thread menu. */
+  'thread:setSettledOutcome': {} as Contract<
+    [projectId: string, threadId: string, outcome: ThreadSettledOutcome],
+    Thread
+  >,
   /** Renderer → main composer draft transitions feeding the turn-grading timers. */
   'thread:draftActivity': {} as Contract<
     [projectId: string, threadId: string, drafting: boolean],

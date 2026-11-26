@@ -553,13 +553,7 @@ describe('ThreadManager', () => {
     expect(grandchildPage.messages.map((message) => message.id)).toEqual(['history-1'])
 
     // Cut at the fork's own message: inherited history plus that turn.
-    const sibling = await manager.forkThread(
-      'project1',
-      fork.id,
-      'Third fork',
-      undefined,
-      'fork-1'
-    )
+    const sibling = await manager.forkThread('project1', fork.id, 'Third fork', undefined, 'fork-1')
     const siblingPage = await manager.loadMessagePage('project1', sibling.id, undefined, 50)
     expect(siblingPage.messages.map((message) => message.id)).toEqual([
       'history-1',
@@ -1104,5 +1098,111 @@ describe('archived threads are invincible', () => {
     expect(await manager.getThread('project1', otherA.id)).toBeNull()
     expect(await manager.getThread('project1', otherB.id)).not.toBeNull()
     expect(await manager.getThread('project1', created.id)).not.toBeNull()
+  })
+})
+
+describe('ThreadManager settled outcome rewrite', () => {
+  async function settledThread(
+    manager: ThreadManager,
+    status: 'completed' | 'failed' | 'interrupted'
+  ) {
+    const thread = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: `Settled ${status}`
+    })
+    return manager.setStatus('project1', thread.id, status)
+  }
+
+  it('pushes a read, done thread back to unread', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-10T10:00:00.000Z'))
+    const { manager } = await createManager()
+    const done = await settledThread(manager, 'completed')
+    await manager.setStatus('project1', done.id, 'completed', { read: true })
+
+    vi.setSystemTime(new Date('2026-09-10T10:05:00.000Z'))
+    const unread = await manager.setSettledOutcome('project1', done.id, 'unread')
+
+    expect(unread.status).toBe('completed')
+    expect(unread.read).toBe(false)
+    expect(unread.lastActivity).toBe(new Date('2026-09-10T10:05:00.000Z').getTime())
+    expect(await manager.getThread('project1', done.id)).toMatchObject({
+      status: 'completed',
+      read: false
+    })
+  })
+
+  it('turns an errored thread into a read, done one and clears its failure', async () => {
+    const { manager } = await createManager()
+    const failed = await settledThread(manager, 'failed')
+
+    const done = await manager.setSettledOutcome('project1', failed.id, 'done')
+
+    expect(done.status).toBe('completed')
+    expect(done.read).toBe(true)
+    expect(done.lastError).toBeUndefined()
+    expect(done.lastOutcome).toBe('completed')
+  })
+
+  it('can settle an errored thread as unread', async () => {
+    const { manager } = await createManager()
+    const failed = await settledThread(manager, 'failed')
+
+    const unread = await manager.setSettledOutcome('project1', failed.id, 'unread')
+
+    expect(unread.status).toBe('completed')
+    expect(unread.read).toBe(false)
+  })
+
+  it('marks a done thread as errored', async () => {
+    const { manager } = await createManager()
+    const done = await settledThread(manager, 'completed')
+    await manager.setStatus('project1', done.id, 'completed', { read: true })
+
+    const failed = await manager.setSettledOutcome('project1', done.id, 'error')
+
+    expect(failed.status).toBe('failed')
+    expect(failed.read).toBe(true)
+    expect(failed.lastOutcome).toBe('failed')
+  })
+
+  it('treats a stopped run as done, so Done is a no-op and Unread still applies', async () => {
+    const { manager } = await createManager()
+    const stopped = await settledThread(manager, 'interrupted')
+
+    expect((await manager.setSettledOutcome('project1', stopped.id, 'done')).status).toBe(
+      'interrupted'
+    )
+    const unread = await manager.setSettledOutcome('project1', stopped.id, 'unread')
+    expect(unread.status).toBe('completed')
+    expect(unread.read).toBe(false)
+  })
+
+  it('refuses to rewrite a thread the app is still driving', async () => {
+    const { manager } = await createManager()
+    const thread = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Executing'
+    })
+    await manager.setStatus('project1', thread.id, 'executing')
+
+    await expect(manager.setSettledOutcome('project1', thread.id, 'error')).rejects.toThrow(
+      /cannot be marked error/
+    )
+    expect(await manager.getThread('project1', thread.id)).toMatchObject({ status: 'executing' })
+  })
+
+  it('leaves a thread that already reads as the requested outcome untouched', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-10T12:00:00.000Z'))
+    const { manager } = await createManager()
+    const done = await settledThread(manager, 'completed')
+
+    vi.setSystemTime(new Date('2026-09-10T12:30:00.000Z'))
+    const same = await manager.setSettledOutcome('project1', done.id, 'done')
+
+    expect(same.lastActivity).toBe(done.lastActivity)
   })
 })

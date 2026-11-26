@@ -1,5 +1,10 @@
 import type { Thread, ThreadAnnounceOptions, ThreadSettings, ThreadStatus } from '../types'
 import { scopeSliceForStatus } from '../types'
+import {
+  canUpdateThreadStatus,
+  threadSettledOutcome,
+  type ThreadSettledOutcome
+} from '../thread-status-policy'
 import { Logger } from '../../main/system/logger'
 import type { ThreadRepo } from '../../main/database/repositories/thread-repo'
 
@@ -147,6 +152,45 @@ export class ThreadStatusService {
     await this.threadRepo.upsertViaWorker(updated)
     await this.announce(updated, { notify: opts?.notify })
     return updated
+  }
+
+  /**
+   * Rewrite a settled thread's outcome at the user's request (the thread menu's
+   * "Update status" submenu).
+   *
+   * The user is the authority here, so the write is a plain settle: `unread` is a
+   * finished run nobody has opened (the one state `canMarkThreadUnread` reserves
+   * for `completed`), `done` is the same run acknowledged, and `error` is the
+   * needs-attention row. Nothing is announced as a completion or a failure: the
+   * user just acted on the row they are looking at, so an OS notification about
+   * their own click would be noise.
+   *
+   * A row that is still being driven (working, parked, retrying, spec) has no
+   * outcome to rewrite and is refused rather than silently ignored, so a caller
+   * that skipped the menu gate cannot park live work behind a `failed` badge.
+   * A rewrite that lands on the state the row already reads as is a no-op and
+   * keeps the row's activity where it was.
+   */
+  async setSettledOutcome(
+    projectId: string,
+    threadId: string,
+    outcome: ThreadSettledOutcome
+  ): Promise<Thread> {
+    const existing = this.requireOwned(projectId, threadId)
+    if (!canUpdateThreadStatus(existing.status)) {
+      throw new Error(
+        `Thread ${threadId} cannot be marked ${outcome} while it is ${existing.status}`
+      )
+    }
+    if (threadSettledOutcome(existing) === outcome) return existing
+
+    if (outcome === 'error') {
+      return this.setStatus(projectId, threadId, 'failed', { read: true, notify: false })
+    }
+    return this.setStatus(projectId, threadId, 'completed', {
+      read: outcome === 'done',
+      notify: false
+    })
   }
 
   async dismissSpecReview(

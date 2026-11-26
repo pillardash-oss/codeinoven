@@ -1,4 +1,4 @@
-import { isThreadBusyStatus } from '../thread-status-policy'
+import { isThreadBusyStatus, type ThreadSettledOutcome } from '../thread-status-policy'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import { GLOBAL_BROWSER_PROJECT_ID, GLOBAL_BROWSER_THREAD_ID } from '../ipc/browser'
 import { broadcastThreadDraftUpdated } from '../../main/chat/thread-events'
@@ -747,6 +747,14 @@ export class ThreadManager {
     }
   ): Promise<Thread> {
     return this.status.setStatus(projectId, threadId, status, opts)
+  }
+
+  async setSettledOutcome(
+    projectId: string,
+    threadId: string,
+    outcome: ThreadSettledOutcome
+  ): Promise<Thread> {
+    return this.status.setSettledOutcome(projectId, threadId, outcome)
   }
 
   async dismissSpecReview(

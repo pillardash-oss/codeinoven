@@ -1,6 +1,8 @@
 <script lang="ts">
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
   import CioEllipsisVertical from '@pdslng/cio-icon/CioEllipsisVertical.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Component } from 'svelte'
 
@@ -13,6 +15,13 @@
     disabled?: boolean
     /** When true, ActionSheet renders a check so the item reads as the current selection. */
     selected?: boolean
+    /** A nested menu opened by this entry. An entry with children is a trigger,
+     *  not an action: `onClick` is ignored and the menu opens beside it.
+     *
+     *  The thread menu uses it for "Update status", where the same three
+     *  outcomes apply to very different rows and listing them inline would triple
+     *  the menu. */
+    children?: MenuItem[]
     /** When true the entry is a non-interactive caption rather than an action.
      *
      *  A menu uses it to name what it acts on before listing the actions, so the
@@ -51,6 +60,18 @@
     vertical = false,
     anchorOnly = false
   }: Props = $props()
+
+  /** One row style for a plain item and a submenu trigger, so a trigger reads as
+   *  an ordinary entry with a chevron rather than a second kind of control. */
+  function itemRowClass(item: MenuItem): string {
+    return [
+      'flex w-full items-center gap-2 px-2.5 py-1.5 text-[0.6875rem] outline-none transition-colors max-md:py-2.5 data-[state=open]:bg-elevated',
+      item.danger
+        ? 'text-danger hover:bg-danger/10 focus:bg-danger/10'
+        : 'text-foreground hover:bg-elevated focus:bg-elevated',
+      item.disabled ? 'cursor-not-allowed opacity-40' : ''
+    ].join(' ')
+  }
 </script>
 
 <DropdownMenu.Root
@@ -100,16 +121,57 @@
           >
             {item.label}
           </div>
+        {:else if item.children}
+          <DropdownMenu.Sub>
+            <DropdownMenu.SubTrigger disabled={item.disabled} class={itemRowClass(item)}>
+              {#if item.icon}
+                {@const Icon = item.icon}
+                <Icon size={13} class="text-muted" />
+              {/if}
+              {item.label}
+              <CioForward size={11} class="ml-auto shrink-0 text-dimmed" />
+            </DropdownMenu.SubTrigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.SubContent
+                sideOffset={4}
+                collisionPadding={8}
+                class="z-50 w-40 border bg-surface p-1 shadow-lg"
+              >
+                {#each item.children as child (child.label)}
+                  {#if child.divider}
+                    <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
+                  {:else if child.header}
+                    <div
+                      class="truncate px-2.5 pt-1 pb-0.5 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+                    >
+                      {child.label}
+                    </div>
+                  {:else}
+                    <DropdownMenu.Item
+                      disabled={child.disabled}
+                      class={itemRowClass(child)}
+                      onSelect={() => {
+                        child.onClick?.()
+                      }}
+                    >
+                      {#if child.icon}
+                        {@const Icon = child.icon}
+                        <Icon size={13} class={child.danger ? '' : 'text-muted'} />
+                      {/if}
+                      {child.label}
+                      {#if child.selected}
+                        <CioCheck size={12} class="ml-auto shrink-0 text-primary" />
+                      {/if}
+                    </DropdownMenu.Item>
+                  {/if}
+                {/each}
+              </DropdownMenu.SubContent>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Sub>
         {:else}
           <DropdownMenu.Item
             disabled={item.disabled}
-            class={[
-              'flex w-full items-center gap-2 px-2.5 py-1.5 text-[0.6875rem] outline-none transition-colors max-md:py-2.5',
-              item.danger
-                ? 'text-danger hover:bg-danger/10 focus:bg-danger/10'
-                : 'text-foreground hover:bg-elevated focus:bg-elevated',
-              item.disabled ? 'cursor-not-allowed opacity-40' : ''
-            ]}
+            class={itemRowClass(item)}
             onSelect={() => {
               item.onClick?.()
             }}
@@ -119,6 +181,9 @@
               <Icon size={13} class={item.danger ? '' : 'text-muted'} />
             {/if}
             {item.label}
+            {#if item.selected}
+              <CioCheck size={12} class="ml-auto shrink-0 text-primary" />
+            {/if}
           </DropdownMenu.Item>
         {/if}
       {/each}
