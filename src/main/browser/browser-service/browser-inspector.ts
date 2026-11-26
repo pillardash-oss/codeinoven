@@ -699,6 +699,29 @@ export function inspectorInstallScript(key: string): string {
     }
 
     /**
+     * Whether an element is the page itself in everything but name.
+     *
+     * An app root or a design's own wrapper fills the whole viewport without
+     * being html or body, and boxing it draws a line around the entire page.
+     * That line reads as the browser highlighting its own window rather than as
+     * a comment on a part of the page, and it is the one outline nobody has a
+     * use for, so a viewport-filling element is treated as the backdrop it is.
+     * The scrollbars are not part of the element, hence the small allowance.
+     */
+    function coversViewport(element) {
+      if (isDocumentLevel(element)) return true;
+      const rect = viewportRect(element);
+      const width = innerWidth || document.documentElement?.clientWidth || 0;
+      const height = innerHeight || document.documentElement?.clientHeight || 0;
+      return (
+        rect.x <= 8 &&
+        rect.y <= 8 &&
+        rect.width >= width - 24 &&
+        rect.height >= height - 24
+      );
+    }
+
+    /**
      * Whether a rectangle overlaps the visible page.
      *
      * viewportRect answers in x/y/width/height, not a DOMRect, so the edges are
@@ -749,9 +772,12 @@ export function inspectorInstallScript(key: string): string {
         }
         const rect = viewportRect(element);
         const shown = onScreen(rect);
+        // A commented wrapper that is the whole page keeps its pin but never its
+        // box: the box is the frame around the browser that nobody asked for.
+        const boxed = shown && !coversViewport(element);
         place(rect, marker.box);
-        marker.box.style.display = shown ? 'block' : 'none';
-        placed.push(marker.id + ':' + Math.round(rect.x) + ',' + Math.round(rect.y) + ',' + Math.round(rect.width) + ',' + Math.round(rect.height) + ',' + (shown ? 1 : 0));
+        marker.box.style.display = boxed ? 'block' : 'none';
+        placed.push(marker.id + ':' + Math.round(rect.x) + ',' + Math.round(rect.y) + ',' + Math.round(rect.width) + ',' + Math.round(rect.height) + ',' + (boxed ? 1 : 0));
         // A pin belongs to the part of the page its element is in: it is drawn
         // at the element and hidden once that part is off screen, rather than
         // being clamped to the viewport edge for something the reader cannot
@@ -808,7 +834,7 @@ export function inspectorInstallScript(key: string): string {
         return;
       }
       const element = state.hovered;
-      if (!element || !element.isConnected) {
+      if (!element || !element.isConnected || coversViewport(element)) {
         hoverBox.style.display = 'none';
         labelEl.style.display = 'none';
         return;
@@ -846,7 +872,7 @@ export function inspectorInstallScript(key: string): string {
         const chain = documentOf(target).querySelectorAll(':hover');
         if (chain.length > 0) deepest = chain[chain.length - 1];
       } catch (error) {}
-      if (!deepest || deepest.nodeType !== 1 || isDocumentLevel(deepest)) return;
+      if (!deepest || deepest.nodeType !== 1 || coversViewport(deepest)) return;
       state.hovered = deepest;
       placeHitProxy(deepest);
       scheduleHoverFrame();
@@ -1005,7 +1031,7 @@ export function inspectorInstallScript(key: string): string {
       // A pointer that reached the page is not on the disabled control any more.
       if (state.hitTarget) dropHitProxy();
       const raw = event.target && event.target.nodeType === 1 ? event.target : null;
-      const element = raw && !isDocumentLevel(raw) ? raw : null;
+      const element = raw && !coversViewport(raw) ? raw : null;
       const hover = raw ? markerForHover(raw) : null;
       const hoverId = hover ? hover.id : null;
       const markerChanged = state.hoverId !== hoverId;
@@ -1020,6 +1046,22 @@ export function inspectorInstallScript(key: string): string {
       // the conversation, whether or not picking is armed: the pins outlive
       // inspect mode, and their elements have to answer the pointer with them.
       if (markerChanged) scheduleHoverFrame();
+    }
+
+    /**
+     * The pointer left the page instead of moving to another element.
+     *
+     * The native view has no mouseleave the overlay can rely on once the app's
+     * own chrome takes the pointer, and a hover box left behind is a gold line
+     * that stays on the page as if it were part of it. A pointer that leaves the
+     * document therefore drops the box at once.
+     */
+    function onPointerOut(event) {
+      if (!state.armed) return;
+      if (event.relatedTarget) return;
+      state.hovered = null;
+      hoverBox.style.display = 'none';
+      labelEl.style.display = 'none';
     }
 
     /**
@@ -1055,7 +1097,7 @@ export function inspectorInstallScript(key: string): string {
     }
 
     function pickElement(element) {
-      if (!element || isDocumentLevel(element)) return;
+      if (!element || coversViewport(element)) return;
       state.hovered = element;
       syncCursor();
       const target = describe(element);
@@ -1080,7 +1122,7 @@ export function inspectorInstallScript(key: string): string {
       if (!state.armed) return;
       if (ourNode(event)) return;
       const element = event.target && event.target.nodeType === 1 ? event.target : null;
-      if (!element || isDocumentLevel(element)) return;
+      if (!element || coversViewport(element)) return;
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
@@ -1184,6 +1226,7 @@ export function inspectorInstallScript(key: string): string {
       doc.documentElement[flag] = true;
       ensureCursorStyle(doc);
       doc.addEventListener('pointermove', onPointerMove, true);
+      doc.addEventListener('pointerout', onPointerOut, true);
       doc.addEventListener('animationstart', onHoverSeen, true);
       addPressListeners(doc);
       doc.addEventListener('keydown', onKeyDown, true);
@@ -1221,6 +1264,7 @@ export function inspectorInstallScript(key: string): string {
     function addListener() {
       if (state.listeners) return;
       document.addEventListener('pointermove', onPointerMove, true);
+      document.addEventListener('pointerout', onPointerOut, true);
       addPressListeners(document);
       document.addEventListener('keydown', onKeyDown, true);
       document.addEventListener('load', onFrameLoad, true);
@@ -1240,6 +1284,7 @@ export function inspectorInstallScript(key: string): string {
     function removeListener() {
       if (!state.listeners) return;
       document.removeEventListener('pointermove', onPointerMove, true);
+      document.removeEventListener('pointerout', onPointerOut, true);
       removePressListeners(document);
       document.removeEventListener('keydown', onKeyDown, true);
       document.removeEventListener('load', onFrameLoad, true);

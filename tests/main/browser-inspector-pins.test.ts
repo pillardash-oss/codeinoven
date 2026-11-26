@@ -323,3 +323,56 @@ describe('a control the pointer never reports', () => {
     expect(event.target.selector).toContain('#locked')
   })
 })
+
+/**
+ * The page as a whole is not something a reader comments on.
+ *
+ * An app root fills the viewport without being html or body, and boxing it drew
+ * a gold line around the entire browser that read as the app highlighting its
+ * own window. The backdrop stays unmarked whether the pointer is on it or a
+ * comment was left on it.
+ */
+describe('a wrapper that fills the viewport', () => {
+  function viewportRect(): DOMRect {
+    return {
+      x: 0,
+      y: 0,
+      width: window.innerWidth,
+      height: window.innerHeight,
+      top: 0,
+      left: 0,
+      right: window.innerWidth,
+      bottom: window.innerHeight,
+      toJSON: () => ({})
+    } as DOMRect
+  }
+
+  it('never draws the hover box around it', async () => {
+    document.body.innerHTML = '<div id="app"><p id="copy">Hello</p></div>'
+    const app = document.querySelector('#app') as HTMLElement
+    app.getBoundingClientRect = viewportRect
+    install()
+    inspector().run({ type: 'arm' })
+
+    app.dispatchEvent(new PointerEvent('pointermove', { bubbles: true }))
+    await new Promise((resolve) => setTimeout(resolve, 80))
+
+    expect(shadowElement('.cio-hover')!.style.display).toBe('none')
+    expect(shadowElement('.cio-label')!.style.display).toBe('none')
+  })
+
+  it('drops the box once the pointer leaves the page', async () => {
+    document.body.innerHTML = '<p id="copy">Hello</p>'
+    const copy = document.querySelector('#copy') as HTMLElement
+    copy.getBoundingClientRect = rect
+    install()
+    inspector().run({ type: 'arm' })
+
+    copy.dispatchEvent(new PointerEvent('pointermove', { bubbles: true }))
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    expect(shadowElement('.cio-hover')!.style.display).toBe('block')
+
+    document.dispatchEvent(new PointerEvent('pointerout', { bubbles: true }))
+    expect(shadowElement('.cio-hover')!.style.display).toBe('none')
+  })
+})
