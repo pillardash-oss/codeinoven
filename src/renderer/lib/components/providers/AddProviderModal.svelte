@@ -4,6 +4,7 @@
   import CioServer from '@pdslng/cio-icon/CioServer.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { onMount } from 'svelte'
+  import { toast } from 'svelte-sonner'
 
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
@@ -542,7 +543,11 @@
       try {
         const status = await invoke('acpAgents:authenticate', harness.id, provider.id)
         await loadAcpAuth()
-        notice = status.state === 'authenticated' ? `Signed in to ${provider.name}.` : ''
+        const signedIn = status.state === 'authenticated'
+        notice = signedIn ? `Signed in to ${provider.name}.` : ''
+        // The panel can be docked or dismissed while the browser flow runs, so
+        // the one acknowledgement that always reaches the user is the toast.
+        if (signedIn) toast.success(`Signed in to ${provider.name}`)
         // A successful sign-in changes the models the agent reports, so the
         // picker's cached (refused) catalog has to be dropped and re-probed now.
         providerCatalog.invalidateAll()
