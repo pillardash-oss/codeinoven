@@ -183,7 +183,16 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
 
   lastCaretText: string | null = $state(null)
 
-  richEditor!: RichMarkdownEditor
+  /**
+   * The mounted editor instance.
+   *
+   * Declared as `$state` because `bind:this` writes it. As a plain field Svelte
+   * rejected the binding ("binding to a non-reactive property") and every reader
+   * of this instance — the speech target, the selection capture, the submit
+   * path — read a value nothing could invalidate, so the composer could keep
+   * talking to an editor that had already been replaced.
+   */
+  richEditor = $state<RichMarkdownEditor>()
 
   composerSpeechTarget(): SpeechEditorTarget | null {
     const editorTarget = this.richEditor?.speechEditorTarget(this.composerEditorId) ?? null
