@@ -59,8 +59,12 @@ export const MAX_PROTOTYPE_CDN_ORIGINS = 50
 /** Longest accepted entry. An origin is a host and an optional port. */
 export const MAX_PROTOTYPE_CDN_ORIGIN_LENGTH = 253
 
-/** Whether a project that has never been configured allows external CDNs. */
-export const DEFAULT_PROTOTYPE_CDN_ENABLED = true
+// The default posture lives in its own module (`prototype-cdn-defaults`) because
+// the renderer's baseline config reads it at boot; re-exported so this module's
+// public surface is unchanged.
+import { DEFAULT_PROTOTYPE_CDN_ENABLED } from './prototype-cdn-defaults'
+
+export { DEFAULT_PROTOTYPE_CDN_ENABLED }
 
 /** Which external hosts a prototype preview may load from. */
 export interface PrototypeCdnPolicy {

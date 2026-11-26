@@ -639,14 +639,18 @@ export const LOCAL_AI_RUNTIME_TABS: readonly LocalAiRuntimeTab[] = [
   { id: 'mlx', label: 'MLX', title: 'The MLX engine and the models it serves' }
 ]
 
-/**
- * How long a resident local model stays loaded after its last use.
- *
- * One window for every local server the app owns: the same model is held for
- * speech cleanup and for search embeddings, so two windows would only decide
- * which subsystem re-loads it first. `keep` pins it for the rest of the session.
- */
-export const LOCAL_AI_UNLOAD_OPTIONS = ['5m', '10m', '20m', '30m', 'keep'] as const
+// The unload window lives in its own module (`llama-cpp-unload`) because the
+// renderer's baseline config reads one value from it at boot; re-exported here
+// so this module's public surface is unchanged.
+export {
+  DEFAULT_LOCAL_AI_UNLOAD_OPTION,
+  isLocalAiUnloadOption,
+  LOCAL_AI_UNLOAD_LABELS,
+  LOCAL_AI_UNLOAD_OPTIONS,
+  localAiUnloadMs,
+  readLocalAiUnloadOption,
+  type LocalAiUnloadOption
+} from './llama-cpp-unload'
 
 /** What "Unload now" released, so the page can name it instead of saying "done". */
 export interface LocalAiUnloadResult {
@@ -654,40 +658,6 @@ export interface LocalAiUnloadResult {
   stopped: number
   /** Model files those servers had loaded. */
   models: string[]
-}
-
-export type LocalAiUnloadOption = (typeof LOCAL_AI_UNLOAD_OPTIONS)[number]
-
-/** 30 minutes: long enough to stay warm across a working session. */
-export const DEFAULT_LOCAL_AI_UNLOAD_OPTION: LocalAiUnloadOption = '30m'
-
-const LOCAL_AI_UNLOAD_MS: Readonly<Record<Exclude<LocalAiUnloadOption, 'keep'>, number>> = {
-  '5m': 5 * 60_000,
-  '10m': 10 * 60_000,
-  '20m': 20 * 60_000,
-  '30m': 30 * 60_000
-}
-
-export const LOCAL_AI_UNLOAD_LABELS: Readonly<Record<LocalAiUnloadOption, string>> = {
-  '5m': '5 minutes',
-  '10m': '10 minutes',
-  '20m': '20 minutes',
-  '30m': '30 minutes',
-  keep: 'Never unload'
-}
-
-export function isLocalAiUnloadOption(value: unknown): value is LocalAiUnloadOption {
-  return typeof value === 'string' && LOCAL_AI_UNLOAD_OPTIONS.some((option) => option === value)
-}
-
-/** A stored value that is no longer a valid option falls back to the default. */
-export function readLocalAiUnloadOption(value: unknown): LocalAiUnloadOption {
-  return isLocalAiUnloadOption(value) ? value : DEFAULT_LOCAL_AI_UNLOAD_OPTION
-}
-
-/** How long the window lasts, or null when the user pinned the model. */
-export function localAiUnloadMs(option: LocalAiUnloadOption): number | null {
-  return option === 'keep' ? null : LOCAL_AI_UNLOAD_MS[option]
 }
 
 /** What the binary card states about the engine it runs. */
