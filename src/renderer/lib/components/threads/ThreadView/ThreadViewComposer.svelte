@@ -87,43 +87,19 @@
    * coordinated thread.
    *
    * A pawn takes no user prompt, so the card that replaces the composer is the
-   * only place its run can be restarted or moved to another model. Everything it
-   * needs is already on the board: the thread's own settings, the catalog, and
-   * the reader's model history.
+   * only place its failed run can be read and retried. Nothing else belongs
+   * there.
    */
   const pawnControls = $derived.by(() => {
     if (board.currentWorkingTraceAttribution.coordinatedThreadKind !== 'pawn') return undefined
     const thread = board.handleAgentEvent.thread
-    const settings = board.loadOlderMessages.settings
-    if (!settings) return undefined
     return {
       projectId: thread.projectId,
-      settings,
-      providers: board.currentWorkingTraceAttribution.providers,
-      favoriteModels: rendererRecovery.modelFavoritesFor(board.sources.modelScope()),
-      recentModels: rendererRecovery.modelRecentsFor(board.sources.modelScope()),
       // Any settle, stop, error or retry moves one of these, so the card re-reads
       // the run instead of trusting what it saw when it mounted.
       refreshKey: `${thread.status}:${thread.updatedAt}:${thread.lastErrorAt ?? ''}:${
         board.handleAgentEvent.providerStatus?.state ?? ''
-      }`,
-      onModelChange: (
-        selected: Parameters<typeof board.currentWorkingTraceAttribution.changeThreadModel>[0]
-      ) => board.currentWorkingTraceAttribution.changeThreadModel(selected),
-      onToggleFavorite: (providerId: string, modelId: string, harnessId: string) =>
-        rendererRecovery.toggleModelFavoriteFor(
-          board.sources.modelScope(),
-          modelKey(harnessId, providerId, modelId)
-        ),
-      onRemoveRecent: (key: string) =>
-        rendererRecovery.removeModelRecentFor(board.sources.modelScope(), key),
-      onReorderFavorite: (draggedKey: string, targetKey: string, position: 'before' | 'after') =>
-        rendererRecovery.reorderModelFavoriteFor(
-          board.sources.modelScope(),
-          draggedKey,
-          targetKey,
-          position
-        )
+      }`
     }
   })
 </script>

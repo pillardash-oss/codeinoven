@@ -4,8 +4,6 @@
   import CioLock from '@pdslng/cio-icon/CioLock.svelte'
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { slide } from 'svelte/transition'
-  import type { ProviderCatalog, ThreadSettings, ThinkingLevel } from '$shared/types'
-  import { normalizeFastInference, supportsFastInference } from '$shared/fast-inference'
   import { presentProviderError } from '$shared/provider-issue'
   import { invoke } from '$lib/ipc.svelte'
   import CardButton from '../shared/CardButton.svelte'
@@ -13,35 +11,20 @@
   import CardFrame from '../shared/CardFrame.svelte'
   import CardHead from '../shared/CardHead.svelte'
   import CardNotice from '../shared/CardNotice.svelte'
-  import ModelPicker from '../shared/ModelPicker.svelte'
   import { foldSlide } from '../shared/card-motion'
   import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
 
   /**
-   * The pawn controls the locked card owns.
+   * What the card needs to read a pawn's run.
    *
-   * A pawn answers only to the agent that spawned it, so nothing it does is
-   * reachable by typing into it. Its run is still the reader's to fix: a rate
-   * limit, a paused provider, or a task spawned on the wrong model or thinking
-   * level is exactly what they have to correct, and they correct it here.
+   * A pawn answers only to the agent that spawned it, so its failure is the one
+   * thing the reader has to see and the one thing they can act on: retry it.
    */
   interface PawnControls {
     projectId: string
-    settings: ThreadSettings
-    providers: ProviderCatalog[]
-    favoriteModels?: string[]
-    recentModels?: string[]
     /** Changes while the pawn's live state may have moved, so the card re-reads
      *  its run instead of showing what it knew when it mounted. */
     refreshKey?: string
-    onModelChange: (settings: ThreadSettings) => void
-    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
-    onRemoveRecent?: (modelKey: string) => void
-    onReorderFavorite?: (
-      draggedKey: string,
-      targetKey: string,
-      position: 'before' | 'after'
-    ) => void
   }
 
   interface Props {
@@ -55,9 +38,8 @@
     stackedAbove?: boolean
     /** The surface below carries the join, so this card drops its bottom rule. */
     joinsBelow?: boolean
-    /** Present for a pawn only. The composer gives up its place to this card, so
-     *  the card must carry the two actions a pawn still needs: retry the run and
-     *  change the model or thinking level it runs on. */
+    /** Present for a pawn only: a run that stopped on a failure can be retried
+     *  from here without sending the pawn a message. */
     pawn?: PawnControls
     onOpenCoordinator: () => void
   }
@@ -124,57 +106,15 @@
   )
   /**
    * Retry exists for one situation only: a pawn whose run stopped on a real
-   * failure. A finished run is finished   offering to run it again invites the
-   * reader to repeat work that already landed   and a live run is not the
-   * reader's to restart. The model picker belongs to that same failure, because
-   * a run that died on a rate limit or on the wrong model has to be able to move
-   * before it is retried.
+   * failure. A finished run is finished, and a live run is not the reader's to
+   * restart.
    */
   const retryable = $derived(pawn !== undefined && pawnFailure !== null && !pawnRunning)
   const chip = $derived.by(() => {
     if (pawnRunning) return { text: 'Running', tone: 'default' as const }
-    if (pawnFailure !== null) return { text: 'Failed', tone: 'urgent' as const }
+    if (retryable) return { text: 'Failed', tone: 'urgent' as const }
     return { text: 'Locked', tone: 'paused' as const }
   })
-
-  /**
-   * Commit a new model on the pawn's own thread, mirroring the picker the
-   * composer shows everywhere else. The retry that follows runs on this
-   * selection, which is the point of offering it here.
-   */
-  function chooseModel(
-    providerId: string,
-    modelId: string,
-    nextHarnessId?: string,
-    accountId?: string
-  ): void {
-    if (!pawn) return
-    const { settings, providers } = pawn
-    const harnessId = nextHarnessId ?? settings.harnessId
-    const provider = providers.find(
-      (candidate) => candidate.harnessId === harnessId && candidate.id === providerId
-    )
-    const model = provider?.models.find((candidate) => candidate.id === modelId)
-    pawn.onModelChange(
-      normalizeFastInference(
-        { ...settings, harnessId, accountId, providerId, modelId },
-        harnessId,
-        providerId,
-        modelId,
-        supportsFastInference(harnessId, providerId, model?.fastSupported)
-      )
-    )
-  }
-
-  function chooseThinking(level: ThinkingLevel): void {
-    if (!pawn) return
-    pawn.onModelChange({ ...pawn.settings, thinkingLevel: level })
-  }
-
-  function chooseRuntime(runtime: import('$shared/types').ModelRuntimeSettings): void {
-    if (!pawn) return
-    pawn.onModelChange({ ...pawn.settings, ...runtime })
-  }
 
   /** Run the same task again on the pawn's thread, on the model it carries now. */
   function retryPawnRun(): void {
@@ -200,8 +140,8 @@ composer that only collects a rejected message. This card is what the composer's
 slot becomes: the reason, and the one control that actually moves the work on. -->
 <CardFrame placement="replace" label="Coordinated thread" {stackedAbove} {joinsBelow}>
   <CardHead
-    icon={kind === 'pawn' && retryable ? CioAttention : CioLock}
-    title={kind === 'pawn' && retryable ? 'Pawn run failed' : 'Driven by its coordinator'}
+    icon={retryable ? CioAttention : CioLock}
+    title={retryable ? 'Pawn run failed' : 'Driven by its coordinator'}
     {chip}
     bind:folded={foldState.folded}
     foldLabel="coordinated thread"
@@ -223,16 +163,6 @@ slot becomes: the reason, and the one control that actually moves the work on. -
           stopped.
         </p>
       {:else if kind === 'pawn'}
-        <p>
-          This thread is a {subject} its parent agent spawns and steers. It reports to that agent, and
-          a new instruction goes there.
-        </p>
-        {#if retryable}
-          <p>
-            Its run stopped on an error, so it can be retried here, on the model and thinking level
-            this thread carries, without sending it a message.
-          </p>
-        {/if}
         {#if retryable && failureText}
           <CardNotice icon={CioAttention} tone="danger">
             <span class="select-text break-words">{failureText}</span>
@@ -257,44 +187,16 @@ slot becomes: the reason, and the one control that actually moves the work on. -
   {/if}
 
   {#if !foldState.folded}
-    <CardFoot yields="right">
-      {#snippet left()}
-        {#if pawn && pawn.providers.length > 0}
-          <ModelPicker
-            providers={pawn.providers}
-            projectId={pawn.projectId}
-            harnessId={pawn.settings.harnessId}
-            providerId={pawn.settings.providerId}
-            modelId={pawn.settings.modelId}
-            accountId={pawn.settings.accountId}
-            favoriteModels={pawn.favoriteModels ?? []}
-            recentModels={pawn.recentModels ?? []}
-            onRemoveRecent={pawn.onRemoveRecent}
-            side="top"
-            label="Change"
-            variant="action"
-            disabled={retrying}
-            onSelect={chooseModel}
-            thinkingLevel={pawn.settings.thinkingLevel}
-            runtimeSettings={pawn.settings}
-            onSelectThinking={chooseThinking}
-            onSelectRuntime={chooseRuntime}
-            onToggleFavorite={pawn.onToggleFavorite}
-            onReorderFavorite={pawn.onReorderFavorite}
-          />
-        {/if}
-      {/snippet}
+    <CardFoot>
       {#snippet right()}
-        {#if pawn}
+        {#if retryable}
           <CardButton
             label="Retry run"
-            title={pawnRunning
-              ? 'The pawn is still working; retry once its run has stopped'
-              : 'Run this pawn agent again on the model it carries now'}
+            title="Run this pawn agent again on the model it carries now"
             icon={retrying ? undefined : CioUndo}
             variant="primary"
             loading={retrying}
-            disabled={retrying || pawnRunning}
+            disabled={retrying}
             onclick={retryPawnRun}
           />
         {/if}
@@ -304,7 +206,7 @@ slot becomes: the reason, and the one control that actually moves the work on. -
             ? `Open the coordinator thread “${coordinatorTitle}”`
             : 'Open the coordinator that runs this thread'}
           icon={CioArrowRight}
-          variant={pawn ? 'secondary' : 'primary'}
+          variant={retryable ? 'secondary' : 'primary'}
           onclick={onOpenCoordinator}
         />
       {/snippet}

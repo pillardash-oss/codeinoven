@@ -321,6 +321,10 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
   private assignmentDraftFailureDurable = $derived.by((): string => {
     const thread = this.root.handleAgentEvent.thread
     if (thread.status !== 'failed' || !thread.lastError) return ''
+    // A coordinated thread (a pawn, worker or auditor) is never an Assignment
+    // draft: its own card carries its failure, and this card's Retry continues a
+    // draft session it does not have.
+    if (thread.userInputLocked === true) return ''
     if (this.root.loadOlderMessages.settings.loopMode === true) return ''
     if (this.root.submitBrainstormDecision.spec !== null) return ''
     if (this.root.submitSpecDecision.assignment !== null) return ''
