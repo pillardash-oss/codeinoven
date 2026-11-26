@@ -26,7 +26,6 @@
   import { loadCachedPanelModule, PANEL_KEYS } from '$lib/lazy-panel'
   import { logRendererError } from '$lib/system/renderer-logger'
   import { invoke } from '$lib/ipc.svelte'
-  import { providerStore } from '$lib/stores/providers.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey } from '$lib/model-keys'
@@ -34,7 +33,6 @@
   import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import { hasSelectedStage } from '$shared/engines/engineering-lifecycle-engine'
   import { engineeringPendingMessage } from '$shared/engineering-generation'
-  import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { ANNOTATION_BUBBLE_SIZE } from '$lib/selection-anchors'
   import { createThreadView } from './ThreadView/ThreadView-board.svelte'
   import type { Props } from './ThreadView/ThreadView-types'
@@ -186,23 +184,32 @@
       )
     }
 
+    // A checkpoint, not a compaction: the session is closed and the thread
+    // continues in a fresh one, so the history is never summarized away and the
+    // earlier windows stay readable by id. Every harness can do it, which is why
+    // this carries no compaction-capability gate.
     actions.push({
-      id: 'command:compact',
-      title: 'Compact conversation',
-      description: 'Summarize older work to free context',
+      id: 'command:checkpoint',
+      title: '/checkpoint',
+      description:
+        'Close this session and continue in a fresh one; the full history stays readable',
       category: 'command',
       source: board.state.applicationActionSource,
-      keywords: ['summarize', 'context', 'tokens'],
-      ...(!supportsManualCompaction(
-        board.loadOlderMessages.settings.harnessId,
-        providerStore.providers
-      )
-        ? {
-            disabledReason: `${board.switchProject.providerName} does not support manual compaction`
-          }
-        : board.switchProject.busy
-          ? { disabledReason: 'Wait for the active run to finish' }
-          : {})
+      keywords: ['compact', 'context', 'tokens', 'free', 'fresh', 'session', 'summarize'],
+      slashCommand: true,
+      ...(board.switchProject.busy ? { disabledReason: 'Wait for the active run to finish' } : {})
+    })
+    // The old spelling keeps working and takes the same checkpoint: a typed
+    // `/compact` must never reach a harness that would rewrite the transcript.
+    actions.push({
+      id: 'command:compact',
+      title: '/compact',
+      description: 'Checkpoint this thread (the same as /checkpoint)',
+      category: 'command',
+      source: board.state.applicationActionSource,
+      keywords: ['checkpoint', 'context', 'tokens'],
+      slashCommand: true,
+      ...(board.switchProject.busy ? { disabledReason: 'Wait for the active run to finish' } : {})
     })
 
     // Quick chat is anchored at the last agent turn, so it only makes sense once
@@ -270,6 +277,10 @@
     }
 
     for (const command of board.switchProject.commands) {
+      // A harness's own `/compact` rewrites the transcript in place, which is
+      // exactly what a checkpoint replaces. It is not offered: `/checkpoint`
+      // (and its `/compact` alias) takes the app-owned path instead.
+      if (command.name === 'compact') continue
       actions.push({
         id: board.switchProject.actionId(command.id),
         title: `/${command.name}`,

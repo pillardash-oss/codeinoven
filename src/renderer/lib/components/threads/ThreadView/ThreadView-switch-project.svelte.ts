@@ -342,17 +342,24 @@ export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
     }
   }
 
-  async compactWork(): Promise<void> {
+  /**
+   * Check the thread in: the session closes and a successor continues it.
+   *
+   * The busy flag is the composer's `compacting` reading, kept under its old name
+   * so the shoe and the usage panel did not have to change: what the user sees is
+   * Checkpointing, and what runs is the checkpoint, not a harness compaction.
+   */
+  async checkpointWork(): Promise<void> {
     if (this.compacting || this.busy) return
     const { projectId, id } = this.root.handleAgentEvent.thread
     this.compacting = true
     this.root.handleAgentEvent.errorMessage = ''
     try {
-      await invoke('agent:compact', projectId, id)
+      await invoke('agent:checkpoint', projectId, id)
       await this.root.abortRun.refreshMessages()
     } catch (error) {
       this.root.handleAgentEvent.errorMessage =
-        error instanceof Error ? error.message : 'The work could not be compacted.'
+        error instanceof Error ? error.message : 'The thread could not be checked in.'
     } finally {
       this.compacting = false
     }
@@ -688,6 +695,10 @@ export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
       await this.saveAssistantKnowledge()
       return
     }
+    if (commandId === 'command:checkpoint' || commandId === 'command:compact') {
+      await this.checkpointWork()
+      return
+    }
     if (commandId === 'command:cio-utility') {
       this.root.unmirroredTraceStartTime.triggerCioUtilityTurn(args)
       return
@@ -783,8 +794,8 @@ export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
       return
     }
 
-    if (action.id === 'command:compact') {
-      await this.compactWork()
+    if (action.id === 'command:checkpoint' || action.id === 'command:compact') {
+      await this.checkpointWork()
       return
     }
 

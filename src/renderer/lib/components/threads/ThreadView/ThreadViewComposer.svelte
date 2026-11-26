@@ -37,7 +37,6 @@
   import AuditReadyCard from '../AuditReadyCard.svelte'
   import AuditGeneratedCard from '../AuditGeneratedCard.svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { providerStore } from '$lib/stores/providers.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import AssistantRecapCard from '$lib/components/assistant/AssistantRecapCard.svelte'
   import AssistantReadyCard from '$lib/components/assistant/AssistantReadyCard.svelte'
@@ -48,7 +47,6 @@
   import { dismissedTodo } from '$lib/stores/dismissed-todo.svelte'
   import { assistantIsScheduled } from '$shared/types'
   import { APP_NAME } from '$shared/brand'
-  import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { harnessDisplayName } from '../thread-message-presentation'
 
   /** The board the surface built, and the few values only it can build. */
@@ -1163,12 +1161,9 @@
                   usageRefreshing={board.contextUsage.accountUsageCache.refreshing}
                   harnessUsage={board.harnessUsage.harnessUsage}
                   accountLimit={board.contextUsage.shoeLimit}
-                  canCompact={supportsManualCompaction(
-                    board.loadOlderMessages.settings.harnessId,
-                    providerStore.providers
-                  ) && !board.switchProject.busy}
+                  canCompact={!board.switchProject.busy}
                   compacting={board.switchProject.compacting}
-                  onCompact={() => void board.switchProject.compactWork()}
+                  onCompact={() => void board.switchProject.checkpointWork()}
                   onActivateBankedReset={() => {
                     board.state.showBankedResetConfirm = true
                   }}

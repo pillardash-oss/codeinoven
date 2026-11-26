@@ -63,6 +63,11 @@ export class ChatEngineLifecycleBoot {
     ipcMain.handle('agent:compact', (_, projectId: string, threadId: string) =>
       this.host.compactSession(projectId, threadId)
     )
+    // The user's checkpoint, from `/checkpoint` (and its `/compact` alias): the
+    // session closes and a successor continues the thread.
+    ipcMain.handle('agent:checkpoint', (_, projectId: string, threadId: string) =>
+      this.host.checkpointSession(projectId, threadId)
+    )
     ipcMain.handle('agent:listProviders', (_, projectId: string) =>
       this.host.listProviders(projectId)
     )

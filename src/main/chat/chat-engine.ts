@@ -1578,6 +1578,20 @@ export class ChatEngine {
     return this.units['turns-sessions'].moveSessionToNewHost(projectId, threadId)
   }
 
+  /**
+   * Check the thread in: close its session and continue on a successor.
+   *
+   * This is the user-facing `/checkpoint`. It is its own entry point rather than
+   * an alias for `compactSession` so a refused checkpoint reports itself instead
+   * of silently falling back to a harness compaction the user did not ask for.
+   */
+  async checkpointSession(projectId: string, threadId: string): Promise<void> {
+    const successor = await this.units['checkpoints'].checkpointNow(projectId, threadId)
+    if (!successor) {
+      throw new Error('This thread could not be checked in. Give it a turn first, then try again.')
+    }
+  }
+
   async compactSession(projectId: string, threadId: string): Promise<void> {
     return this.units['turns-sessions'].compactSession(projectId, threadId)
   }

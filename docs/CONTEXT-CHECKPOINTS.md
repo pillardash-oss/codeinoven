@@ -200,6 +200,17 @@ favour of it.
 Nothing is summarized away. The old session's messages are still in
 `agent_messages`; the session id says which window each row belonged to.
 
+### Asking for one
+
+- **`/checkpoint`** in the composer closes the session and continues the thread on
+  a successor. It carries no harness gate: every harness can be checked in.
+- **`/compact`** remains as an alias and takes the same path, so muscle memory
+  never reaches a harness that would rewrite the transcript in place.
+- A harness's own `compact` command is filtered out of the slash menu for the same
+  reason. Its trigger (where the app sets one) stays as the emergency net.
+- The context panel's action is **Checkpoint Work**, and the busy reading is
+  **Checking in…**.
+
 ### Pi specifics
 
 Pi is the one harness where the app already owns compaction end to end, so most

@@ -81,6 +81,7 @@ export const invokeAgentContract = {
   >,
   'agent:abort': {} as Contract<[projectId: string, threadId: string], void>,
   'agent:compact': {} as Contract<[projectId: string, threadId: string], void>,
+  'agent:checkpoint': {} as Contract<[projectId: string, threadId: string], void>,
   'agent:answerQuestion': {} as Contract<
     [projectId: string, threadId: string, requestId: string, answers: string[][]],
     void
