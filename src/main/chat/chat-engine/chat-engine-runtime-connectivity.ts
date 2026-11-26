@@ -29,6 +29,7 @@ import {
   USAGE_RESET_FALLBACK_RETRY_MS
 } from './chat-engine-constants'
 import { probeSessionLiveness } from './chat-engine-pure'
+import { retryResumesOwnThread } from './chat-engine-retry-eligibility'
 import type { ChatEngine } from '../chat-engine'
 
 /**
@@ -297,9 +298,11 @@ export class ChatEngineRuntimeConnectivity {
    * including harnesses that schedule their own provider retries (OpenCode): a
    * native resume emits `working` and clears the record, while the persisted
    * record keeps the wait alive (and re-runs the thread) across app restarts.
-   * Internal/child sessions are skipped. A rate limit with no usable reset time
-   * is retried on the app's short cooldown schedule; other issues without a
-   * usable reset time are retained for manual recovery rather than discarded.
+   * A nested sub-agent is skipped because its session belongs to the parent's
+   * turn; a pawn (a child session that owns its own thread) is scheduled like
+   * any other thread. A rate limit with no usable reset time is retried on the
+   * app's short cooldown schedule; other issues without a usable reset time are
+   * retained for manual recovery rather than discarded.
    */
   async scheduleAutomaticRetry(
     sessionId: string,
@@ -308,7 +311,11 @@ export class ChatEngineRuntimeConnectivity {
     const scheduler = this.host.state.retryScheduler
     if (!scheduler) return 'refused'
     const info = this.host.sessionRegistry.get(sessionId)
-    if (!info || info.ephemeral === true || this.host.state.childSessionOwners.has(sessionId))
+    // A nested sub-agent shares its parent's thread and turn, so a wait parked
+    // on its session would resume the parent. A pawn is a child session that
+    // owns its own thread, and it takes the same retry as any other thread.
+    const childOwner = this.host.state.childSessionOwners.get(sessionId)
+    if (!info || info.ephemeral === true || !retryResumesOwnThread(childOwner, info.threadId))
       return 'refused'
     // An assistant task whose assistant carries fallback models moves onto the
     // next model and re-runs at once. The fallback exists so a failed model

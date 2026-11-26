@@ -367,6 +367,9 @@ export class ChatEngineAssignmentWorkers {
     }
 
     const failureSummary = task.report.summary
+    // A deliberate retry is a fresh try, not another step of the provider's
+    // cooldown streak.
+    this.host.state.retryScheduler?.clearRateLimitCooldown(workerThreadId)
     await this.host.sendPrompt(
       projectId,
       workerThreadId,

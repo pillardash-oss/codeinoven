@@ -85,6 +85,7 @@ function stubHost(options: StubOptions = {}) {
   const setStatus = vi.fn(async () => thread)
   const clearStoppedByUser = vi.fn(async () => undefined)
   const clearRetry = vi.fn()
+  const clearRateLimitCooldown = vi.fn()
   const loadMessages = vi.fn(async () => options.transcript ?? [])
   const broadcast = vi.fn()
   const followWait = vi.fn(() => new Promise<unknown>(() => undefined))
@@ -121,7 +122,7 @@ function stubHost(options: StubOptions = {}) {
     ),
     handledIdleSessions: new Set<string>(),
     state: {
-      retryScheduler: { clear: clearRetry },
+      retryScheduler: { clear: clearRetry, clearRateLimitCooldown },
       userAbortedSessions: new Set<string>(),
       childSessionOwners: new Map(),
       childSessionActivityStatuses: new Map<string, string>(),
@@ -137,6 +138,7 @@ function stubHost(options: StubOptions = {}) {
     sendPrompt,
     setStatus,
     clearRetry,
+    clearRateLimitCooldown,
     clearStoppedByUser
   }
 }

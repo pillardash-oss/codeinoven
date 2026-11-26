@@ -466,6 +466,7 @@ export class ChatEnginePawnAgents {
     // The user is running this now, on the model the thread carries now: the
     // queued resume the retry policy parked belongs to the old turn.
     this.host.state.retryScheduler?.clear(sessionId)
+    this.host.state.retryScheduler?.clearRateLimitCooldown(pawn.id)
     this.host.state.userAbortedSessions.delete(sessionId)
     this.host.handledIdleSessions.delete(sessionId)
     await this.host.threadManager.clearStoppedByUser(projectId, pawn.id)
