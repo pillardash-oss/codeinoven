@@ -507,8 +507,14 @@ them may re-feed the conversation through the prompt.
 - A session that crosses the checkpoint line is **closed**, not summarized: the
   app records a checkpoint row (thread, sequence, harness, session id, boundary
   message, tokens at the line), reports it as Checkpointing, and starts the next
-  session on the same thread. Harness compaction on Pi is disabled in favour of
-  it; the emergency rebuild path stays.
+  session on the same thread. Pi's own compaction is already switched off in
+  favour of the app's; the emergency rebuild path stays. A harness whose
+  compaction the app cannot switch off is checkpointed ahead of its own trigger
+  (see `docs/CONTEXT-CHECKPOINTS.md`, "Every harness").
+- Search is the conversation's words, never its machinery. The FTS index and the
+  embedding index are built from the user's messages and the agent's replies
+  only: tool calls, results, reasoning and sub-agent transcripts stay out, and an
+  agent that needs them reads the mirror by thread id.
 - A fork is lineage, not a copy. It records the parent thread and the message it
   cut at, copies no rows, and names the parent id in its first turn, so a fork of
   a fork cannot re-store the same history.

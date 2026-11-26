@@ -31,13 +31,15 @@ and models answered the replayed request instead of the one the user had just
 sent. A recap costs a few hundred tokens and makes the agent ask for detail only
 when a decision needs it.
 
-| Piece                                                                   | Status      |
-| ----------------------------------------------------------------------- | ----------- |
-| `formatHistoryBrief` — the short recap                                  | **Landed**  |
-| Fork notice naming the parent thread id                                 | **Landed**  |
-| `read_messages` paging (`before_id` / `nextBeforeId`) and tool evidence | **Landed**  |
-| App-owned context checkpoints replacing harness compaction              | **Planned** |
-| Fork stops copying rows, lineage row instead                            | **Planned** |
+| Piece                                                                         | Status      |
+| ----------------------------------------------------------------------------- | ----------- |
+| `formatHistoryBrief` — the short recap                                        | **Landed**  |
+| Fork notice naming the parent thread id                                       | **Landed**  |
+| `read_messages` paging (`before_id` / `nextBeforeId`) and tool evidence       | **Landed**  |
+| Indexes carry the conversation's words only (no tools, reasoning, sub-agents) | **Landed**  |
+| Checkpoint-scoped reads, page-level budget, checkpoints in the brief          | **Agreed**  |
+| App-owned context checkpoints replacing harness compaction                    | **Planned** |
+| Fork stops copying rows, lineage row instead                                  | **Planned** |
 
 ---
 
@@ -121,9 +123,34 @@ in the pathological case, against a measured typical 40-message page of 9 KB
   back ~26 MB today — removing it is cheap, but it is still not free.
 - `agent_messages` is 856 MB of the 1.30 GB data file, 274 MB of which is tool
   output against 107 MB of conversation text.
-- The FTS index is roughly two-thirds the size of the text it covers.
+- The FTS index is roughly two-thirds the size of the text it covers, and that
+  text is the conversation's words only (see below), so the index stays small.
 - The only super-linear term in this system is **copying history into forks**
   (section 6), and the fix is to stop copying.
+
+### What the indexes cover, and what they must never cover
+
+The corpus is the words the conversation actually showed: the **user's request**
+and the **agent's own reply**. Both indexes — the FTS table
+(`agent_messages_fts`) and the embedding index (`thread-embedding-index.ts`) —
+are built from that one text (`partsToSearchText`), and human search and the
+agent's `search_threads` read the same index. One corpus, one set of rules:
+
+- **Excluded permanently:** tool calls, tool results, reasoning, sub-agent
+  transcripts and their output. A person searches for what was said, never for
+  the command that ran, and indexing working noise made searches match text the
+  user was never shown. An agent that needs tool evidence reads it from the
+  mirror with `read_messages`, which returns it with the turn that produced it —
+  that is what the pointer in the brief is for, and it is why the indexes do not
+  have to carry the evidence.
+- Included: message text, the answer recorded on a question card, and the body
+  of an app presentation (an answered question, an applied specification), because
+  those are the user's words and the agent's words as the thread shows them.
+
+`partsToSearchText` used to index reasoning and sub-agent cards as well. Those
+rows keep their older text until a rebuild pass regenerates `search_text`; that
+pass is a follow-up, and it can only remove matches that should never have been
+there.
 
 ---
 
@@ -163,23 +190,57 @@ Nothing is summarized away. The old session's messages are still in
 
 ### Pi specifics
 
-- `codeinoven-compaction` (`src/main/drivers/pi-compaction-extension.ts`) keeps
-  its emergency path: a request that would otherwise exceed the window still
-  rebuilds a checkpoint rather than failing, because a session with no way out is
-  worse than a lossy summary.
-- Its **threshold** compaction is switched off. The threshold becomes the
-  app-owned checkpoint trigger, which produces a new session instead of an
-  in-place summary.
+Pi is the one harness where the app already owns compaction end to end, so most
+of the switch is already thrown:
+
+- Pi's **own** auto-compaction is already off. Every session start sends
+  `set_auto_compaction(false)` (`pi-driver-rpc.ts`), because Pi's threshold is
+  `contextWindow - 16k`, far above what a provider that bills completion against
+  the same window accepts; leaving it on would race the app and could rewrite a
+  transcript the app keeps.
+- What the app's `codeinoven-compaction` extension does today is a **checkpoint in
+  place**: it summarizes, drops the covered entries and keeps one session. The
+  change is that step 4 above replaces the summary with a **new session**, so the
+  transcript is never rewritten and the old window stays readable.
+- The extension keeps its **emergency** path either way: a request that would
+  otherwise exceed the window still rebuilds a checkpoint rather than failing,
+  because a session with no way out is worse than a lossy summary.
 - `publishCompactionContext` keeps publishing the plan and progress snapshot, so
   a checkpoint built after a crash has the same material a normal one does.
 
-### Other harnesses
+### Every harness
 
-The app already owns the trigger for Codex (`model_auto_compact_token_limit`)
-and Muse (its hard threshold). Those move to checkpointing on the same schedule.
-A harness that owns its own trigger keeps it until its driver can be told to
-stop; its native compaction output is then just another session boundary in the
-mirror.
+Checkpointing is an app-owned mechanism, so it does not depend on a harness
+having one: the brief, the read tools, the marker and the checkpoint rows are all
+the app's, and every driver already implements the two primitives it needs —
+`createSession` and a rebindable `threads.session_id`. What differs per harness
+is whether the app can switch off the harness's own compaction, which gives two
+tiers.
+
+| Harness              | Its own compaction                                                                                                                                                       | What the app can do                                                                                                                                                 | Tier                           |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| **Pi**               | The app's `codeinoven-compaction` extension; `set_auto_compaction(false)` is already sent on every session start so Pi's own threshold never races the app's checkpoints | Owns the trigger outright, and the emergency rebuild is the only Pi-side compaction left                                                                            | **1 — full replacement**       |
+| **Codex**            | `model_auto_compact_token_limit`, passed by the app                                                                                                                      | Owns the trigger by config: move it to the checkpoint line, or past the window, and checkpoint instead                                                              | **1 — config**                 |
+| **Muse**             | Hard threshold, value passed by the app (`COMPACT_LINE_SHARE`)                                                                                                           | Same: the number is the app's                                                                                                                                       | **1 — config**                 |
+| **Cline**            | None declared (`compaction: false`), `nativeResume: false`                                                                                                               | The app already owns context entirely; checkpointing is the only mechanism                                                                                          | **1 — by construction**        |
+| **ACP**              | None declared (`compaction: false`)                                                                                                                                      | Same, though the agent may still compact on its own                                                                                                                 | **1 — by construction**        |
+| **Claude Code**      | `/compact` plus its own auto-compaction                                                                                                                                  | Cannot be switched off; the app checkpoints at its own line, which is below Claude's, so the checkpoint lands first. Claude's compaction remains the emergency path | **2 — checkpoint ahead of it** |
+| **OpenCode v1 / v2** | Harness-owned, surfaced as `session.compaction.*` and mirrored as a checkpoint part                                                                                      | Same as Claude Code                                                                                                                                                 | **2 — checkpoint ahead of it** |
+| **Antigravity**      | `/compact` slash command, harness-owned                                                                                                                                  | Same as Claude Code                                                                                                                                                 | **2 — checkpoint ahead of it** |
+
+Rules that hold for every row:
+
+- A checkpoint is recorded whichever tier produced it, including a harness
+  compaction that beat the app to the line. The marker and the session id are
+  facts about what happened, not a promise about who caused it.
+- The line is derived from the window the _harness_ reports, never from the model
+  catalog alone, or an app checkpoint on a small provider window arrives after the
+  harness has already compacted.
+- A tier-2 harness that compacts on its own does not corrupt anything: its
+  boundary becomes a checkpoint row, the mirror keeps every row, and the brief
+  still points at the same thread ids.
+- The emergency rebuild path stays in every tier. A session that cannot checkpoint
+  in time must still be able to continue.
 
 ---
 
@@ -292,9 +353,10 @@ What must keep working, and does:
 
 ## 8. What this requires of the reader
 
-Landed: paging and tool evidence, described in section 3.
+Landed: paging, tool evidence, and an index that carries only the conversation's
+words (section 3).
 
-Still required for checkpoints to be honest:
+Agreed, and the rest of the work:
 
 - **Scope a read to a checkpoint or session.** `read_messages` currently reads
   `session_id IS NULL` rows — the thread's shared mirror. It must also accept
@@ -303,9 +365,11 @@ Still required for checkpoints to be honest:
   ordinary read.
 - **A page-level budget.** Cap the characters a single page returns and say so
   in the result, so the worst case in section 3 stops being possible.
-- **Tool parts in the indexes.** `search_text` (and therefore the FTS and
-  embedding indexes) skips tool parts by design today, so a search finds what the
-  agent said and not what it ran. Checkpoint-scoped reads partly compensate;
-  indexing the evidence fixes it.
-- **Checkpoint list in the brief.** The brief names the thread; it should also
-  name the checkpoints, or an agent has no reason to believe older windows exist.
+- **Checkpoints in the brief.** The brief names the thread; it should also name
+  the checkpoints (sequence, kind, when it closed, session id), or an agent has no
+  reason to believe older windows exist.
+- **Rebuild the old index rows.** Regenerate `search_text` for rows written before
+  reasoning and sub-agent cards were dropped, and re-embed the threads that change.
+
+The indexes stay text-only on purpose. Tool evidence is reachable through bounded
+reads, not through search, and search stays the thing a person would recognise.

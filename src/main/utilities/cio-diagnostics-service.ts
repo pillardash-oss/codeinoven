@@ -14,8 +14,7 @@ import {
   GLOBAL_BROWSER_PROJECT_ID,
   INBOX_PROJECT_ID,
   type AgentMessage,
-  type Thread,
-  type ThreadMessageCursor
+  type Thread
 } from '../../lib/types'
 import { patternActionPhrase, resolveToolCall } from '../../lib/tool-action-label'
 import {
@@ -625,7 +624,14 @@ export class CioDiagnosticsService {
     const boundedLimit = Math.max(1, Math.min(MAX_MESSAGES, Math.trunc(limit) || 40))
     const thread = await this.threadRepo.getViaWorker(threadId)
     if (!thread) return { threadId, title: '', messages: [], hasOlder: false }
-    const before = beforeId ? this.messageCursor(threadId, beforeId) : undefined
+    const before = beforeId
+      ? await this.messageRepo.messageCursorViaWorker(threadId, beforeId)
+      : undefined
+    if (beforeId && !before) {
+      throw new Error(
+        `No message ${beforeId} in thread ${threadId}. Pass a message id from this thread as before_id, or omit before_id for the newest page.`
+      )
+    }
     const page = this.messageRepo.loadPageByThread(threadId, before, boundedLimit)
     const messages = page.messages
       .map((message) => this.toDiagnosticMessage(message))
@@ -642,25 +648,6 @@ export class CioDiagnosticsService {
       result.note = `This is the newest page of the thread. Older messages exist: call read_messages again with thread_id "${threadId}" and before_id "${oldest.id}" for the page before it, and repeat with each page's nextBeforeId.`
     }
     return result
-  }
-
-  /**
-   * The ordering key of one message in one thread, from a message id an agent
-   * was handed. An id that is not in this thread is refused by name: silently
-   * returning the newest page would tell a reader it had reached the beginning.
-   */
-  private messageCursor(threadId: string, messageId: string): ThreadMessageCursor {
-    const row = this.db.get<{ created_at: number }>(
-      'SELECT created_at FROM agent_messages WHERE thread_id = ? AND id = ?',
-      threadId,
-      messageId
-    )
-    if (!row) {
-      throw new Error(
-        `No message ${messageId} in thread ${threadId}. Pass a message id from this thread as before_id, or omit before_id for the newest page.`
-      )
-    }
-    return { createdAt: row.created_at, id: messageId }
   }
 
   /**
