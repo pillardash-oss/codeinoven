@@ -675,6 +675,7 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
       query: Type.Optional(Type.String()),
       thread_id: Type.Optional(Type.String()),
       before_id: Type.Optional(Type.String()),
+      checkpoint_id: Type.Optional(Type.String()),
       project_id: Type.Optional(Type.String()),
       scope_id: Type.Optional(Type.String()),
       assistant_id: Type.Optional(Type.String()),
@@ -697,6 +698,7 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
       if (params.query !== undefined) body.query = params.query
       if (params.thread_id !== undefined) body.thread_id = params.thread_id
       if (params.before_id !== undefined) body.before_id = params.before_id
+      if (params.checkpoint_id !== undefined) body.checkpoint_id = params.checkpoint_id
       if (params.project_id !== undefined) body.project_id = params.project_id
       if (params.scope_id !== undefined) body.scope_id = params.scope_id
       if (params.assistant_id !== undefined) body.assistant_id = params.assistant_id

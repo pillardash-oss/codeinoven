@@ -1194,6 +1194,35 @@ export class AgentMessageRepo {
   }
 
   /**
+   * One checkpoint window's conversation, oldest-to-newest.
+   *
+   * A checkpoint covers everything written between the previous checkpoint and
+   * its own boundary, which is what `read_messages` answers with a
+   * `checkpoint_id`: "what did the window that ended at checkpoint 3 do". The
+   * mirror rows carry no per-session tag (the thread is the conversation), so
+   * the window is a time range, taken from the checkpoint rows themselves.
+   */
+  async loadCheckpointWindowViaWorker(
+    threadId: string,
+    fromExclusive: number,
+    toInclusive: number,
+    limit: number
+  ): Promise<AgentMessage[]> {
+    const result = await this.db.queryMessagesViaWorker(
+      `SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages
+        WHERE thread_id = ? AND session_id IS NULL
+          AND visibility IN ('conversation', 'working_trace')
+          AND created_at > ? AND created_at <= ?
+        ORDER BY created_at ASC, id ASC
+        LIMIT ?`,
+      [threadId, fromExclusive, toInclusive, Math.max(1, Math.trunc(limit))],
+      Math.max(1, Math.trunc(limit))
+    )
+    if (!result.ok) throw new Error(result.error ?? 'Cannot read the checkpoint window')
+    return result.messages
+  }
+
+  /**
    * The newest conversation message in each assistant's most recent thread.
    *
    * The assistant list draws one line per row from this, so it is one bounded

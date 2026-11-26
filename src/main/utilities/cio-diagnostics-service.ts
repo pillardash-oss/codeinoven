@@ -1,6 +1,7 @@
 import type { Statement } from 'better-sqlite3'
 import type { Database } from '../database/database'
 import { AgentMessageRepo } from '../database/repositories/agent-message-repo'
+import { ThreadCheckpointRepo } from '../database/repositories/thread-checkpoint-repo'
 import { AssistantRepo } from '../database/repositories/assistant-repo'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import {
@@ -53,6 +54,15 @@ const MAX_SCHEMA_TABLES = 80
 /** Tool calls one message may report, and the length one of them may take. */
 const MAX_ACTION_LINES = 12
 const MAX_ACTION_LINE_LENGTH = 400
+/**
+ * Characters one page may return, text and actions together.
+ *
+ * A page is bounded per message already, but 120 messages times a large message
+ * is still a quarter of a window in the worst case. One page is meant to be
+ * cheap enough to read a few of, so the page keeps the newest messages that fit
+ * and says so, and the reader pages further back with the cursor.
+ */
+const MAX_PAGE_CHARACTERS = 60_000
 
 /** Log files an agent may inspect through the diagnostics capability. */
 const READABLE_LOG_FILES = [MAIN_LOG_FILE, ERROR_LOG_FILE, PERMISSION_EVENTS_LOG_FILE]
@@ -170,6 +180,8 @@ export interface DiagnosticMessagePage {
   threadId: string
   /** The thread's title, so the agent recognizes the work it is resuming. */
   title: string
+  /** The checkpoint (window) this page was scoped to, when one was asked for. */
+  checkpointId?: string
   messages: DiagnosticMessage[]
   /** Message id to pass as `before_id` for the next older page. */
   nextBeforeId?: string
@@ -452,6 +464,7 @@ function summarizePlainTextLog(file: string, raw: string): DiagnosticLogEntry[] 
 export class CioDiagnosticsService {
   private readonly threadRepo: ThreadRepo
   private readonly messageRepo: AgentMessageRepo
+  private readonly checkpointRepo: ThreadCheckpointRepo
   private readonly projects: ProjectRepo
   private readonly assistants: AssistantRepo
 
@@ -471,6 +484,7 @@ export class CioDiagnosticsService {
   ) {
     this.threadRepo = new ThreadRepo(db)
     this.messageRepo = new AgentMessageRepo(db)
+    this.checkpointRepo = new ThreadCheckpointRepo(db)
     this.projects = new ProjectRepo(db)
     this.assistants = new AssistantRepo(db)
   }
@@ -613,17 +627,25 @@ export class CioDiagnosticsService {
    *
    * Without `beforeId` the page is the newest one. With it, the page is the one
    * older than that message, which is how an agent handed only a thread id walks
-   * a long conversation back to its beginning. `loadPageByThread` already
-   * returns its page oldest-to-newest and says whether more history exists.
+   * a long conversation back to its beginning. With `checkpointId` the page is
+   * one window: everything written between the previous checkpoint and that one,
+   * which is how a resumed agent asks "what did the window before this one do".
+   * `loadPageByThread` already returns its page oldest-to-newest and says whether
+   * more history exists.
    */
   async loadThreadMessages(
     threadId: string,
     limit: number,
-    beforeId?: string
+    beforeId?: string,
+    checkpointId?: string
   ): Promise<DiagnosticMessagePage> {
     const boundedLimit = Math.max(1, Math.min(MAX_MESSAGES, Math.trunc(limit) || 40))
     const thread = await this.threadRepo.getViaWorker(threadId)
     if (!thread) return { threadId, title: '', messages: [], hasOlder: false }
+    const title = redactSensitiveText(thread.title)
+    if (checkpointId) {
+      return this.loadCheckpointPage(threadId, title, boundedLimit, checkpointId)
+    }
     const before = beforeId
       ? await this.messageRepo.messageCursorViaWorker(threadId, beforeId)
       : undefined
@@ -633,19 +655,98 @@ export class CioDiagnosticsService {
       )
     }
     const page = this.messageRepo.loadPageByThread(threadId, before, boundedLimit)
-    const messages = page.messages
+    return this.toMessagePage({
+      threadId,
+      title,
+      messages: page.messages,
+      hasOlder: page.hasOlder
+    })
+  }
+
+  /**
+   * One checkpoint window: the messages a closed session actually covered.
+   *
+   * The mirror rows carry no session tag (the thread is the conversation), so the
+   * window is the time range between the previous checkpoint of the same thread
+   * and this one's boundary.
+   */
+  private async loadCheckpointPage(
+    threadId: string,
+    title: string,
+    limit: number,
+    checkpointId: string
+  ): Promise<DiagnosticMessagePage> {
+    const checkpoints = await this.checkpointRepo.listViaWorker(threadId, 100)
+    const index = checkpoints.findIndex((checkpoint) => checkpoint.id === checkpointId)
+    if (index < 0) {
+      throw new Error(
+        `No checkpoint ${checkpointId} in thread ${threadId}. Omit checkpoint_id to read the newest page, or search the thread for the work instead.`
+      )
+    }
+    const target = checkpoints[index]
+    const previous = checkpoints[index + 1]
+    if (!target) {
+      throw new Error(`Checkpoint ${checkpointId} is unavailable`)
+    }
+    const from = previous?.closedAt ?? previous?.createdAt ?? 0
+    const to = target.closedAt ?? target.createdAt
+    const messages = await this.messageRepo.loadCheckpointWindowViaWorker(threadId, from, to, limit)
+    const page = this.toMessagePage({
+      threadId,
+      title,
+      messages,
+      hasOlder: messages.length >= limit,
+      checkpointId
+    })
+    if (messages.length === 0) {
+      page.note = `Checkpoint ${target.sequence} of this thread covered no mirrored messages. Omit checkpoint_id for the thread's newest page.`
+    }
+    return page
+  }
+
+  /**
+   * Project a slice of the mirror into a diagnostic page and bound its total size.
+   *
+   * Per-message caps alone leave the page unbounded (120 messages times a large
+   * message), and one page is meant to be cheap enough to read several of, so the
+   * page keeps the newest messages that fit the budget and says it was trimmed.
+   */
+  private toMessagePage(input: {
+    threadId: string
+    title: string
+    messages: AgentMessage[]
+    hasOlder: boolean
+    checkpointId?: string
+  }): DiagnosticMessagePage {
+    const mapped = input.messages
       .map((message) => this.toDiagnosticMessage(message))
       .filter((message): message is DiagnosticMessage => message !== null)
-    const result: DiagnosticMessagePage = {
-      threadId,
-      title: redactSensitiveText(thread.title),
-      messages,
-      hasOlder: page.hasOlder
+    const kept: DiagnosticMessage[] = []
+    let used = 0
+    for (let index = mapped.length - 1; index >= 0; index -= 1) {
+      const message = mapped[index]
+      if (!message) continue
+      const cost =
+        message.text.length +
+        (message.actions?.reduce((total, action) => total + action.length, 0) ?? 0)
+      if (kept.length > 0 && used + cost > MAX_PAGE_CHARACTERS) break
+      used += cost
+      kept.unshift(message)
     }
-    const oldest = page.messages[0]
-    if (page.hasOlder && oldest) {
+    const trimmed = kept.length < mapped.length
+    const result: DiagnosticMessagePage = {
+      threadId: input.threadId,
+      title: input.title,
+      messages: kept,
+      hasOlder: input.hasOlder || trimmed
+    }
+    if (input.checkpointId) result.checkpointId = input.checkpointId
+    const oldest = kept[0]
+    if (result.hasOlder && oldest) {
       result.nextBeforeId = oldest.id
-      result.note = `This is the newest page of the thread. Older messages exist: call read_messages again with thread_id "${threadId}" and before_id "${oldest.id}" for the page before it, and repeat with each page's nextBeforeId.`
+      result.note = input.checkpointId
+        ? `This is the checkpoint window, oldest to newest. Older windows exist: pass this page's nextBeforeId as before_id to continue reading back through the thread.`
+        : `Older messages exist: call read_messages again with thread_id "${input.threadId}" and before_id "${oldest.id}" for the page before it, and repeat with each page's nextBeforeId.`
     }
     return result
   }

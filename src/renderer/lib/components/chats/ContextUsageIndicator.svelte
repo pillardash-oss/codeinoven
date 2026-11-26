@@ -471,16 +471,16 @@
       class="mt-3 flex h-8 w-full items-center justify-center gap-2 border border-border text-[0.6875rem] font-medium text-foreground hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
       disabled={!canCompact || compacting}
       title={canCompact
-        ? 'Summarize older work to free context'
-        : 'This agent does not support manual compaction'}
+        ? 'Check in: continue this thread in a fresh session, keeping the full history readable'
+        : 'This agent cannot check this thread in yet'}
       onclick={onCompact}
     >
       {#if compacting}
         <CioSpinner size={12} class="animate-spin" />
-        Compacting…
+        Checking in…
       {:else}
         <CioArchive size={12} />
-        Compact Work
+        Checkpoint Work
       {/if}
     </button>
   </div>

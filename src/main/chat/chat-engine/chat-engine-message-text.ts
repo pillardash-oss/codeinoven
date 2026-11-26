@@ -8,7 +8,8 @@ import type {
   AgentMessage,
   AgentPart,
   PromptProjectReference,
-  PromptReference
+  PromptReference,
+  ThreadCheckpoint
 } from '../../../lib/types'
 import {
   HANDOFF_INDEX_MAX_REQUESTS,
@@ -370,6 +371,14 @@ export interface HistoryHandoffOptions {
   threadTitle?: string
   /** Tokens the verbatim tail may take. Older messages are indexed instead. */
   maxInputTokens: number
+  /**
+   * The thread's checkpoints, newest first, when it has any.
+   *
+   * A rebuilt session has no reason to believe older windows exist unless it is
+   * told, so the brief names them compactly: the agent then knows what to ask
+   * `read_messages` for instead of assuming the thread started at this window.
+   */
+  checkpoints?: readonly ThreadCheckpoint[]
 }
 
 /** One handoff timestamp, in the compact form the index and notices share. */
@@ -670,11 +679,44 @@ export function formatHistoryBrief(
       ? 'The recap below was cut to fit the input budget; the thread itself still holds everything these lists leave out.'
       : '',
     recap,
+    checkpointIndex(options.checkpoints),
     HANDOFF_QUERY_GUIDE,
     "End of the recap. The user's actual request follows."
   ]
     .filter(Boolean)
     .join('\n\n')
+}
+
+/** How many checkpoints the brief names, newest first. */
+const BRIEF_CHECKPOINT_LIMIT = 6
+
+/**
+ * The thread's checkpoint windows, as compactly as they can be said.
+ *
+ * Oldest first. Each line carries the checkpoint id, because that is the argument
+ * `read_messages` takes to read that window, and the session it ended, because it
+ * distinguishes two windows that ran under the same harness.
+ */
+function checkpointIndex(checkpoints: readonly ThreadCheckpoint[] | undefined): string {
+  if (!checkpoints || checkpoints.length === 0) return ''
+  const listed = [...checkpoints].slice(0, BRIEF_CHECKPOINT_LIMIT).reverse()
+  const lines = listed.map((checkpoint) => {
+    const consumed =
+      checkpoint.tokensBefore !== undefined
+        ? ` · ${Math.round(checkpoint.tokensBefore / 1000)}k` +
+          (checkpoint.contextWindow ? `/${Math.round(checkpoint.contextWindow / 1000)}k` : '')
+        : ''
+    const label = checkpoint.label ? ` · ${checkpoint.label}` : ''
+    return `- ${checkpoint.id} · #${checkpoint.sequence} ${checkpoint.kind} · ${handoffMoment(checkpoint.closedAt ?? checkpoint.createdAt)} · ${checkpoint.harnessId}${consumed}${label}`
+  })
+  const omitted = checkpoints.length - listed.length
+  return [
+    'The windows this thread has already worked through, oldest first (read one with read_messages and its checkpoint_id):',
+    ...(omitted > 0
+      ? [`- ${omitted} earlier window${omitted === 1 ? '' : 's'} are not listed.`]
+      : []),
+    ...lines
+  ].join('\n')
 }
 
 /**

@@ -194,12 +194,18 @@ export class ChatEngineTranscripts {
     // Parked-branch replay is the one path that still carries a verbatim tail:
     // that session already holds the conversation and only missed a delta.
     const tailBudget = Math.min(budget, handoffTailTokenBudget(fallbackBudget))
-    const brief = (messages: AgentMessage[]): string =>
-      formatHistoryBrief(messages, {
+    // A rebuilt session has no reason to believe older windows exist unless the
+    // brief names them, so the checkpoints are read once per rebuild (not per
+    // turn) and listed with the ids `read_messages` takes.
+    const brief = async (messages: AgentMessage[]): Promise<string> => {
+      const checkpoints = await this.host.checkpoints.listViaWorker(threadId, 6).catch(() => [])
+      return formatHistoryBrief(messages, {
         threadId,
         ...(thread?.title ? { threadTitle: thread.title } : {}),
-        maxInputTokens: budget
+        maxInputTokens: budget,
+        ...(checkpoints.length > 0 ? { checkpoints } : {})
       })
+    }
     const handoff = (messages: AgentMessage[]): string =>
       formatHistoryHandoff(messages, {
         threadId,
@@ -284,8 +290,8 @@ export class ChatEngineTranscripts {
     // step still can't render it into text, that content would otherwise be
     // silently lost from the conversation   rescue it into a fresh thread
     // rather than let the turn proceed with no memory of it.
-    const emitRecap = (): string => {
-      const recap = brief(mirror)
+    const emitRecap = async (): Promise<string> => {
+      const recap = await brief(mirror)
       if (!recap) {
         void this.rescueUnreplayableHistory(projectId, threadId, driverId).catch(() => {})
       }

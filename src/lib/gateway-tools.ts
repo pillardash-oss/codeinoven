@@ -209,7 +209,7 @@ const MODEL_TOOL_DESCRIPTIONS: Readonly<Record<string, string>> = {
   cio_util_diagnose:
     'Read-only app diagnostics: search every thread by keyword and by meaning for context, find threads, read bounded messages or redacted logs, inspect schema, or run bounded SELECT queries. Never changes data.',
   cio_process_list:
-    'List the processes this thread owns with their pids, commands, working directories and ports. Read it before stopping anything and to answer "is it still running?".',
+    'List the processes this thread owns with their pids, commands, working directories and ports, plus any app-owned process in this project that no thread claims (reported, never stoppable from here). Read it before stopping anything and to answer "is it still running?".',
   cio_process_start:
     'Start a long-running command as an app-owned process and get its pid, so it outlives the tool call and can be stopped later. Use it for a dev server, a probe instance or a watcher instead of backgrounding one in the shell.',
   cio_process_stop:
@@ -578,6 +578,11 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
           type: 'string',
           description:
             'For read_messages: return the page OLDER than this message id, so a long thread can be read back to its beginning. Use the nextBeforeId of the page you just read, or any message id in this thread. Omit it for the newest page.'
+        },
+        checkpoint_id: {
+          type: 'string',
+          description:
+            'For read_messages: read one checkpoint window of the thread — the messages the session behind that checkpoint covered — instead of the newest page. An unknown id is refused.'
         },
         project_id: {
           type: 'string',

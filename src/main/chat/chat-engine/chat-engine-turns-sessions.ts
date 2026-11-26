@@ -1008,7 +1008,16 @@ export class ChatEngineTurnsSessions {
     }
   }
 
-  /** Ask the active harness to summarize and compact this thread's context. */
+  /**
+   * Shrink this thread's context on request.
+   *
+   * This is a **checkpoint**: the session is closed and the thread continues on
+   * a successor with the brief, so the conversation is never summarized away and
+   * every earlier window stays readable by thread id. A harness compaction is
+   * only taken when the checkpoint could not happen (no driver session, a
+   * harness that refuses a new one), because losing the request is worse than
+   * rewriting the transcript.
+   */
   async compactSession(projectId: string, threadId: string): Promise<void> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
@@ -1018,6 +1027,14 @@ export class ChatEngineTurnsSessions {
     }
     if (!thread.settings) {
       throw new Error('Select a model before compacting this thread')
+    }
+    const checkpointed = await this.host.units['checkpoints'].checkpointNow(projectId, threadId)
+    if (checkpointed) {
+      broadcastToast(
+        'Checked in this thread: it continues in a fresh session, and the earlier history is still readable.',
+        'info'
+      )
+      return
     }
     const driverId = thread.settings.harnessId ?? DEFAULT_HARNESS
     const account = await this.host.state.accountRegistry.resolveForProvider(

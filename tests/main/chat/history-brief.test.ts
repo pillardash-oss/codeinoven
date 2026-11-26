@@ -187,6 +187,44 @@ describe('formatHistoryBrief', () => {
     expect(brief).not.toContain('Request number 11')
   })
 
+  it('names the thread checkpoints so the agent knows older windows exist', () => {
+    const brief = formatHistoryBrief([userMessage('m1', 'Carry on', 1000)], {
+      threadId: 'thread-abc',
+      maxInputTokens: 4000,
+      checkpoints: [
+        {
+          id: 'cp-2',
+          threadId: 'thread-abc',
+          sequence: 2,
+          kind: 'auto',
+          harnessId: 'pi',
+          sessionId: 's2',
+          projectPath: 'project',
+          tokensBefore: 180_000,
+          contextWindow: 200_000,
+          createdAt: 2000,
+          closedAt: 2100
+        },
+        {
+          id: 'cp-1',
+          threadId: 'thread-abc',
+          sequence: 1,
+          kind: 'harness-switch',
+          harnessId: 'codex',
+          sessionId: 's1',
+          projectPath: 'project',
+          createdAt: 1000,
+          closedAt: 1100
+        }
+      ]
+    })
+    expect(brief).toContain('The windows this thread has already worked through')
+    // Oldest first, so the agent reads them in the order the work happened.
+    expect(brief.indexOf('cp-1')).toBeLessThan(brief.indexOf('cp-2'))
+    expect(brief).toContain('#1 harness-switch')
+    expect(brief).toContain('checkpoint_id')
+  })
+
   it('renders nothing when there is no history to recap', () => {
     expect(formatHistoryBrief([], { threadId: 'thread-abc', maxInputTokens: 4000 })).toBe('')
   })

@@ -8,6 +8,7 @@ import { ThreadRepo } from '../../../src/main/database/repositories/thread-repo'
 import { AgentMessageRepo } from '../../../src/main/database/repositories/agent-message-repo'
 import type { Database } from '../../../src/main/database/database'
 import { CioDiagnosticsService } from '../../../src/main/utilities/cio-diagnostics-service'
+import { ThreadCheckpointRepo } from '../../../src/main/database/repositories/thread-checkpoint-repo'
 import { MAIN_LOG_FILE, logDayName } from '../../../src/main/system/log-paths'
 import { APP_SLUG, ORG_SLUG } from '../../../src/lib/brand'
 
@@ -251,6 +252,84 @@ describe('CioDiagnosticsService', () => {
     expect(assistant?.actions?.[1]).toContain('edited a file src/checkout.ts')
     expect(assistant?.actions?.[1]).toContain('[REDACTED]')
     expect(assistant?.actions?.[1]).not.toContain('supersecret123')
+  })
+
+  it('bounds a whole page, not only each message', async () => {
+    const { service, db } = await createServiceWithDb()
+    const messageRepo = new AgentMessageRepo(db)
+    for (let index = 3; index <= 32; index += 1) {
+      messageRepo.upsert(
+        {
+          id: `msg-${index}`,
+          role: 'assistant',
+          parts: [
+            {
+              type: 'text',
+              id: `p${index}`,
+              messageID: `msg-${index}`,
+              text: 'x'.repeat(20_000)
+            }
+          ],
+          createdAt: index * 1_000
+        },
+        'thread-1'
+      )
+    }
+    const page = await service.loadThreadMessages('thread-1', 120)
+    const characters = page.messages.reduce((total, message) => total + message.text.length, 0)
+    expect(characters).toBeLessThanOrEqual(60_000)
+    expect(page.messages.length).toBeLessThan(30)
+    // The newest end is what survives, and the cursor still walks further back.
+    expect(page.messages.at(-1)?.id).toBe('msg-32')
+    expect(page.hasOlder).toBe(true)
+    expect(page.nextBeforeId).toBe(page.messages[0]?.id)
+    expect(page.note).toContain('before_id')
+  })
+
+  it('reads one checkpoint window by id', async () => {
+    const { service, db } = await createServiceWithDb()
+    const messageRepo = new AgentMessageRepo(db)
+    for (let index = 3; index <= 6; index += 1) {
+      messageRepo.upsert(
+        {
+          id: `msg-${index}`,
+          role: 'user',
+          parts: [
+            { type: 'text', id: `p${index}`, messageID: `msg-${index}`, text: `Request ${index}` }
+          ],
+          createdAt: index * 1_000
+        },
+        'thread-1'
+      )
+    }
+    const checkpoints = new ThreadCheckpointRepo(db)
+    const first = checkpoints.create({
+      threadId: 'thread-1',
+      kind: 'auto',
+      harnessId: 'pi',
+      sessionId: 'session-1',
+      createdAt: 2_500
+    })
+    checkpoints.close(first.id, { closedAt: 3_000 })
+    const second = checkpoints.create({
+      threadId: 'thread-1',
+      kind: 'auto',
+      harnessId: 'pi',
+      sessionId: 'session-2',
+      createdAt: 6_500
+    })
+    checkpoints.close(second.id, { closedAt: 6_500 })
+
+    const window = await service.loadThreadMessages('thread-1', 40, undefined, second.id)
+    expect(window.checkpointId).toBe(second.id)
+    expect(window.messages.map((message) => message.id)).toEqual(['msg-4', 'msg-5', 'msg-6'])
+
+    const earlier = await service.loadThreadMessages('thread-1', 40, undefined, first.id)
+    expect(earlier.messages.map((message) => message.id)).toEqual(['msg-1', 'msg-2', 'msg-3'])
+
+    await expect(service.loadThreadMessages('thread-1', 40, undefined, 'missing')).rejects.toThrow(
+      /No checkpoint missing in thread thread-1/u
+    )
   })
 
   it('reads bounded redacted entries from an allow-listed log file', async () => {
