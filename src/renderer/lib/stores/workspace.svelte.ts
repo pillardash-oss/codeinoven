@@ -19,7 +19,7 @@ import { scheduleDeferredWork } from '$lib/deferred-work'
 import { relativeTimeClock } from '$lib/relative-time.svelte'
 import { preloadThreadConversation } from './thread-preload'
 import { threadMessages } from './thread-messages.svelte'
-import { perfSpan } from '$lib/perf-trace'
+import { perfMarkNextPaint, perfSpan } from '$lib/perf-trace'
 import { scopeState } from './scope.svelte'
 import { invoke } from '$lib/ipc.svelte'
 import { prewarmThreadOven } from '$lib/ovens/oven-prewarm'
@@ -274,6 +274,7 @@ class WorkspaceState {
       cold: !threadMessages.loaded(thread.projectId, thread.id),
       deferredPanel: options.deferContextPanel === true
     })
+    const preloadedBefore = threadMessages.loaded(thread.projectId, thread.id)
     const mark = (name: string, context?: Record<string, string | number | boolean | null>): void =>
       span.mark(name, { atMs: Date.now() - openStartedAt, ...context })
     // The chat composer owns keyboard focus after any thread switch. Open the
@@ -344,6 +345,12 @@ class WorkspaceState {
       void this.refreshSourceProcessCount(thread.projectId, thread.id)
     })
     span.end('ok')
+    // The selection is settled when this returns, which is a different thing
+    // from the conversation being on screen. This is the second number.
+    perfMarkNextPaint('thread.open.paint', {
+      projectId: thread.projectId,
+      cold: !preloadedBefore
+    })
   }
 
   /**

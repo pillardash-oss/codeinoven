@@ -3,7 +3,7 @@ import { markConversationPainted } from '$lib/conversation-painted'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 
 import { invoke, waitForFeatures } from '$lib/ipc.svelte'
-import { perfSpan } from '$lib/perf-trace'
+import { perfMarkNextPaint, perfSpan } from '$lib/perf-trace'
 import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
 import { reportError } from '$lib/stores/app-errors.svelte'
 import { assistants } from '$lib/stores/assistants.svelte'
@@ -777,8 +777,15 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     this.upsertThreadInList(thread as any)
+    createSpan.mark('row')
     threadMessages.seedEmpty(thread.projectId, thread.id)
-    this.root.switcherPanelTabs.sidebar.expandedFolders.add(project.id)
+    createSpan.mark('seed')
+    // Sidebar folder expansion is not on the first frame: the composer and the
+    // cleared conversation are what the click has to deliver, and a folder that
+    // is already open does not change by being told so one frame earlier.
+    scheduleDeferredWork('createThread:expandFolder', () => {
+      this.root.switcherPanelTabs.sidebar.expandedFolders.add(project.id)
+    })
     if (scopeBucketId) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       if (scopeBucketId) scopeState.updateThread(thread as any)
@@ -787,11 +794,17 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     workspaceState.openThread(thread as any, project)
+    createSpan.mark('open')
     // Empty-state creation (no existing thread was open): this new thread gets
     // the centered composer head start even if the project holds other threads.
     // Threads created from an existing thread never get the marker.
     if (!activeThread) workspaceState.markThreadFreshFromEmptyState(thread.id)
     createSpan.end('ok')
+    // When the composer is actually on the glass. A create span that returns in
+    // nine milliseconds and paints two hundred later is the difference between a
+    // handler that is fast and a click that is felt, and only one of those is
+    // worth tuning.
+    perfMarkNextPaint('thread.create.paint', { projectId: project.id })
     // Persist in background with the same stable id   no ID swap, branch
     // detection runs after the first thread:update broadcast, never blocking typing.
     const persistSpan = perfSpan('thread.create.persist', { projectId: project.id })

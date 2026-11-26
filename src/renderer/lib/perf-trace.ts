@@ -550,6 +550,35 @@ export async function tracePerf<T>(
 }
 
 /**
+ * Record how long it took for the screen to actually show the result.
+ *
+ * A span ends when the code returns, which is the moment *before* the frame that
+ * draws it — and the interesting question about a click is never when the
+ * handler returned but when the reader saw something. Two animation frames is
+ * the browser's own "this is now on the glass": the first is the frame being
+ * built, the second is the one after it was presented. Nothing is recorded when
+ * the window is hidden, because there is no paint to wait for and the record
+ * would claim a latency nobody experienced.
+ */
+export function perfMarkNextPaint(name: string, context?: PerfContext): void {
+  if (typeof requestAnimationFrame !== 'function') return
+  const startedAt = Date.now()
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (typeof document !== 'undefined' && document.hidden) return
+      perfTracer.recordOperation({
+        kind: 'mark',
+        name,
+        startedAt,
+        durationMs: Date.now() - startedAt,
+        outcome: 'ok',
+        context
+      })
+    })
+  })
+}
+
+/**
  * Time one IPC call from the renderer's side.
  *
  * The difference between this number and the main-side one for the same channel
