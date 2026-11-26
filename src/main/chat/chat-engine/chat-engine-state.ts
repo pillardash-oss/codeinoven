@@ -524,6 +524,19 @@ export class ChatEngineState {
   readonly coordinatorHandoffQueueLocks = new Map<string, Promise<void>>()
 
   /**
+   * Serializes the delegated-report queue's reads and writes per parent thread,
+   * so ten pawns finishing together cannot overwrite each other's report.
+   */
+  readonly delegationReportQueueLocks = new Map<string, Promise<void>>()
+
+  /**
+   * One in-flight delivery per parent thread. It resolves to whether the drain
+   * delivered a batch, so an idle signal can tell "the parent was woken with
+   * news" from "nothing was waiting".
+   */
+  readonly delegationReportDrains = new Map<string, Promise<boolean>>()
+
+  /**
    * Prevents concurrent idle signals from dispatching the same queued handoff
    * twice. It resolves to whether that drain delivered a handoff, so the idle
    * finalization can tell a delivered handoff from an empty queue.

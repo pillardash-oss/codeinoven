@@ -227,7 +227,16 @@ export class ChatEngineTurnsSendPrompt {
     /** Persist this internal prompt as a visible user turn. Used by the
      *  Assignment worker dispatch so the task that started a worker reads as
      *  the first user prompt in its conversation. */
-    visiblePrompt = false
+    visiblePrompt = false,
+    /**
+     * Start a new turn even while the session's row still says it is working.
+     *
+     * A delegated report is news for the parent, never the user speaking into a
+     * live turn. Steered, it costs that turn: a one-process-per-turn harness
+     * kills the process to append one line. The report queue therefore delivers
+     * its batch as the parent's next turn.
+     */
+    deliverAsNewTurn = false
   ): Promise<AgentMessage> {
     try {
       return await this.dispatchPrompt(
@@ -244,7 +253,8 @@ export class ChatEngineTurnsSendPrompt {
         origin,
         presentation,
         taskReferences,
-        visiblePrompt
+        visiblePrompt,
+        deliverAsNewTurn
       )
     } catch (error) {
       await this.settleFailedDispatch(projectId, threadId, error)
@@ -321,7 +331,8 @@ export class ChatEngineTurnsSendPrompt {
     origin: 'user' | 'internal' = 'user',
     presentation?: UserMessagePresentation,
     taskReferences?: PromptAssignmentTaskReference[],
-    visiblePrompt = false
+    visiblePrompt = false,
+    deliverAsNewTurn = false
   ): Promise<AgentMessage> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
@@ -1078,8 +1089,9 @@ export class ChatEngineTurnsSendPrompt {
     const driverReportsLiveTurn =
       driver.hasActiveTurn === undefined ? undefined : driver.hasActiveTurn(sessionId)
     const turnIsLive =
-      driverReportsLiveTurn ??
-      (activeSessionState === 'working' || activeSessionState === 'waiting')
+      !deliverAsNewTurn &&
+      (driverReportsLiveTurn ??
+        (activeSessionState === 'working' || activeSessionState === 'waiting'))
     if ((activeSessionState === 'working' || activeSessionState === 'waiting') && turnIsLive) {
       if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
         throw new Error(`${driver.name} does not expose native active-turn steering`)

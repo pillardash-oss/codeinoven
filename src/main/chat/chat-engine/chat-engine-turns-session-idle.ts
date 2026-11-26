@@ -1563,6 +1563,28 @@ export class ChatEngineTurnsSessionIdle {
           error: rawErrorMessage(error)
         })
       }
+      // A delegated report waits for exactly this moment: the turn is over, so
+      // its batch is delivered as the next turn instead of a steer that would
+      // have cost this one. A queue that still has work drains again on the next
+      // idle, one batch per turn.
+      try {
+        const delivered = await this.host.units['delegation-reports'].drain(
+          info.projectId,
+          info.threadId
+        )
+        if (delivered) {
+          Logger.dev('Delegated reports delivered into an idle thread', {
+            projectId: info.projectId,
+            threadId: info.threadId
+          })
+        }
+      } catch (error) {
+        Logger.error('Queued delegated report dispatch failed', {
+          projectId: info.projectId,
+          threadId: info.threadId,
+          error: rawErrorMessage(error)
+        })
+      }
     }
     if (pendingMemory && assistantResponse && memoryParentTurnId) {
       const driver = this.host.units['turns-dispatch'].driverForRuntime(

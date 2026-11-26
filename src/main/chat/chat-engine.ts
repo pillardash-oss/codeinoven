@@ -968,7 +968,16 @@ export class ChatEngine {
     /** Persist this internal prompt as a visible user turn. Used by the
      *  Assignment worker dispatch so the task that started a worker reads as
      *  the first user prompt in its conversation. */
-    visiblePrompt = false
+    visiblePrompt = false,
+    /**
+     * Start a new turn even when the session's row still says it is working.
+     *
+     * A delegated report is news, not the user speaking into the live turn. It
+     * must never be steered into a running turn   on a one-process-per-turn
+     * harness that steer kills the turn to append one line   so the report queue
+     * delivers it as the parent's next turn instead.
+     */
+    deliverAsNewTurn = false
   ): Promise<AgentMessage> {
     // A user turn may not start on a machine that has no room for it. The window
     // parks the message before it gets here, so this is the guard for every other
@@ -993,7 +1002,8 @@ export class ChatEngine {
       origin,
       presentation,
       taskReferences,
-      visiblePrompt
+      visiblePrompt,
+      deliverAsNewTurn
     )
   }
   async sendTemporaryPrompt(
@@ -1341,6 +1351,10 @@ export class ChatEngine {
   static readonly PAWN_RUN_TIMEOUT_MS = 60 * 60_000
   async runPawnTool(input: Record<string, unknown>, context: PawnToolContext): Promise<unknown> {
     return this.units['assignment-workers'].runPawnTool(input, context)
+  }
+  /** Run a pawn agent again from its own thread, without a conversation. */
+  async retryPawnRun(projectId: string, threadId: string): Promise<void> {
+    return this.units['assignment-workers'].retryPawnRun(projectId, threadId)
   }
   async runEngineeringTool(
     operation: EngineeringToolOperation,

@@ -35,6 +35,7 @@ import { ChatEngineTurnsSteer } from './chat-engine-turns-steer'
 import { ChatEngineWorkStall } from './chat-engine-work-stall'
 import { ChatEngineCapacityContinue } from './chat-engine-capacity-continue'
 import { ChatEngineAssignmentRun } from './chat-engine-assignment-run'
+import { ChatEngineDelegationReports } from './chat-engine-delegation-reports'
 import { ChatEngineTurnsSendPrompt } from './chat-engine-turns-send-prompt'
 import { ChatEngineBrainstorm } from './chat-engine-brainstorm'
 import { ChatEngineUtilitiesGateway } from './chat-engine-utilities-gateway'
@@ -102,6 +103,7 @@ export function buildChatEngineUnits(engine: ChatEngine) {
     'work-stall': new ChatEngineWorkStall(engine),
     'capacity-continue': new ChatEngineCapacityContinue(engine),
     'assignment-run': new ChatEngineAssignmentRun(engine),
+    'delegation-reports': new ChatEngineDelegationReports(engine),
     'turns-send-prompt': new ChatEngineTurnsSendPrompt(engine),
     brainstorm: new ChatEngineBrainstorm(engine),
     'utilities-gateway': new ChatEngineUtilitiesGateway(engine),

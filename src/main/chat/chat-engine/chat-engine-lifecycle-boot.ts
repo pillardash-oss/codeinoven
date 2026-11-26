@@ -275,6 +275,9 @@ export class ChatEngineLifecycleBoot {
       (_, projectId: string, threadId: string, sessionId: string) =>
         this.host.retryChildSession(projectId, threadId, sessionId)
     )
+    ipcMain.handle('agent:retryPawnRun', (_, projectId: string, threadId: string) =>
+      this.host.retryPawnRun(projectId, threadId)
+    )
     ipcMain.handle(
       'agent:retryAssignmentWorker',
       (_, projectId: string, coordinatorThreadId: string, workerThreadId: string) =>
@@ -826,6 +829,13 @@ export class ChatEngineLifecycleBoot {
     this.host.units['lifecycle-shutdown'].syncIdleReaper()
     void this.host.restoreCoordinatorHandoffQueues().catch((error) =>
       Logger.error('Coordinator handoff queue recovery failed', {
+        error: rawErrorMessage(error)
+      })
+    )
+    // Reports queued while the parent was busy outlive the process that filed
+    // them: a quit must never be what loses a finished pawn's news.
+    void this.host.units['delegation-reports'].restoreQueues().catch((error) =>
+      Logger.error('Delegated report queue recovery failed', {
         error: rawErrorMessage(error)
       })
     )

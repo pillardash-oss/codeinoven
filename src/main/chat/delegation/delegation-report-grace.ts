@@ -25,6 +25,22 @@ export type DelegationReportVerdict =
   /** Report this status now. */
   | { report: true; status: ThreadStatus }
 
+/**
+ * How soon a queued retry has to arrive for a failure to still be a non-event.
+ *
+ * A provider failure parks the run on `failed` and schedules its resume. A
+ * resume a minute away is the same event the grace window exists for: the run
+ * continues and the failure was noise. A resume hours or days away (a usage
+ * reset is often weeks out) is the opposite   holding that back leaves the
+ * agent that asked for the work believing it is still running, for a day.
+ */
+export const DELEGATION_REPORT_RETRY_HORIZON_MS = 5 * 60_000
+
+/** Whether a retry queued for `retryAt` arrives soon enough to wait quietly for. */
+export function delegationRetryIsImminent(retryAt: number, now = Date.now()): boolean {
+  return retryAt - now <= DELEGATION_REPORT_RETRY_HORIZON_MS
+}
+
 /** Sleep without keeping the process alive on its own. */
 export function sleepWithoutHoldingProcess(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -50,16 +66,17 @@ export async function awaitDelegationOutcome(
     graceMs?: number
     sleep?: (ms: number) => Promise<void>
     /**
-     * Whether the app still has a retry queued for this run's session.
+     * When the app will resume this run's session, if a retry is queued.
      *
-     * A provider failure parks a thread on `failed` and schedules its resume a
-     * little later, so the status alone can say "failed" while the run is
-     * already on its way back. Reporting then tells the parent its work died
-     * moments before the retry finishes it, and nothing is left watching the
-     * recovered turn. Read at the end of the window, because a retry that
-     * finished inside it is no longer pending.
+     * A provider failure parks a thread and schedules its resume, so the status
+     * alone cannot answer "will this run move again?". A resume seconds away is
+     * the same event the grace window exists for: nothing is reported, because
+     * the run is about to continue. A resume hours or days away is real news and
+     * is reported now   silence there leaves the agent that asked for the work
+     * believing it is still running until next week. Read at the end of the
+     * window, since a retry that already finished is no longer pending.
      */
-    isRetryPending?: () => boolean
+    retryAt?: () => number | undefined
   } = {}
 ): Promise<DelegationReportVerdict> {
   if (initialStatus === 'completed') return { report: true, status: initialStatus }
@@ -67,7 +84,17 @@ export async function awaitDelegationOutcome(
   await (options.sleep ?? sleepWithoutHoldingProcess)(graceMs)
   const status = await readStatus()
   if (status === null) return { report: true, status: initialStatus }
-  if (isThreadBusyStatus(status)) return { report: false, status }
-  if (options.isRetryPending?.() === true) return { report: false, status }
+  const retryAt = options.retryAt?.()
+  const retryArrivesSoon = retryAt !== undefined && delegationRetryIsImminent(retryAt)
+  if (isThreadBusyStatus(status)) {
+    // Parked on a retry that will not fire for hours or days: that is not the
+    // run working, it is the run stopped with a date on it, and the parent is
+    // told now instead of being left to guess.
+    if (status === 'working-paused' && retryAt !== undefined && !retryArrivesSoon) {
+      return { report: true, status }
+    }
+    return { report: false, status }
+  }
+  if (retryArrivesSoon) return { report: false, status }
   return { report: true, status }
 }

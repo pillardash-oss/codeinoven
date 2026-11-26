@@ -8,7 +8,7 @@ import { PAWN_AGENT_CONTRACT } from '../../../../lib/agent-behavior'
 import { DEFAULT_HARNESS } from '../../../../lib/harness-default'
 import { isUnrestrictedLevel } from '../../../../lib/permission-level'
 import { isPawnWorkerThread } from '../../thread-transfer-service/thread-transfer-workers'
-import { validateThreadSettings } from '../../../ipc/ipc-validation'
+import { validateEntityId, validateThreadSettings } from '../../../ipc/ipc-validation'
 import type { HarnessDriver } from '../../../drivers/driver.interface'
 import type { PawnToolContext } from '../../../utilities/utility-orchestration-service'
 import type {
@@ -28,7 +28,37 @@ import {
   resolveDelegationTarget
 } from '../../delegation/delegation-target'
 import { awaitDelegationOutcome } from '../../delegation/delegation-report-grace'
-import { deliverDelegationReport } from '../../delegation/delegation-report-delivery'
+
+/**
+ * Where one pawn run happens, so a spawn and a user-requested retry settle the
+ * same way: the card the spawner reads, the report it receives, and the thread
+ * the run belongs to are all decided from this record.
+ */
+interface PawnRunRefs {
+  projectId: string
+  spawnerThreadId: string
+  spawnerSessionId: string
+  pawn: Thread
+  settings: ThreadSettings
+  driverId: string
+  accountId?: string
+  sessionId: string
+  purpose: string
+  instructions: string
+  background: boolean
+  startedAt: number
+}
+
+/** What a followed pawn run came back with. */
+interface PawnRunOutcome {
+  ok: boolean
+  message: string
+}
+
+/** The message a thrown value carries, for a report that has to be prose. */
+function pawnErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
 
 /**
  * Pawn agents: the worker threads an agent spawns for itself.
@@ -217,52 +247,23 @@ export class ChatEnginePawnAgents {
       settings.accountId
     )
     const sessionId = await this.host.ensureSession(projectId, pawn.id, driverId)
-    const startedAt = Date.now()
-    // A pawn's session belongs to the pawn's own thread. Registering the owner
-    // here is what lets the spawning conversation's card open the pawn's
-    // transcript: the child-session lookup resolves this session to that thread
-    // and reads its mirrored messages, while the pawn keeps running.
-    this.host.state.childSessionOwners.set(sessionId, {
+    const run: PawnRunRefs = {
       projectId,
-      threadId: pawn.id,
-      projectPath,
+      spawnerThreadId: threadId,
+      spawnerSessionId: context.sessionId,
+      pawn,
+      settings,
       driverId,
-      accountId: settings.accountId
-    })
-    this.host.state.childSessionActivityStatuses.set(sessionId, 'running')
-    const pawnActivity = (
-      status: AgentToolStatus,
-      patch: Partial<AgentSubagentActivity> = {}
-    ): AgentSubagentActivity => ({
-      status,
-      agent: purpose || 'Pawn agent',
-      description: purpose,
-      prompt: instructions,
-      childSessionId: sessionId,
-      providerId: settings.providerId,
-      modelId: settings.modelId,
+      accountId: settings.accountId,
+      sessionId,
+      purpose,
+      instructions,
       background,
-      pawn: true,
-      time: { start: startedAt, ...(status === 'running' ? {} : { end: Date.now() }) },
-      ...patch
-    })
-    await this.publishPawnActivity(projectId, threadId, context.sessionId, pawnActivity('running'))
-    const prompt = [
-      `You are a CodeInOven pawn agent: an independent worker thread spawned by the agent working on thread ${threadId}, and you answer to that agent alone.`,
-      purpose ? `Purpose: ${purpose}.` : '',
-      `You run on ${settings.harnessId}${settings.ovenId === spawner.settings?.ovenId ? '' : ` on the Oven ${settings.ovenId}`}, which may be a different harness from the agent that spawned you. Nothing about your instructions changes because of that: work in this checkout, use this harness's own tools, and report back the same way.`,
-      'The user cannot prompt you and does not answer you. Work autonomously, do not ask the user questions, and do not commit: the agent that spawned you reviews your work and commits it. Your report lists every path you changed as uncommitted, because that list is the only thing its commit can rely on.',
-      isUnrestrictedLevel(settings.permissionLevel)
-        ? 'You have full access to this project.'
-        : 'Destructive actions need approval, which is surfaced on the thread that spawned you.',
-      PAWN_AGENT_CONTRACT,
-      '',
-      'Instruction from the agent that spawned you:',
-      '',
-      instructions
-    ]
-      .filter(Boolean)
-      .join('\n')
+      startedAt: Date.now()
+    }
+    await this.registerPawnSession(run, projectPath)
+    await this.publishPawnRun(run, 'running')
+    const prompt = this.pawnRunPrompt(run, spawner.settings, false)
 
     const messageId = createMessageId()
     // Steering: an instruction for a pawn that is still working goes into the
@@ -330,79 +331,17 @@ export class ChatEnginePawnAgents {
     /**
      * Follow the pawn until it has really finished, and report then.
      *
-     * The waiter is not trusted once. A provider failure settles this turn, but
-     * the app parks the thread on `working-paused` and retries it, so the failure
-     * is not the answer: the report waits out the grace window and, when a retry
-     * owns the thread, follows that turn instead of telling the spawner its pawn
-     * died on a limit that has already reset.
+     * The waiter is not trusted once. A harness can close a turn "successfully"
+     * around the provider error that really stopped it, and a provider failure
+     * settles a turn while the app parks the thread on `working-paused` and
+     * retries it. So the pawn's own record decides, and a run that is not over
+     * yet is followed instead of being reported as done.
      */
-    const followPawnOutcome = (waiter: Promise<unknown>): void => {
-      void waiter
-        .then(
-          () => ({ ok: true as const, message: '' }),
-          (error: unknown) => ({
-            ok: false as const,
-            message: `The pawn agent failed: ${error instanceof Error ? error.message : String(error)}`
-          })
-        )
-        .then(async (result) => {
-          let outcome = result
-          if (!outcome.ok) {
-            const settlement = await awaitDelegationOutcome(
-              'failed',
-              () => this.pawnThreadStatus(projectId, pawn.id),
-              { isRetryPending: () => this.pawnRetryPending(sessionId) }
-            )
-            if (!settlement.report) {
-              // A retry owns the run: it is working again, or its resume is
-              // queued and has not started yet. Keep the card live and follow
-              // that turn, because the retry's own finish is the report.
-              this.host.state.childSessionActivityStatuses.set(sessionId, 'running')
-              followPawnOutcome(
-                this.host.units['turns-sessions'].waitForSessionCompletion(
-                  sessionId,
-                  ChatEngine.PAWN_RUN_TIMEOUT_MS,
-                  'Pawn agent'
-                )
-              )
-              return
-            }
-            if (settlement.status === 'completed') outcome = { ok: true, message: '' }
-          }
-          const output = outcome.ok
-            ? await this.pawnFinalMessage(driver, projectPath, sessionId)
-            : outcome.message
-          const report = output || 'The pawn agent returned no message.'
-          this.host.state.childSessionActivityStatuses.set(
-            sessionId,
-            outcome.ok ? 'completed' : 'error'
-          )
-          await this.publishPawnActivity(
-            projectId,
-            threadId,
-            context.sessionId,
-            pawnActivity(
-              outcome.ok ? 'completed' : 'error',
-              outcome.ok ? { output: report } : { error: report }
-            )
-          )
-          await this.reportPawnCompletion(projectId, spawnerSettings, pawn, purpose, report)
-        })
-        .catch((error: unknown) =>
-          Logger.info('Pawn agent report could not reach its spawner', {
-            threadId: pawn.id,
-            spawnerThreadId: threadId,
-            error: error instanceof Error ? error.message : String(error)
-          })
-        )
-    }
-
     if (!background) {
       const verdict = await Promise.race([
         completion.then(
           () => 'completed' as const,
-          (error: unknown) =>
-            error instanceof Error ? error.message : 'The pawn agent session failed'
+          (error: unknown) => pawnErrorMessage(error)
         ),
         new Promise<'running'>((resolve) => {
           const timer = setTimeout(() => resolve('running'), ChatEngine.PAWN_FOREGROUND_WAIT_MS)
@@ -410,16 +349,14 @@ export class ChatEnginePawnAgents {
           timer.unref?.()
         })
       ])
-      if (verdict === 'completed') {
-        const output = await this.pawnFinalMessage(driver, projectPath, sessionId)
-        const report = output || 'The pawn agent returned no message.'
-        this.host.state.childSessionActivityStatuses.set(sessionId, 'completed')
-        await this.publishPawnActivity(
-          projectId,
-          threadId,
-          context.sessionId,
-          pawnActivity('completed', { output: report })
-        )
+      const failure =
+        verdict === 'running'
+          ? null
+          : verdict === 'completed'
+            ? await this.pawnRunFailure(run)
+            : verdict
+      if (verdict === 'completed' && failure === null) {
+        const report = await this.finishPawnRun(run, { ok: true, message: '' })
         return {
           pawnId: pawn.id,
           threadId: pawn.id,
@@ -437,10 +374,11 @@ export class ChatEnginePawnAgents {
         const settlement = await awaitDelegationOutcome(
           'failed',
           () => this.pawnThreadStatus(projectId, pawn.id),
-          { isRetryPending: () => this.pawnRetryPending(sessionId) }
+          { retryAt: () => this.pawnRetryAt(sessionId) }
         )
         if (!settlement.report) {
-          followPawnOutcome(
+          this.followPawnRun(
+            run,
             this.host.units['turns-sessions'].waitForSessionCompletion(
               sessionId,
               ChatEngine.PAWN_RUN_TIMEOUT_MS,
@@ -458,15 +396,7 @@ export class ChatEnginePawnAgents {
           }
         }
         if (settlement.status === 'completed') {
-          const output = await this.pawnFinalMessage(driver, projectPath, sessionId)
-          const report = output || 'The pawn agent returned no message.'
-          this.host.state.childSessionActivityStatuses.set(sessionId, 'completed')
-          await this.publishPawnActivity(
-            projectId,
-            threadId,
-            context.sessionId,
-            pawnActivity('completed', { output: report })
-          )
+          const report = await this.finishPawnRun(run, { ok: true, message: '' })
           return {
             pawnId: pawn.id,
             threadId: pawn.id,
@@ -477,20 +407,16 @@ export class ChatEnginePawnAgents {
             output: report
           }
         }
+        const reason = failure ?? 'The pawn agent session failed.'
         this.host.state.childSessionActivityStatuses.set(sessionId, 'error')
-        await this.publishPawnActivity(
-          projectId,
-          threadId,
-          context.sessionId,
-          pawnActivity('error', { error: verdict })
-        )
-        throw new Error(`Pawn agent failed: ${verdict}`)
+        await this.publishPawnRun(run, 'error', { error: reason })
+        throw new Error(`Pawn agent failed: ${reason}`)
       }
     }
 
     // Background, or a foreground call that outlived its inline budget: report
     // once, when the pawn's thread has actually finished.
-    followPawnOutcome(completion)
+    this.followPawnRun(run, completion)
     return {
       pawnId: pawn.id,
       threadId: pawn.id,
@@ -500,6 +426,327 @@ export class ChatEnginePawnAgents {
       thinkingLevel: settings.thinkingLevel,
       note: 'The pawn is still working. Its final report will steer you when it finishes; continue with other work and do not end the turn with nothing to do while it runs.'
     }
+  }
+
+  /**
+   * Run a pawn again from the thread itself, on the model the thread carries now.
+   *
+   * A pawn answers only to the agent that spawned it, so nothing it does is
+   * reachable by typing into it. That must not leave a failed pawn unrecoverable:
+   * a rate limit, a paused provider or a task spawned on the wrong model or
+   * thinking level is exactly what the person watching the pawn has to fix, and
+   * they fix it here without a conversation. The run is internal, so the pawn's
+   * lock still refuses user prompts; its report still steers the spawner.
+   */
+  async retryPawnRun(projectId: string, threadId: string): Promise<void> {
+    this.host.units['messages'].touchUserActivity()
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Pawn thread ID')
+    const pawn = await this.host.threadManager.getThread(projectId, threadId)
+    if (!pawn || pawn.coordinatorThreadId === undefined || pawn.auditorThreadId !== undefined) {
+      throw new Error('That thread is not a pawn agent, so it has no run to retry.')
+    }
+    if (!pawn.settings) throw new Error('The pawn agent has no model settings.')
+    const settings = validateThreadSettings(pawn.settings)
+    const spawner = await this.host.threadManager
+      .getThread(projectId, pawn.coordinatorThreadId)
+      .catch(() => null)
+    const driverId = settings.harnessId || DEFAULT_HARNESS
+    const { driver, projectPath } = await this.host.resolve(
+      projectId,
+      driverId,
+      pawn.id,
+      settings.accountId
+    )
+    const sessionId = await this.host.ensureSession(projectId, pawn.id, driverId)
+    if (this.host.sessionStatuses.get(sessionId)?.state === 'working') {
+      throw new Error('The pawn agent is still working. Stop it before retrying its run.')
+    }
+    const existing = pawn.sessionId === sessionId
+    // The user is running this now, on the model the thread carries now: the
+    // queued resume the retry policy parked belongs to the old turn.
+    this.host.state.retryScheduler?.clear(sessionId)
+    this.host.state.userAbortedSessions.delete(sessionId)
+    this.host.handledIdleSessions.delete(sessionId)
+    await this.host.threadManager.clearStoppedByUser(projectId, pawn.id)
+    const task = existing ? await this.pawnRecordedTask(projectId, pawn, sessionId) : null
+    const run: PawnRunRefs = {
+      projectId,
+      spawnerThreadId: pawn.coordinatorThreadId,
+      spawnerSessionId: spawner?.sessionId ?? '',
+      pawn,
+      settings,
+      driverId,
+      accountId: settings.accountId,
+      sessionId,
+      purpose: task?.purpose ?? '',
+      instructions: task?.instructions ?? '',
+      background: false,
+      startedAt: Date.now()
+    }
+    await this.registerPawnSession(run, projectPath)
+    await this.publishPawnRun(run, 'running')
+    const completion = this.host.units['turns-sessions'].waitForSessionCompletion(
+      sessionId,
+      ChatEngine.PAWN_RUN_TIMEOUT_MS,
+      'Pawn agent'
+    )
+    const text = task
+      ? this.pawnRunPrompt(run, spawner?.settings, true)
+      : [
+          'Retry the task you were given. Its earlier attempt stopped before it finished, so continue from the work already in this session and complete it.',
+          PAWN_AGENT_CONTRACT
+        ].join('\n\n')
+    try {
+      await this.host.sendPrompt(
+        projectId,
+        pawn.id,
+        settings,
+        text,
+        [],
+        undefined,
+        createMessageId(),
+        undefined,
+        undefined,
+        undefined,
+        'internal',
+        {
+          action: 'Retry pawn run',
+          body: (task?.instructions ?? text).slice(0, 20_000)
+        }
+      )
+    } catch (error) {
+      // The turn never started, so nothing will ever resolve this waiter.
+      void completion.catch(() => undefined)
+      this.host.state.childSessionActivityStatuses.set(sessionId, 'error')
+      await this.publishPawnRun(run, 'error', { error: pawnErrorMessage(error) })
+      throw error
+    }
+    this.followPawnRun(run, completion)
+  }
+
+  /**
+   * The instruction a pawn was spawned with, read back from the card its spawner
+   * keeps. A retry re-runs the same task instead of inventing a new one, and the
+   * prompt is rebuilt rather than replayed so it still describes the model the
+   * pawn runs on now.
+   */
+  async pawnRecordedTask(
+    projectId: string,
+    pawn: Thread,
+    sessionId: string
+  ): Promise<{ purpose: string; instructions: string } | null> {
+    if (!pawn.coordinatorThreadId) return null
+    const messages = await this.host.threadManager
+      .loadMessages(projectId, pawn.coordinatorThreadId)
+      .catch(() => [])
+    for (const message of [...messages].reverse()) {
+      for (const part of message.parts) {
+        if (part.type !== 'subagent') continue
+        const activity = part.activity
+        if (activity.pawn !== true || activity.childSessionId !== sessionId) continue
+        const instructions = activity.prompt?.trim()
+        if (!instructions) continue
+        return { purpose: activity.description?.trim() ?? '', instructions }
+      }
+    }
+    return null
+  }
+
+  /** The prompt a pawn receives, identical for its first run and a user retry. */
+  pawnRunPrompt(
+    run: PawnRunRefs,
+    spawnerSettings: ThreadSettings | undefined,
+    isRetry: boolean
+  ): string {
+    const { settings, purpose, instructions, spawnerThreadId } = run
+    return [
+      `You are a CodeInOven pawn agent: an independent worker thread spawned by the agent working on thread ${spawnerThreadId}, and you answer to that agent alone.`,
+      purpose ? `Purpose: ${purpose}.` : '',
+      `You run on ${settings.harnessId}${settings.ovenId === spawnerSettings?.ovenId ? '' : ` on the Oven ${settings.ovenId}`}, which may be a different harness from the agent that spawned you. Nothing about your instructions changes because of that: work in this checkout, use this harness's own tools, and report back the same way.`,
+      'The user cannot prompt you and does not answer you. Work autonomously, do not ask the user questions, and do not commit: the agent that spawned you reviews your work and commits it. Your report lists every path you changed as uncommitted, because that list is the only thing its commit can rely on.',
+      isUnrestrictedLevel(settings.permissionLevel)
+        ? 'You have full access to this project.'
+        : 'Destructive actions need approval, which is surfaced on the thread that spawned you.',
+      PAWN_AGENT_CONTRACT,
+      isRetry
+        ? 'This is a retry of this task. An earlier attempt stopped before it finished, so continue from the work already in this session and complete the task.'
+        : '',
+      '',
+      'Instruction from the agent that spawned you:',
+      '',
+      instructions
+    ]
+      .filter(Boolean)
+      .join('\n')
+  }
+
+  /**
+   * A pawn's session belongs to the pawn's own thread. Registering the owner is
+   * what lets the spawning conversation's card and the pawn's own board open the
+   * transcript while the run continues.
+   */
+  private async registerPawnSession(run: PawnRunRefs, projectPath: string): Promise<void> {
+    this.host.state.childSessionOwners.set(run.sessionId, {
+      projectId: run.projectId,
+      threadId: run.pawn.id,
+      projectPath,
+      driverId: run.driverId,
+      accountId: run.accountId
+    })
+    this.host.state.childSessionActivityStatuses.set(run.sessionId, 'running')
+  }
+
+  /** The activity record a pawn's card shows for one lifecycle state. */
+  private pawnRunActivity(
+    run: PawnRunRefs,
+    status: AgentToolStatus,
+    patch: Partial<AgentSubagentActivity> = {}
+  ): AgentSubagentActivity {
+    return {
+      status,
+      agent: run.purpose || 'Pawn agent',
+      description: run.purpose,
+      prompt: run.instructions,
+      childSessionId: run.sessionId,
+      providerId: run.settings.providerId,
+      modelId: run.settings.modelId,
+      thinkingLevel: run.settings.thinkingLevel,
+      background: run.background,
+      pawn: true,
+      time: { start: run.startedAt, ...(status === 'running' ? {} : { end: Date.now() }) },
+      ...patch
+    }
+  }
+
+  /** Publish one state of a pawn run onto the thread that spawned it. */
+  private async publishPawnRun(
+    run: PawnRunRefs,
+    status: AgentToolStatus,
+    patch: Partial<AgentSubagentActivity> = {}
+  ): Promise<void> {
+    await this.publishPawnActivity(
+      run.projectId,
+      run.spawnerThreadId,
+      run.spawnerSessionId,
+      this.pawnRunActivity(run, status, patch)
+    )
+  }
+
+  /**
+   * The failure the pawn's own record carries, when its run did not really finish.
+   *
+   * A completion waiter answers "the turn settled", not "the work succeeded". A
+   * harness can close a turn around the rate limit that stopped it, and a turn can
+   * settle while the app has already queued its retry. Reading the thread this way
+   * is what stops a failed pawn being presented as done.
+   */
+  private async pawnRunFailure(run: PawnRunRefs): Promise<string | null> {
+    const thread = await this.host.threadManager
+      .getThread(run.projectId, run.pawn.id)
+      .catch(() => null)
+    const recorded = thread?.lastError?.trim()
+    if (thread !== null && thread.status === 'failed') {
+      return recorded || 'The pawn agent run failed.'
+    }
+    if (thread !== null && thread.lastOutcome === 'failed' && recorded) return recorded
+    const status = this.host.sessionStatuses.get(run.sessionId)
+    if (status?.state === 'error') return status.issue?.message?.trim() || 'The pawn agent run failed.'
+    return null
+  }
+
+  /**
+   * Follow a pawn until it has really finished, and report then.
+   *
+   * Used by a background spawn, a foreground spawn that outlived its inline
+   * budget, and a user retry. The waiter is not trusted once: the pawn's own
+   * thread says whether the run is over, and a run parked on a queued resume is
+   * followed rather than reported as finished.
+   */
+  private followPawnRun(run: PawnRunRefs, waiter: Promise<unknown>): void {
+    void waiter
+      .then(
+        (): PawnRunOutcome => ({ ok: true, message: '' }),
+        (error: unknown): PawnRunOutcome => ({
+          ok: false,
+          message: `The pawn agent failed: ${pawnErrorMessage(error)}`
+        })
+      )
+      .then(async (result) => {
+        const failure = await this.pawnRunFailure(run)
+        const retryQueued = this.pawnRetryAt(run.sessionId) !== undefined
+        if (result.ok && failure === null && !retryQueued) {
+          await this.finishPawnRun(run, { ok: true, message: '' })
+          return
+        }
+        const outcome: PawnRunOutcome =
+          failure === null ? result : { ok: false, message: `The pawn agent failed: ${failure}` }
+        const settlement = await awaitDelegationOutcome(
+          'failed',
+          () => this.pawnThreadStatus(run.projectId, run.pawn.id),
+          { retryAt: () => this.pawnRetryAt(run.sessionId) }
+        )
+        if (!settlement.report) {
+          // A retry owns the run: it is working again, or its resume is queued
+          // and has not started yet. Keep the card live and follow that turn,
+          // because the retry's own finish is the report. A waiter already armed
+          // belongs to whoever started the current turn, so following it here
+          // too would replace it with a second watcher that reports twice.
+          this.host.state.childSessionActivityStatuses.set(run.sessionId, 'running')
+          await this.publishPawnRun(run, 'running')
+          if (this.host.state.completionWaiters.has(run.sessionId)) return
+          this.followPawnRun(
+            run,
+            this.host.units['turns-sessions'].waitForSessionCompletion(
+              run.sessionId,
+              ChatEngine.PAWN_RUN_TIMEOUT_MS,
+              'Pawn agent'
+            )
+          )
+          return
+        }
+        await this.finishPawnRun(
+          run,
+          settlement.status === 'completed' ? { ok: true, message: '' } : outcome
+        )
+      })
+      .catch((error: unknown) =>
+        Logger.info('Pawn agent report could not reach its spawner', {
+          threadId: run.pawn.id,
+          spawnerThreadId: run.spawnerThreadId,
+          error: pawnErrorMessage(error)
+        })
+      )
+  }
+
+  /**
+   * Publish a pawn's settled card and hand its report to the spawner's queue.
+   *
+   * Returns the report so a foreground caller can answer its tool call with the
+   * same text the spawner is about to read.
+   */
+  private async finishPawnRun(run: PawnRunRefs, outcome: PawnRunOutcome): Promise<string> {
+    const { driver, projectPath } = await this.host.resolve(
+      run.projectId,
+      run.driverId,
+      run.pawn.id,
+      run.accountId
+    )
+    const output = outcome.ok
+      ? await this.pawnFinalMessage(driver, projectPath, run.sessionId)
+      : outcome.message
+    const report = output || 'The pawn agent returned no message.'
+    this.host.state.childSessionActivityStatuses.set(run.sessionId, outcome.ok ? 'completed' : 'error')
+    await this.publishPawnRun(
+      run,
+      outcome.ok ? 'completed' : 'error',
+      outcome.ok ? { output: report } : { error: report }
+    )
+    await this.reportPawnCompletion(run.projectId, run.pawn, run.purpose, report, {
+      spawnerThreadId: run.spawnerThreadId,
+      retryAt: this.pawnRetryAt(run.sessionId)
+    })
+    return report
   }
 
   /**
@@ -658,64 +905,51 @@ export class ChatEnginePawnAgents {
     return thread?.status ?? null
   }
 
-  /**
-   * Whether the app still has a retry queued for the pawn's session.
-   *
-   * A provider failure parks the pawn's thread on `failed` and schedules its
-   * resume, so the status alone can say the run is over while a retry is still
-   * on its way back. That is not an answer for the spawner, and following the
-   * resumed turn is what reports the pawn when it really finishes.
-   */
-  pawnRetryPending(sessionId: string): boolean {
-    return this.host.state.retryScheduler?.getPendingRetry(sessionId) !== undefined
+  /** When the app will resume this pawn's session, if a retry is queued. */
+  pawnRetryAt(sessionId: string): number | undefined {
+    const record = this.host.state.retryScheduler?.getPendingRetry(sessionId)
+    if (!record) return undefined
+    return record.retryAt ?? record.resetAt
   }
 
   /**
-   * Steer the spawning thread with a finished pawn's report, which is the whole
-   * point of a background pawn: its work lands in the agent's context as a short
-   * report instead of the thousands of steps that produced it.
+   * Hand a finished pawn's report to the queue that delivers it to the spawner.
    *
-   * The report is retried rather than dropped. A parent whose row still says it
-   * is working can be a turn that has just ended, and the first attempt then
-   * loses its race with that settle; the work is done either way, so a failed
-   * delivery has to be tried again instead of logged away as a lost report.
+   * A pawn's whole point is that its work lands in the spawning agent's context
+   * as a short report instead of the thousands of steps that produced it. Ten of
+   * them can finish inside a few seconds of each other, so this never calls
+   * straight into the spawner's session: the report waits in the spawner's
+   * queue, and the queue delivers it as the spawner's next turn, batched, in
+   * order, and only when that thread is free to read it.
    */
   async reportPawnCompletion(
     projectId: string,
-    spawnerSettings: ThreadSettings,
     pawn: Thread,
     purpose: string,
-    output: string
+    output: string,
+    context: { spawnerThreadId: string; retryAt?: number }
   ): Promise<void> {
     if (!pawn.coordinatorThreadId) return
-    const spawnerThreadId = pawn.coordinatorThreadId
+    const retryNote =
+      context.retryAt === undefined
+        ? ''
+        : `The app keeps this pawn queued and resumes it at ${new Date(context.retryAt).toISOString()}. Do not spawn it again.`
     const text = [
       `Pawn agent ${pawn.title} finished its task.`,
       purpose ? `Purpose: ${purpose}.` : '',
       'Read its report, inspect the files it touched, and commit the work you accept: a pawn never commits, so the commit is yours or nobody makes it. If you leave any reported path uncommitted, name every one of those paths and say why.',
-      output || 'The pawn agent returned no message.'
+      output || 'The pawn agent returned no message.',
+      retryNote
     ]
       .filter(Boolean)
       .join('\n\n')
-    const presentation = {
+    await this.host.units['delegation-reports'].enqueue({
+      projectId,
+      threadId: context.spawnerThreadId,
+      kind: 'pawn',
+      text,
       action: `Pawn finished · ${pawn.title}`.slice(0, 120),
       body: output.slice(0, 20_000)
-    }
-    await deliverDelegationReport(() =>
-      this.host.sendPrompt(
-        projectId,
-        spawnerThreadId,
-        spawnerSettings,
-        text,
-        [],
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        'internal',
-        presentation
-      )
-    )
+    })
   }
 }

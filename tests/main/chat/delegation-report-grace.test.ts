@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   DELEGATION_REPORT_GRACE_MS,
-  awaitDelegationOutcome
+  DELEGATION_REPORT_RETRY_HORIZON_MS,
+  awaitDelegationOutcome,
+  delegationRetryIsImminent
 } from '../../../src/main/chat/delegation/delegation-report-grace'
 
 /**
@@ -14,6 +16,8 @@ import {
  */
 
 const noSleep = async (): Promise<void> => undefined
+
+const now = Date.now()
 
 describe('awaitDelegationOutcome', () => {
   it('reports a completed run at once and never re-reads it', async () => {
@@ -61,21 +65,48 @@ describe('awaitDelegationOutcome', () => {
     ).resolves.toEqual({ report: true, status: 'interrupted' })
   })
 
-  it('stays silent while a retry for the run is still queued', async () => {
+  it('stays silent while a retry for the run arrives in moments', async () => {
     await expect(
       awaitDelegationOutcome('failed', async () => 'failed', {
         sleep: noSleep,
-        isRetryPending: () => true
+        retryAt: () => now + 30_000
       })
     ).resolves.toEqual({ report: false, status: 'failed' })
   })
 
-  it('reports a failed run once its retry is no longer queued', async () => {
+  it('reports a run parked on a retry that is days away', async () => {
+    await expect(
+      awaitDelegationOutcome('working-paused', async () => 'working-paused', {
+        sleep: noSleep,
+        retryAt: () => Date.now() + 20 * 24 * 60 * 60_000
+      })
+    ).resolves.toEqual({ report: true, status: 'working-paused' })
+  })
+
+  it('reports a failed run once its retry is no longer imminent', async () => {
     await expect(
       awaitDelegationOutcome('failed', async () => 'failed', {
         sleep: noSleep,
-        isRetryPending: () => false
+        retryAt: () => now + 20 * 24 * 60 * 60_000
       })
     ).resolves.toEqual({ report: true, status: 'failed' })
+  })
+})
+
+describe('delegationRetryIsImminent', () => {
+  const fixedNow = Date.UTC(2026, 10, 26, 14, 0, 0)
+
+  it('waits for a retry that is seconds away', () => {
+    expect(delegationRetryIsImminent(fixedNow + 30_000, fixedNow)).toBe(true)
+  })
+
+  it('waits for a retry at the edge of the horizon', () => {
+    expect(delegationRetryIsImminent(fixedNow + DELEGATION_REPORT_RETRY_HORIZON_MS, fixedNow)).toBe(
+      true
+    )
+  })
+
+  it('reports a usage reset that is days away instead of waiting for it', () => {
+    expect(delegationRetryIsImminent(fixedNow + 20 * 24 * 60 * 60_000, fixedNow)).toBe(false)
   })
 })
