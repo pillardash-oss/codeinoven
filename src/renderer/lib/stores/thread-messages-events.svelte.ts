@@ -1,6 +1,7 @@
 import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
 import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
+import { logRendererDev } from '$lib/system/renderer-logger'
 import { invoke } from '$lib/ipc.svelte'
 import { SvelteSet } from 'svelte/reactivity'
 import { messageText, threadKey } from './thread-messages-merge'
@@ -54,6 +55,35 @@ export class ThreadMessagesEvents {
       .catch(() => {
         // Best effort. The next mount re-reads the mirror either way.
       })
+  }
+
+  /**
+   * Whether a run-ending status names a turn this window has already replaced.
+   *
+   * A turn dispatched here is busy before any live session states it: binding a
+   * harness session, releasing the one a provider or harness switch orphaned,
+   * and spawning the new runtime all happen first. A retry on a replaced account
+   * is the worst of them, because the run it replaces is still dying: its
+   * harness session emits `idle`, `waiting`, or `error` after the retry has
+   * already been dispatched, and settling on that event is what made a retried
+   * thread read working, then done for a minute, then working again once the new
+   * harness finally reported. The persisted row already refuses to settle an
+   * unconfirmed dispatch (see `app-ipc-subscriptions`); this is the same rule on
+   * the event stream, so the two cannot disagree about who owns the status.
+   *
+   * Only a live `working` state, a terminal row, or the bounded confirmation
+   * window ending may settle the turn.
+   */
+  #replacedTurnOutranks(projectId: string, threadId: string, type: AgentEvent['type']): boolean {
+    if (!agentRuns.isAwaitingDispatch(projectId, threadId)) return false
+    logRendererDev(
+      `Run state: kept a dispatched turn busy through ${JSON.stringify({
+        projectId,
+        threadId,
+        event: type
+      })}`
+    )
+    return true
   }
 
   /** Apply a streaming part update to the cached messages. */
@@ -496,7 +526,13 @@ export class ThreadMessagesEvents {
           event.providerId
         )
         break
-      case 'session.status':
+      case 'session.status': {
+        // A status naming the run this window just replaced decides nothing
+        // here; see #replacedTurnOutranks. A live 'working' state is exempt
+        // because it is the confirmation the dispatch was waiting for.
+        const replacedTurn =
+          event.status.state !== 'working' &&
+          this.#replacedTurnOutranks(projectId, threadId, event.type)
         if (event.status.state === 'working') {
           this.cache.setRunIssue(projectId, threadId, null)
           agentRuns.setBusy(
@@ -508,6 +544,8 @@ export class ThreadMessagesEvents {
           // A live run has no pending retry left; clear the deadline after the
           // run is established so a resumed retry starts a fresh clock.
           agentRuns.setRetryAt(projectId, threadId, null)
+        } else if (replacedTurn) {
+          break
         } else if (event.status.state === 'waiting') {
           // Parked on a provider wait (a reset window, or a connection the
           // device lost). Nothing is being produced, so the conversation must
@@ -522,10 +560,14 @@ export class ThreadMessagesEvents {
           agentRuns.completeSession(projectId, threadId)
         }
         break
+      }
       case 'session.idle':
-        agentRuns.completeSession(projectId, threadId)
+        if (!this.#replacedTurnOutranks(projectId, threadId, event.type)) {
+          agentRuns.completeSession(projectId, threadId)
+        }
         break
       case 'session.error':
+        if (this.#replacedTurnOutranks(projectId, threadId, event.type)) break
         agentRuns.setIdle(projectId, threadId)
         this.cache.setRunIssue(
           projectId,
