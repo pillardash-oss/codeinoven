@@ -1205,4 +1205,32 @@ describe('ThreadManager settled outcome rewrite', () => {
 
     expect(same.lastActivity).toBe(done.lastActivity)
   })
+
+  it('settles a pawn row, and refuses to promise it an unread state it never shows', async () => {
+    const { manager } = await createManager()
+    const spawner = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Spawner'
+    })
+    const pawn = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Pawn',
+      coordinatorThreadId: spawner.id,
+      userInputLocked: true
+    })
+    await manager.setStatus('project1', pawn.id, 'failed')
+
+    const done = await manager.setSettledOutcome('project1', pawn.id, 'done')
+    expect(done.status).toBe('completed')
+
+    await expect(manager.setSettledOutcome('project1', pawn.id, 'unread')).rejects.toThrow(
+      /never presents an unread state/
+    )
+    expect(await manager.getThread('project1', pawn.id)).toMatchObject({
+      status: 'completed',
+      read: true
+    })
+  })
 })

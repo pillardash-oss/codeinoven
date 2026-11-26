@@ -170,7 +170,19 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
     // a run they stopped, or a failed one. Live work, a ready spec and a thread
     // parked on the user are states the app is still driving and are never
     // offered here (see `canUpdateThreadStatus`).
-    const settledOutcome = threadTracksReadStatus(thread) ? threadSettledOutcome(thread) : null
+    //
+    // Pawns and other orchestration children are included: a pawn row is a real
+    // row on the delegation board with the same menu, and its failure is exactly
+    // something the user may want to settle. Unread alone stays out of reach for
+    // them, because such a row never presents a read state
+    // (`threadTracksReadStatus`); offering it would promise a dot nobody draws.
+    const tracksRead = threadTracksReadStatus(thread)
+    const settledOutcome = canUpdateThreadStatus(thread.status)
+      ? threadSettledOutcome(thread)
+      : null
+    // A row that does not track read has no unread reading: its finished run is
+    // simply done, and its mark says so.
+    const currentOutcome = settledOutcome === 'unread' && !tracksRead ? 'done' : settledOutcome
     const statusItems: MenuItem[] =
       settledOutcome === null
         ? []
@@ -179,22 +191,26 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
               label: 'Update status',
               icon: CioCircle,
               children: [
-                {
-                  label: 'Unread',
-                  icon: CioMessage,
-                  selected: settledOutcome === 'unread',
-                  onClick: () => void updateStatus('unread')
-                },
+                ...(tracksRead
+                  ? [
+                      {
+                        label: 'Unread',
+                        icon: CioMessage,
+                        selected: currentOutcome === 'unread',
+                        onClick: () => void updateStatus('unread')
+                      }
+                    ]
+                  : []),
                 {
                   label: 'Done',
                   icon: CioCheckCircle,
-                  selected: settledOutcome === 'done',
+                  selected: currentOutcome === 'done',
                   onClick: () => void updateStatus('done')
                 },
                 {
                   label: 'Error',
                   icon: CioAlertCircle,
-                  selected: settledOutcome === 'error',
+                  selected: currentOutcome === 'error',
                   onClick: () => void updateStatus('error')
                 }
               ]

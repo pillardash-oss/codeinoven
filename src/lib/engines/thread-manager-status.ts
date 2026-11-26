@@ -1,5 +1,5 @@
 import type { Thread, ThreadAnnounceOptions, ThreadSettings, ThreadStatus } from '../types'
-import { scopeSliceForStatus } from '../types'
+import { scopeSliceForStatus, threadTracksReadStatus } from '../types'
 import {
   canUpdateThreadStatus,
   threadSettledOutcome,
@@ -170,6 +170,12 @@ export class ThreadStatusService {
    * that skipped the menu gate cannot park live work behind a `failed` badge.
    * A rewrite that lands on the state the row already reads as is a no-op and
    * keeps the row's activity where it was.
+   *
+   * `unread` is additionally refused for a row that never presents a read state
+   * (an orchestration child   a pawn, a reporting worker, an auditor): the unread
+   * rule is unchanged, so writing it there would claim a dot no surface draws.
+   * Such a row still accepts `done` and `error`, which is why the delegation
+   * board's pawn rows get the submenu at all.
    */
   async setSettledOutcome(
     projectId: string,
@@ -181,6 +187,9 @@ export class ThreadStatusService {
       throw new Error(
         `Thread ${threadId} cannot be marked ${outcome} while it is ${existing.status}`
       )
+    }
+    if (outcome === 'unread' && !threadTracksReadStatus(existing)) {
+      throw new Error(`Thread ${threadId} never presents an unread state`)
     }
     if (threadSettledOutcome(existing) === outcome) return existing
 
