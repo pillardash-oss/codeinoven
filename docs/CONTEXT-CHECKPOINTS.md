@@ -341,26 +341,31 @@ current window knows which ids to search.
 
 ## 6. Forks are lineage, not copies
 
-A fork today duplicates every mirrored row up to the fork point into the new
-thread (`thread-manager-fork.ts`), which means a fork of a fork re-stores the
-same history again. That is the only place in this design where storage grows
-faster than the data written, and it buys nothing: the fork already names the
-parent thread id in its first turn.
+A fork duplicates no rows. It records **lineage** — a `kind = 'fork'` checkpoint
+row naming the parent thread and the message it was cut at — and its transcript is
+read _through_ that lineage: its own rows plus the ancestors' rows up to the cut.
+So the conversation screen opens on the history the fork inherited, a fork of a
+fork reaches its grandparent, and no history is ever stored twice.
 
-So:
+Rules the read path keeps (`MESSAGE_LINEAGE_CTE` / `MESSAGE_LINEAGE_ROWS` in
+`agent-message-repo.ts`):
 
-- A fork records **lineage** (`thread_lineage` or a `kind = 'fork'` checkpoint
-  row naming the parent thread and the message it cut at) and copies **no
-  messages**.
-- Its first turn is the brief with the parent id, which is what it already
-  carries.
-- The reader takes a thread id, so reading the parent's history is the same call
-  as reading its own — including the pages from before the fork.
+- The lineage walks the `fork` checkpoint rows to the root, and each stage carries
+  the **minimum** of the boundaries above it. A fork cut at a message it inherited
+  therefore sees exactly what that point covered, and a fork cut at its own later
+  turn still cannot see ancestor rows its parent never showed.
+- A thread's own rows are never bounded; only inherited rows are.
+- The cut point may itself be an inherited message, which is why `forkThread`
+  resolves it through the chain rather than only in the thread's own rows.
+- The checkpoint boundary uses the same rule: a session "saw" everything the
+  conversation screen shows, inherited rows included.
+- The brief reads the same transcript, so a rebuilt fork session is told what the
+  fork inherited instead of opening with an empty recap.
 - Subagent traces stay with the session that produced them. They are not copied,
   and they are reachable through the same thread id.
 
-This also settles what a fork _is_: a new thread sharing a history, not a new
-copy of one.
+This settles what a fork _is_: a new thread sharing a history, not a new copy of
+one — and not a blank page either.
 
 ---
 

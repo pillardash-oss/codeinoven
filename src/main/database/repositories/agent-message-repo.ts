@@ -1046,10 +1046,13 @@ export class AgentMessageRepo {
 
   loadByThread(threadId: string): AgentMessage[] {
     const rows = this.db.all<AgentMessageRow>(
-      `SELECT * FROM agent_messages
-       WHERE thread_id = ? AND session_id IS NULL
-         AND visibility IN ('conversation', 'working_trace')
-       ORDER BY created_at ASC`,
+      `${MESSAGE_LINEAGE_CTE}
+       SELECT * FROM agent_messages
+        WHERE session_id IS NULL
+          AND visibility IN ('conversation', 'working_trace')
+          AND ${MESSAGE_LINEAGE_ROWS}
+        ORDER BY created_at ASC, id ASC`,
+      threadId,
       threadId
     )
     return rows.map((row) => rowToMessage(row))
@@ -1068,12 +1071,15 @@ export class AgentMessageRepo {
     const scanCap = Math.max(limit * 4, limit + 40)
     const rows = before
       ? this.db.all<AgentMessageRow>(
-          `SELECT * FROM agent_messages
-           WHERE thread_id = ? AND session_id IS NULL
-             AND visibility IN ('conversation', 'working_trace')
-             AND (created_at < ? OR (created_at = ? AND id < ?))
-           ORDER BY created_at DESC, id DESC
-           LIMIT ?`,
+          `${MESSAGE_LINEAGE_CTE}
+           SELECT * FROM agent_messages
+            WHERE session_id IS NULL
+              AND visibility IN ('conversation', 'working_trace')
+              AND ${MESSAGE_LINEAGE_ROWS}
+              AND (created_at < ? OR (created_at = ? AND id < ?))
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?`,
+          threadId,
           threadId,
           before.createdAt,
           before.createdAt,
@@ -1081,11 +1087,14 @@ export class AgentMessageRepo {
           scanCap
         )
       : this.db.all<AgentMessageRow>(
-          `SELECT * FROM agent_messages
-           WHERE thread_id = ? AND session_id IS NULL
-             AND visibility IN ('conversation', 'working_trace')
-           ORDER BY created_at DESC, id DESC
-           LIMIT ?`,
+          `${MESSAGE_LINEAGE_CTE}
+           SELECT * FROM agent_messages
+            WHERE session_id IS NULL
+              AND visibility IN ('conversation', 'working_trace')
+              AND ${MESSAGE_LINEAGE_ROWS}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?`,
+          threadId,
           threadId,
           scanCap
         )
@@ -1117,20 +1126,32 @@ export class AgentMessageRepo {
    */
   loadPageAroundByThread(threadId: string, anchorId: string, limit: number): ThreadMessagePage {
     const anchor = this.db.get<{ created_at: number }>(
-      'SELECT created_at FROM agent_messages WHERE thread_id = ? AND id = ?',
+      `${MESSAGE_LINEAGE_CTE}
+       SELECT m.created_at FROM agent_messages m
+        WHERE m.id = ?
+          AND (m.thread_id = ?
+            OR EXISTS (
+              SELECT 1 FROM lineage l
+               WHERE l.thread_id = m.thread_id
+                 AND (l.boundary_at IS NULL OR m.created_at <= l.boundary_at)
+            ))`,
       threadId,
-      anchorId
+      anchorId,
+      threadId
     )
     if (!anchor) return { messages: [], hasOlder: false, hasNewer: false }
 
     const half = Math.max(1, Math.floor(limit / 2))
     const olderRows = this.db.all<AgentMessageRow>(
-      `SELECT * FROM agent_messages
-       WHERE thread_id = ? AND session_id IS NULL
-         AND visibility IN ('conversation', 'working_trace')
-         AND (created_at < ? OR (created_at = ? AND id < ?))
-       ORDER BY created_at DESC, id DESC
-       LIMIT ?`,
+      `${MESSAGE_LINEAGE_CTE}
+       SELECT * FROM agent_messages
+        WHERE session_id IS NULL
+          AND visibility IN ('conversation', 'working_trace')
+          AND ${MESSAGE_LINEAGE_ROWS}
+          AND (created_at < ? OR (created_at = ? AND id < ?))
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?`,
+      threadId,
       threadId,
       anchor.created_at,
       anchor.created_at,
@@ -1138,12 +1159,15 @@ export class AgentMessageRepo {
       half + 1
     )
     const newerRows = this.db.all<AgentMessageRow>(
-      `SELECT * FROM agent_messages
-       WHERE thread_id = ? AND session_id IS NULL
-         AND visibility IN ('conversation', 'working_trace')
-         AND (created_at > ? OR (created_at = ? AND id > ?))
-       ORDER BY created_at ASC, id ASC
-       LIMIT ?`,
+      `${MESSAGE_LINEAGE_CTE}
+       SELECT * FROM agent_messages
+        WHERE session_id IS NULL
+          AND visibility IN ('conversation', 'working_trace')
+          AND ${MESSAGE_LINEAGE_ROWS}
+          AND (created_at > ? OR (created_at = ? AND id > ?))
+        ORDER BY created_at ASC, id ASC
+        LIMIT ?`,
+      threadId,
       threadId,
       anchor.created_at,
       anchor.created_at,
@@ -1152,9 +1176,11 @@ export class AgentMessageRepo {
     )
     const hasOlder = olderRows.length > half
     const hasNewer = newerRows.length > half
+    // The anchor may be an inherited message (a fork's parent row), which is why
+    // this read is by id alone: the lineage predicate above already proved the
+    // caller may see it.
     const anchorRow = this.db.get<AgentMessageRow>(
-      'SELECT * FROM agent_messages WHERE thread_id = ? AND id = ?',
-      threadId,
+      'SELECT * FROM agent_messages WHERE id = ?',
       anchorId
     )
     const rows = [
@@ -1389,6 +1415,43 @@ function afterCursor(after: ThreadMessageCursor | undefined): string {
  * shipping it across the worker port would roughly double every transcript
  * page's serialized payload.
  */
+/**
+ * The WITH clause that makes a fork's inherited history part of its transcript.
+ *
+ * A fork copies no rows: the parent thread is the one place its history lives. So
+ * a fork's transcript is its own rows plus the rows of every ancestor up to the
+ * message it was cut at, and a fork of a fork reaches its grandparent the same
+ * way. The boundary only ever moves backwards along a chain (a fork can only be
+ * cut at what its parent showed), so one cutoff — the leaf's — bounds every
+ * ancestor.
+ *
+ * The clause takes the leaf's thread id twice: once for the anchor, once for the
+ * branches below it. Non-fork threads pay one indexed probe that returns nothing.
+ */
+export const MESSAGE_LINEAGE_CTE = `WITH RECURSIVE lineage(thread_id, boundary_at) AS (
+  SELECT parent_thread_id, boundary_created_at FROM thread_checkpoints
+   WHERE thread_id = ? AND kind = 'fork' AND parent_thread_id IS NOT NULL
+  UNION
+  SELECT c.parent_thread_id,
+         CASE
+           WHEN l.boundary_at IS NULL THEN c.boundary_created_at
+           WHEN c.boundary_created_at IS NULL THEN l.boundary_at
+           ELSE min(l.boundary_at, c.boundary_created_at)
+         END
+    FROM thread_checkpoints c JOIN lineage l ON c.thread_id = l.thread_id
+   WHERE c.kind = 'fork' AND c.parent_thread_id IS NOT NULL
+)`
+
+/** The predicate that keeps a thread's own rows and the inherited ones. */
+export const MESSAGE_LINEAGE_ROWS = `(
+  thread_id = ?
+  OR EXISTS (
+    SELECT 1 FROM lineage l
+     WHERE l.thread_id = agent_messages.thread_id
+       AND (l.boundary_at IS NULL OR agent_messages.created_at <= l.boundary_at)
+  )
+)`
+
 const MESSAGE_READ_COLUMNS = `id, thread_id, session_id, role, origin, visibility, parts,
   content_hash, transport_parts, transport_origin, model_id, provider_id, harness_id,
   account_id, account_label, oven_id, oven_label, oven_appearance_json,
@@ -1425,9 +1488,13 @@ export function buildLoadAllPageSql(
   const cursor = afterCursor(after)
   if (after) params.push(after.createdAt, after.createdAt, after.id)
   return {
-    sql: `SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages WHERE thread_id = ? AND session_id IS NULL${cursor}
-      ORDER BY created_at ASC, id ASC`,
-    params
+    // The whole transcript of a fork is its own rows plus the inherited ones, so
+    // a rebuilt session's recap reads the same conversation the user sees.
+    sql: `${MESSAGE_LINEAGE_CTE}
+      SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages
+       WHERE session_id IS NULL AND ${MESSAGE_LINEAGE_ROWS}${cursor}
+       ORDER BY created_at ASC, id ASC`,
+    params: [threadId, ...params]
   }
 }
 
@@ -1564,10 +1631,13 @@ export function buildLoadPageSql(
     params.push(before.createdAt, before.createdAt, before.id)
   }
   return {
-    sql: `SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages
-      WHERE thread_id = ? AND session_id IS NULL
-        AND visibility IN ('conversation', 'working_trace')${cursor}
-      ORDER BY created_at DESC, id DESC`,
-    params
+    sql: `${MESSAGE_LINEAGE_CTE}
+      SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages
+       WHERE session_id IS NULL
+         AND visibility IN ('conversation', 'working_trace')
+         AND ${MESSAGE_LINEAGE_ROWS}${cursor}
+       ORDER BY created_at DESC, id DESC`,
+    // The clause names the leaf twice, then the cursor continues the page.
+    params: [threadId, ...params]
   }
 }

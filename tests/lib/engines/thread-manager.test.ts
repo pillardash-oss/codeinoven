@@ -483,6 +483,97 @@ describe('ThreadManager', () => {
     })
   })
 
+  it("shows a fork's inherited transcript, and a fork of a fork reaches the grandparent", async () => {
+    const { manager, db } = await createManager()
+    const parent = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Grandparent history'
+    })
+    const base = 1_700_000_000_000
+    await manager.saveMessages('project1', parent.id, [
+      {
+        id: 'history-1',
+        role: 'user',
+        parts: [{ type: 'text', text: 'the first request' }],
+        createdAt: base
+      } as AgentMessage,
+      {
+        id: 'history-2',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'the first answer' }],
+        createdAt: base + 1
+      } as AgentMessage,
+      {
+        id: 'history-3',
+        role: 'user',
+        parts: [{ type: 'text', text: 'a later request after the fork point' }],
+        createdAt: base + 2
+      } as AgentMessage
+    ])
+
+    // Fork cut at the second message: the conversation screen must open on the
+    // parent's history up to that point, not on a blank thread.
+    const fork = await manager.forkThread(
+      'project1',
+      parent.id,
+      'First fork',
+      undefined,
+      'history-2'
+    )
+    const firstPage = await manager.loadMessagePage('project1', fork.id, undefined, 50)
+    expect(firstPage.messages.map((message) => message.id)).toEqual(['history-1', 'history-2'])
+
+    // The fork's own turn reads on after the inherited history.
+    await manager.saveMessages('project1', fork.id, [
+      {
+        id: 'fork-1',
+        role: 'user',
+        parts: [{ type: 'text', text: 'continue from here' }],
+        createdAt: base + 10
+      } as AgentMessage
+    ])
+    const withOwn = await manager.loadMessagePage('project1', fork.id, undefined, 50)
+    expect(withOwn.messages.map((message) => message.id)).toEqual([
+      'history-1',
+      'history-2',
+      'fork-1'
+    ])
+
+    // A fork of the fork can be cut at an inherited message (the grandparent's),
+    // and shows exactly what that point covered.
+    const grandchild = await manager.forkThread(
+      'project1',
+      fork.id,
+      'Second fork',
+      undefined,
+      'history-1'
+    )
+    const grandchildPage = await manager.loadMessagePage('project1', grandchild.id, undefined, 50)
+    expect(grandchildPage.messages.map((message) => message.id)).toEqual(['history-1'])
+
+    // Cut at the fork's own message: inherited history plus that turn.
+    const sibling = await manager.forkThread(
+      'project1',
+      fork.id,
+      'Third fork',
+      undefined,
+      'fork-1'
+    )
+    const siblingPage = await manager.loadMessagePage('project1', sibling.id, undefined, 50)
+    expect(siblingPage.messages.map((message) => message.id)).toEqual([
+      'history-1',
+      'history-2',
+      'fork-1'
+    ])
+
+    // Still no copies: every row lives in the thread that wrote it.
+    const messages = new AgentMessageRepo(db)
+    expect(messages.countConversationByThread(fork.id)).toBe(1)
+    expect(messages.countConversationByThread(grandchild.id)).toBe(0)
+    expect(messages.countConversationByThread(sibling.id)).toBe(0)
+  })
+
   it('uses readable suffixes when unrelated features have the same title', async () => {
     const { manager, db } = await createManager()
     const first = await manager.createThread({
