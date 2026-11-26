@@ -585,12 +585,10 @@ export class ChatEngineTurnsSteer {
         },
         discard: async () => {
           // Remove the persisted user message   the harness never saw it, so
-          // the conversation must look like the steer never happened.
-          const mirror = await this.host.threadManager.loadMessageRecords(projectId, threadId)
-          const kept = mirror.filter((message) => message.id !== messageId)
-          if (kept.length !== mirror.length) {
-            await this.host.threadManager.saveMessages(projectId, threadId, kept)
-          }
+          // the conversation must look like the steer never happened. Deleting
+          // by id touches one row: the turn is still streaming parts, and a
+          // whole-transcript rewrite would drop whatever landed meanwhile.
+          await this.host.threadManager.deleteAppMessages(projectId, threadId, [messageId])
         }
       })
       return withoutTransportParts(userMessage)

@@ -26,6 +26,7 @@ import type { AuthoredWorkKind } from '../../../lib/ipc/design'
 import type { UtilityTurnBudgetContext } from '../../utilities/utility-orchestration-service'
 import type {
   AgentMessage,
+  AgentPart,
   BrainstormDocument,
   PromptAttachment,
   PromptAssignmentTaskReference,
@@ -74,6 +75,7 @@ import type {
 import { rawErrorDetail, rawErrorMessage } from './chat-engine-errors'
 import { ovenPiRuntime, ovenPiTurnApplies } from '../../ovens/oven-pi-runtime'
 import { withoutTransportParts } from './chat-engine-message-merge'
+import { mergeHeldSteerPayload } from './chat-engine-held-steer-merge'
 import { formatProjectReferenceContext } from './chat-engine-message-text'
 import { firstTurnForkNotice } from './chat-engine-fork-parent'
 import { readForkOrigin } from '../../../lib/engines/thread-manager-fork'
@@ -1110,6 +1112,68 @@ export class ChatEngineTurnsSendPrompt {
         this.host.state.outboundMessageIdsBySession.get(sessionId) ?? new Set<string>()
       outboundIds.add(messageId)
       this.host.state.outboundMessageIdsBySession.set(sessionId, outboundIds)
+      // A message that arrived while an earlier steer was still recallable is
+      // that same request continued: the earlier row is folded into this one
+      // (its words first, then a newline) and removed, so both settle as a
+      // single steer. This path is the composer's own send while a turn is
+      // live, so without the fold the earlier steer's delivery was replaced by
+      // this one and its row kept a recall control forever.
+      let steerPromptReferences = validatedPromptReferences
+      let steerProjectReferences = validatedProjectReferences
+      let steerTaskReferences = taskReferences ?? []
+      const heldPayload = await this.host.units['turns-steer'].takeHeldSteerForMerge(sessionId, {
+        projectId,
+        conversationId: threadId,
+        kind: 'thread'
+      })
+      if (heldPayload) {
+        const merged = mergeHeldSteerPayload(heldPayload, {
+          text,
+          attachments,
+          promptReferences: steerPromptReferences,
+          projectReferences: steerProjectReferences,
+          taskReferences: steerTaskReferences
+        })
+        text = merged.text
+        attachments = merged.attachments
+        steerPromptReferences = merged.promptReferences
+        steerProjectReferences = merged.projectReferences
+        steerTaskReferences = merged.taskReferences
+        driverText = budgetedHidden ? `${budgetedHidden}\n\nUser message:\n${text}` : text
+        // The row this send already persisted must say what the steer now says:
+        // its own words plus the earlier ones. The transcript is rewritten in
+        // place so a reload shows one merged message, not the message the agent
+        // never received.
+        const rewrittenParts = userMessage.parts.filter((part) => part.type === 'text')
+        const presentationParts = userMessage.parts.filter(
+          (part) => part.type === 'user-presentation'
+        )
+        const fileParts = attachments.map((attachment, index): AgentPart => ({
+          type: 'file',
+          id: `${messageId}-file-${index}`,
+          messageID: messageId,
+          mime: attachment.mime,
+          url: attachment.url,
+          filename: attachment.filename
+        }))
+        userMessage.parts = [...rewrittenParts, ...fileParts, ...presentationParts]
+        const transportText = userMessage.transportParts?.find((part) => part.type === 'text')
+        if (transportText && transportText.type === 'text') transportText.text = driverText
+        userMessage.references =
+          steerPromptReferences.length > 0 ? steerPromptReferences : undefined
+        userMessage.projectReferences =
+          steerProjectReferences.length > 0 ? steerProjectReferences : undefined
+        // Same incremental rewrite the image-description path uses: one row by
+        // id, never the whole transcript, so parts streaming in right now are
+        // not replaced by a stale copy.
+        await this.host.threadManager.upsertMessages(projectId, threadId, [userMessage], sessionId)
+        this.host.broadcast({
+          type: 'steer.merged',
+          sessionId,
+          userMessageId: messageId,
+          text
+        })
+      }
       // Steer appends to the live turn   do not rebind the checkpoint source
       // or move the turn-start anchor. Only a message after final output
       // starts a new turn; steers are mid-turn follow-ups.
@@ -1144,9 +1208,9 @@ export class ChatEngineTurnsSendPrompt {
           payload: {
             text,
             attachments,
-            promptReferences: validatedPromptReferences,
-            projectReferences: validatedProjectReferences,
-            taskReferences: taskReferences ?? []
+            promptReferences: steerPromptReferences,
+            projectReferences: steerProjectReferences,
+            taskReferences: steerTaskReferences
           },
           deliverMidTurn: deliverFallbackSteer,
           deliverAfterTurn: async () => {
@@ -1159,26 +1223,24 @@ export class ChatEngineTurnsSendPrompt {
               specAction,
               messageId,
               promptContext,
-              promptReferences,
-              projectReferences,
+              steerPromptReferences,
+              steerProjectReferences,
               origin,
               presentation,
-              taskReferences
+              steerTaskReferences
             )
           },
           discard: async () => {
-            const mirror = await this.host.threadManager.loadMessageRecords(projectId, threadId)
-            const kept = mirror.filter((message) => message.id !== messageId)
-            if (kept.length !== mirror.length) {
-              await this.host.threadManager.saveMessages(projectId, threadId, kept)
-            }
+            // One row by id: the turn is still streaming parts, and a
+            // whole-transcript rewrite would drop whatever landed meanwhile.
+            await this.host.threadManager.deleteAppMessages(projectId, threadId, [messageId])
           }
         })
-        return publicUserMessage
+        return withoutTransportParts(userMessage)
       }
       await deliverFallbackSteer()
       this.host.units['turns-sessions'].markSessionWorking(sessionId)
-      return publicUserMessage
+      return withoutTransportParts(userMessage)
     }
     // Internal continuation prompts (search nudges, mermaid repairs,
     // incomplete-turn retries) start a new turn after the user's turn already
