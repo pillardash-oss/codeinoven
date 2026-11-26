@@ -38,13 +38,16 @@ export const RECAP_MAX_LINE_SHARE = 0.6
  * Maximum share of the checkpoint line the verbatim tail of a context handoff
  * may take.
  *
- * A rebuilt session (fork, account/harness switch, edited or deleted history)
- * no longer receives its whole prior conversation. It receives the newest part
- * verbatim, because that is the work in progress, plus the thread id so the
- * agent can query the rest of the mirror on demand. The tail therefore stays a
- * small slice of the window: the conversation ahead of it is reachable through
- * the read-only diagnostics tools, which cost the agent a tool call instead of
- * every turn's tokens.
+ * Two paths still carry verbatim history: a reduced native prefill (a session
+ * seeded from the newest part of an edited transcript) and the parked-branch
+ * replay (a session that already holds the conversation and only missed a
+ * delta). Both carry the newest messages verbatim, so both stay a small slice
+ * of the window; the rest of the conversation is reachable through the read-only
+ * diagnostics tools, which cost the agent a tool call instead of every turn's
+ * tokens.
+ *
+ * A rebuilt session's recap is not one of these paths any more: it is a short
+ * brief (see `formatHistoryBrief`), which is far smaller than this share.
  */
 export const HANDOFF_TAIL_LINE_SHARE = 0.08
 
@@ -64,7 +67,8 @@ export const HANDOFF_TAIL_MAX_TOKENS = 12_000
  * The index is the map of the conversation: it names what was asked and when,
  * which is what tells the agent which query to run. Listing every request of a
  * 400-message thread would cost more than it saves, so the oldest beyond this
- * count are reachable by search only.
+ * count are reachable by search only. It also bounds the request list of the
+ * shorter resume brief, which has its own tighter limit again.
  */
 export const HANDOFF_INDEX_MAX_REQUESTS = 40
 

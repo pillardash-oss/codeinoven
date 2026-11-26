@@ -252,6 +252,23 @@ export class ChatEngineTurnsSessions {
         driverId,
         accountId
       )
+      // The session that ran on the previous harness is closed by this switch, so
+      // it is recorded as a checkpoint of its own: the thread's windows stay
+      // complete no matter which harness ended them.
+      if (switchedRuntime && previousSessionId) {
+        await this.host.units['checkpoints']
+          .recordClosedSession({
+            projectId,
+            threadId,
+            sessionId: previousSessionId,
+            harnessId: previousHarnessId ?? driverId,
+            nextSessionId: sessionId,
+            kind: 'harness-switch',
+            projectPath,
+            label: 'Moved to another harness'
+          })
+          .catch(() => {})
+      }
       if (parked) {
         nativeHistoryBound = true
         this.host.state.parkedSessionReplay.set(sessionId, {
@@ -383,6 +400,19 @@ export class ChatEngineTurnsSessions {
         projectPath,
         thread.settings
       )
+      // The session may already be at its checkpoint line. Close it and continue
+      // on a successor before this turn is dispatched, instead of running the
+      // work inside a window that is already at its limit and letting the
+      // harness compact (or refuse) mid-turn.
+      const checkpointed = await this.host.units['checkpoints'].checkpointBeforeTurn({
+        projectId,
+        threadId,
+        sessionId,
+        driver,
+        projectPath,
+        settings: thread.settings
+      })
+      if (checkpointed) sessionId = checkpointed
     }
 
     // The switch succeeded (a replacement session is bound). Best-effort release
@@ -523,12 +553,26 @@ export class ChatEngineTurnsSessions {
     this.host.state.activeCompactions.delete(sessionId)
   }
 
-  /** Return the latest provider lifecycle state retained for this thread. */
-  async getSessionStatus(projectId: string, threadId: string): Promise<AgentSessionStatus | null> {
+  /**
+   * Return the latest provider lifecycle state retained for this thread.
+   *
+   * `preloadedThread` is the row an aggregate read already has: passing it skips
+   * the row read below. `undefined` means "read it here" and `null` means
+   * "already known to be absent", so every other call site keeps answering
+   * exactly as before.
+   */
+  async getSessionStatus(
+    projectId: string,
+    threadId: string,
+    preloadedThread?: Thread | null
+  ): Promise<AgentSessionStatus | null> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     await this.host.threadCreation?.awaitReady(threadId)
-    const thread = await this.host.threadManager.getThread(projectId, threadId)
+    const thread =
+      preloadedThread === undefined
+        ? await this.host.threadManager.getThread(projectId, threadId)
+        : preloadedThread
     if (!thread) return null
     if (this.host.state.ovenChat.remote(thread)) {
       await this.host.state.ovenChat.restore(thread)
@@ -964,7 +1008,16 @@ export class ChatEngineTurnsSessions {
     }
   }
 
-  /** Ask the active harness to summarize and compact this thread's context. */
+  /**
+   * Shrink this thread's context on request.
+   *
+   * This is a **checkpoint**: the session is closed and the thread continues on
+   * a successor with the brief, so the conversation is never summarized away and
+   * every earlier window stays readable by thread id. A harness compaction is
+   * only taken when the checkpoint could not happen (no driver session, a
+   * harness that refuses a new one), because losing the request is worse than
+   * rewriting the transcript.
+   */
   async compactSession(projectId: string, threadId: string): Promise<void> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
@@ -974,6 +1027,14 @@ export class ChatEngineTurnsSessions {
     }
     if (!thread.settings) {
       throw new Error('Select a model before compacting this thread')
+    }
+    const checkpointed = await this.host.units['checkpoints'].checkpointNow(projectId, threadId)
+    if (checkpointed) {
+      broadcastToast(
+        'Checked in this thread: it continues in a fresh session, and the earlier history is still readable.',
+        'info'
+      )
+      return
     }
     const driverId = thread.settings.harnessId ?? DEFAULT_HARNESS
     const account = await this.host.state.accountRegistry.resolveForProvider(

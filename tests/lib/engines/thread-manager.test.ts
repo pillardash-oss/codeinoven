@@ -10,6 +10,7 @@ import type { AgentMessage, ThreadSettings, ScopeBucket } from '../../../src/lib
 import { AllThreadsProtectedError, ThreadManager } from '../../../src/lib/engines/thread-manager'
 import { ensureFeatureSlug } from '../../../src/lib/project-artifacts'
 import { AgentMessageRepo } from '../../../src/main/database/repositories/agent-message-repo'
+import { ThreadCheckpointRepo } from '../../../src/main/database/repositories/thread-checkpoint-repo'
 import { removeTempRoot } from '../../helpers/temp-root'
 
 const temporaryDatabases: Database[] = []
@@ -418,6 +419,68 @@ describe('ThreadManager', () => {
     expect(featureSlug).toBe('markdown-rendering')
     expect(fork.featureSlug).toBe(featureSlug)
     expect((await manager.getThread('project1', parent.id))?.featureSlug).toBe(featureSlug)
+  })
+
+  it("records a fork's lineage instead of copying the parent transcript", async () => {
+    const { manager, db } = await createManager()
+    const settings: ThreadSettings = {
+      harnessId: 'opencode',
+      providerId: 'openai',
+      modelId: 'gpt-5',
+      thinkingLevel: 'medium',
+      permissionLevel: 'auto_review'
+    }
+    const parent = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Parent history',
+      settings
+    })
+    await manager.setSessionId('project1', parent.id, 'session-parent', 'opencode')
+    const boundaryAt = 1_700_000_000_000
+    const history: AgentMessage[] = [
+      {
+        id: 'history-1',
+        role: 'user',
+        parts: [{ type: 'text', text: 'before the fork' }],
+        createdAt: boundaryAt
+      } as AgentMessage,
+      {
+        id: 'history-2',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'the answer before the fork' }],
+        createdAt: boundaryAt + 1
+      } as AgentMessage
+    ]
+    await manager.saveMessages('project1', parent.id, history)
+
+    const fork = await manager.forkThread(
+      'project1',
+      parent.id,
+      'Parent history (fork)',
+      undefined,
+      'history-1'
+    )
+
+    // The parent keeps its transcript and the fork holds none of it: the history
+    // lives in one place, and the fork points at it.
+    const messages = new AgentMessageRepo(db)
+    expect(messages.countConversationByThread(parent.id)).toBe(2)
+    expect(messages.countByThread(fork.id)).toBe(0)
+    expect(messages.countConversationByThread(fork.id)).toBe(0)
+
+    const checkpoints = await new ThreadCheckpointRepo(db).listViaWorker(fork.id)
+    expect(checkpoints).toHaveLength(1)
+    expect(checkpoints[0]).toMatchObject({
+      threadId: fork.id,
+      kind: 'fork',
+      parentThreadId: parent.id,
+      sessionId: 'session-parent',
+      harnessId: 'opencode',
+      projectPath: '/tmp/project1',
+      boundaryMessageId: 'history-1',
+      boundaryCreatedAt: boundaryAt
+    })
   })
 
   it('uses readable suffixes when unrelated features have the same title', async () => {

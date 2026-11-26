@@ -52,4 +52,18 @@ describe('main-thread SQLite hot paths', () => {
     expect(reads.length).toBeGreaterThan(0)
     for (const read of reads) expect(read).toMatch(/lane: 'async'|options\)/u)
   })
+
+  it('hydrates the semantic matches of a search on the async lane, never synchronously', () => {
+    const search = source('lib', 'engines', 'thread-manager-search.ts')
+    // Hydrating the matches a search found is part of answering it, so it must
+    // not join the queue a click waits in.
+    const hydration = search.slice(search.indexOf('this.threadRepo.listByIdsViaWorker('))
+    expect(hydration).toMatch(/lane: 'async'/u)
+    // And no search statement runs on the primary connection inside a frame: the
+    // fallback for a missing worker belongs to `queryViaWorker` itself.
+    expect(search).not.toMatch(/this\.threadRepo\.search\(/u)
+    expect(source('main', 'database', 'repositories', 'thread-repo.ts')).not.toMatch(
+      /^ {2}search\(/mu
+    )
+  })
 })

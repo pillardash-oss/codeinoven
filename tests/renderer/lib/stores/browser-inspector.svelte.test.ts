@@ -259,6 +259,66 @@ describe('design pins', () => {
     expect(browserInspector.markersFor(TAB)).toEqual([])
   })
 
+  it('does not republish the pins while a comment is only being typed', async () => {
+    const { browserInspector, responseReferencesState } = await freshSession()
+    browserInspector.start()
+    responseReferencesState.setForThread(PROJECT, THREAD, [
+      { ...designReference('marker-one'), comment: 'First pass' }
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(invoke).toHaveBeenCalledWith('browser:inspectMarkers', TAB, [
+      { id: 'marker-one', number: 1, comment: 'First pass', selector: 'div#otp' }
+    ])
+    invoke.mockClear()
+
+    // The field writes a draft on every keystroke. The pin already shows that the
+    // element carries a comment, and its text is drawn by the app's own bubble,
+    // so nothing on the page changes and nothing may be sent to it.
+    responseReferencesState.updateCommentDraft(
+      PROJECT,
+      THREAD,
+      'marker-one',
+      'First pass, now with a longer sentence'
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(invoke).not.toHaveBeenCalledWith('browser:inspectMarkers', TAB, expect.anything())
+    // The pins still carry the truth for anything else that asks for them.
+    expect(browserInspector.markersFor(TAB)).toEqual([
+      {
+        id: 'marker-one',
+        number: 1,
+        comment: 'First pass, now with a longer sentence',
+        selector: 'div#otp'
+      }
+    ])
+  })
+
+  it('publishes a pin again the first time a comment is written on it', async () => {
+    const { browserInspector, responseReferencesState } = await freshSession()
+    browserInspector.start()
+    responseReferencesState.setForThread(PROJECT, THREAD, [designReference('marker-one')])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(invoke).toHaveBeenCalledWith('browser:inspectMarkers', TAB, [
+      { id: 'marker-one', number: 1, comment: '', selector: 'div#otp' }
+    ])
+    invoke.mockClear()
+
+    // Until the element has a comment its pin is drawn hollow, so the first
+    // character written is a real change to what the page shows.
+    responseReferencesState.updateCommentDraft(PROJECT, THREAD, 'marker-one', 'L')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(invoke).toHaveBeenCalledWith('browser:inspectMarkers', TAB, [
+      { id: 'marker-one', number: 1, comment: 'L', selector: 'div#otp' }
+    ])
+    invoke.mockClear()
+
+    responseReferencesState.updateCommentDraft(PROJECT, THREAD, 'marker-one', 'Larger')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(invoke).not.toHaveBeenCalledWith('browser:inspectMarkers', TAB, expect.anything())
+  })
+
   it('opens the tab already showing the comment design when the recorded tab is gone', async () => {
     const session = await freshSession()
     const { browserInspector, responseReferencesState } = session

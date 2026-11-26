@@ -1,4 +1,5 @@
 import type {
+  AgentSessionStatus,
   Checklist,
   ChecklistItem,
   CreateThreadInput,
@@ -6,7 +7,10 @@ import type {
   HarnessUsage,
   HistoryEntry,
   HistoryRole,
+  ImageDescriptorErrorRequest,
   Plan,
+  PendingAgentQuestionRequest,
+  PermissionRequest,
   ScopeSlice,
   TaskManagerSnapshot,
   Thread,
@@ -36,6 +40,45 @@ export interface ForkOriginReference {
   parentProjectId: string
   parentThreadId: string
   parentTitle: string
+}
+
+/**
+ * One part of the open digest a caller may have to read from its own channel.
+ *
+ * The aggregate is an optimisation over channels that still work. When one part
+ * cannot be answered (a harness probe that failed, a database hiccup) the rest
+ * of the digest is still true and only that part is named here, so the caller
+ * re-reads exactly the channel it used before instead of throwing the whole
+ * answer away and paying for all five reads again.
+ */
+export type ThreadOpenDigestPart =
+  'thread' | 'permissions' | 'questions' | 'imageDescriptorErrors' | 'sessionStatus'
+
+/**
+ * Everything a thread open needs, answered in one round trip.
+ *
+ * A mount used to ask five separate channels for the same conversation, and
+ * every one of them re-read the thread row through the single database worker
+ * just to decide where its answer came from. One read now carries all of it:
+ * the row (the same value `thread:get` answers), the pending permission queue,
+ * the pending question queue, the unresolved image-descriptor cards, and the
+ * live agent session status. The parts keep the exact shapes their own channels
+ * answer, so a caller never translates between them.
+ *
+ * `thread` is null when the thread is not visible here (an archived or foreign
+ * row), exactly like `thread:get`, and the other parts then answer the same way
+ * their channels do for a thread with no row: registered permission cards still
+ * list (they key off the request scope, not the row), while questions and the
+ * session status are empty.
+ */
+export interface ThreadOpenDigest {
+  thread: Thread | null
+  permissions: PermissionRequest[]
+  questions: PendingAgentQuestionRequest[]
+  imageDescriptorErrors: ImageDescriptorErrorRequest[]
+  sessionStatus: AgentSessionStatus | null
+  /** Parts this answer could not carry; read those from their own channel. */
+  failures: ThreadOpenDigestPart[]
 }
 
 export const invokeThreadContract = {
@@ -180,6 +223,11 @@ export const invokeThreadContract = {
     ForkOriginReference | null
   >,
   'thread:get': {} as Contract<[projectId: string, threadId: string], Thread | null>,
+  /**
+   * The aggregate a thread mount reads instead of `thread:get` plus the
+   * permission, question, image-descriptor, and session-status channels.
+   */
+  'thread:openDigest': {} as Contract<[projectId: string, threadId: string], ThreadOpenDigest>,
   'thread:list': {} as Contract<[projectId: string], Thread[]>,
   'thread:listAll': {} as Contract<[], Thread[]>,
   /**

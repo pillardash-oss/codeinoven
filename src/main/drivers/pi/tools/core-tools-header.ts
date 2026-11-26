@@ -440,13 +440,15 @@ interface DenyRule {
 }
 
 // Recursive or bulk deletes   flat out denied without explicit approval.
+// <cio-recursive-delete-rules>
 const RECURSIVE_DELETE_RULES: DenyRule[] = [
-  { pattern: /(?:^|[;&|]\\s*)rm\\s+(?=[^\\n]*(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?:\\s|$))/u, label: 'a recursive delete (rm -r)' },
-  { pattern: /(?:^|[;&|]\\s*)find\\s+[^\\n]+\\s-delete(?:\\s|$)/u, label: 'find -delete' },
-  { pattern: /(?:^|[;&|]\\s*)git\\s+clean(?=[^\\n]*-[a-zA-Z]*[fdx])/u, label: 'git clean' },
-  { pattern: /(?:^|[;&|]\\s*)Remove-Item\\b[^\\n]*\\s-Recurse\\b/iu, label: 'Remove-Item -Recurse' },
-  { pattern: /(?:^|[;&|]\\s*)(?:rmdir|rd|del)\\b[^\\n]*\\s\\/(?:s|S)\\b/u, label: 'a recursive delete (rmdir /s)' }
+  { pattern: /(?:^|[;&|]\\s*)rm\\s+(?=[^\\n;&|]*(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?:\\s|$))/u, label: 'a recursive delete (rm -r)' },
+  { pattern: /(?:^|[;&|]\\s*)find\\s+[^\\n;&|]+\\s-delete(?:\\s|$)/u, label: 'find -delete' },
+  { pattern: /(?:^|[;&|]\\s*)git\\s+clean(?=[^\\n;&|]*-[a-zA-Z]*[fdx])/u, label: 'git clean' },
+  { pattern: /(?:^|[;&|]\\s*)Remove-Item\\b[^\\n;&|]*\\s-Recurse\\b/iu, label: 'Remove-Item -Recurse' },
+  { pattern: /(?:^|[;&|]\\s*)(?:rmdir|rd|del)\\b[^\\n;&|]*\\s\\/(?:s|S)\\b/u, label: 'a recursive delete (rmdir /s)' }
 ]
+// </cio-recursive-delete-rules>
 
 // Git operations that discard or rewrite user work.
 const GIT_DESTRUCTIVE_RULES: DenyRule[] = [

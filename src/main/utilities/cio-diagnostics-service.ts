@@ -1,6 +1,7 @@
 import type { Statement } from 'better-sqlite3'
 import type { Database } from '../database/database'
 import { AgentMessageRepo } from '../database/repositories/agent-message-repo'
+import { ThreadCheckpointRepo } from '../database/repositories/thread-checkpoint-repo'
 import { AssistantRepo } from '../database/repositories/assistant-repo'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import {
@@ -16,6 +17,11 @@ import {
   type AgentMessage,
   type Thread
 } from '../../lib/types'
+import { patternActionPhrase, resolveToolCall } from '../../lib/tool-action-label'
+import {
+  summarizeToolInput,
+  truncateToolResult
+} from '../chat/chat-engine/chat-engine-message-text'
 import {
   ERROR_LOG_FILE,
   LOGS_DIRECTORY,
@@ -45,6 +51,18 @@ const MAX_QUERY_VALUE_LENGTH = 2_000
 const MAX_QUERY_SQL_LENGTH = 4_000
 const MAX_QUERY_PARAMS = 32
 const MAX_SCHEMA_TABLES = 80
+/** Tool calls one message may report, and the length one of them may take. */
+const MAX_ACTION_LINES = 12
+const MAX_ACTION_LINE_LENGTH = 400
+/**
+ * Characters one page may return, text and actions together.
+ *
+ * A page is bounded per message already, but 120 messages times a large message
+ * is still a quarter of a window in the worst case. One page is meant to be
+ * cheap enough to read a few of, so the page keeps the newest messages that fit
+ * and says so, and the reader pages further back with the cursor.
+ */
+const MAX_PAGE_CHARACTERS = 60_000
 
 /** Log files an agent may inspect through the diagnostics capability. */
 const READABLE_LOG_FILES = [MAIN_LOG_FILE, ERROR_LOG_FILE, PERMISSION_EVENTS_LOG_FILE]
@@ -141,9 +159,35 @@ export interface DiagnosticMessage {
   role: AgentMessage['role']
   createdAt: number
   text: string
+  /** What the turn did, in order: one bounded line per tool call, with its
+   *  argument and a redacted preview of its result. This is the evidence a
+   *  resumed agent needs (what was run, what was edited, what failed); the
+   *  conversation text alone never carries it. */
+  actions?: string[]
   error?: string
   modelId?: string
   providerId?: string
+}
+
+/**
+ * One bounded page of a thread's mirrored conversation.
+ *
+ * A resumed agent starts from a thread id, not from the messages, so the page
+ * has to name the way further back: `nextBeforeId` is the message id to pass as
+ * `before_id` for the page older than this one.
+ */
+export interface DiagnosticMessagePage {
+  threadId: string
+  /** The thread's title, so the agent recognizes the work it is resuming. */
+  title: string
+  /** The checkpoint (window) this page was scoped to, when one was asked for. */
+  checkpointId?: string
+  messages: DiagnosticMessage[]
+  /** Message id to pass as `before_id` for the next older page. */
+  nextBeforeId?: string
+  /** Whether messages older than this page exist. */
+  hasOlder: boolean
+  note?: string
 }
 
 export interface DiagnosticLogEntry {
@@ -275,6 +319,43 @@ function formatQueryValue(value: unknown): string | number | null {
   return `${redactSensitiveText(text.slice(0, MAX_QUERY_VALUE_LENGTH))}... [truncated]`
 }
 
+/** Collapse whitespace so one tool call stays one line. */
+function collapseLine(text: string): string {
+  return text.replace(/\s+/gu, ' ').trim()
+}
+
+/**
+ * What a message did, as bounded one-line records of its tool calls.
+ *
+ * The mirror stores a turn's work as tool parts: the call's arguments and its
+ * result. That evidence is what a resumed agent cannot get from the assistant's
+ * prose ("I fixed it" versus the edit that fixed it), so a diagnostics read
+ * surfaces it, capped per line and per message so one huge turn cannot flood
+ * the result.
+ */
+function diagnosticActions(parts: AgentMessage['parts']): string[] {
+  const calls = parts.filter(
+    (part): part is Extract<AgentMessage['parts'][number], { type: 'tool' }> => part.type === 'tool'
+  )
+  const lines = calls.slice(0, MAX_ACTION_LINES).map((part) => {
+    const call = resolveToolCall(part.tool, part.state.input ?? {})
+    const action = patternActionPhrase(call.tool) ?? call.tool
+    const subject = summarizeToolInput(call.input)
+    const failed = part.state.status === 'error' || part.state.error
+    const output = failed ? part.state.error : part.state.output
+    const preview = output?.trim() ? collapseLine(truncateToolResult(output)) : ''
+    const head = [failed ? '[failed]' : '', action, subject].filter(Boolean).join(' ')
+    return redactSensitiveText(preview ? `${head} → ${preview}` : head).slice(
+      0,
+      MAX_ACTION_LINE_LENGTH
+    )
+  })
+  if (calls.length > lines.length) {
+    lines.push(`… ${calls.length - lines.length} more tool calls in this turn`)
+  }
+  return lines
+}
+
 function summarizeDiagnosticThread(
   thread: Thread,
   projectName: string,
@@ -300,8 +381,9 @@ function summarizeDiagnosticThread(
   return summary
 }
 
-/** Which hidden container a project id resolves to, for the group listing. */
-function projectGroupKind(projectId: string): DiagnosticProjectGroup['kind'] {
+/** Which hidden container a project id resolves to, for the group listing. */ function projectGroupKind(
+  projectId: string
+): DiagnosticProjectGroup['kind'] {
   if (projectId === INBOX_PROJECT_ID) return 'inbox'
   if (projectId === ASSISTANT_SPACE_ID) return 'assistant'
   if (projectId === GLOBAL_BROWSER_PROJECT_ID) return 'browser'
@@ -382,6 +464,7 @@ function summarizePlainTextLog(file: string, raw: string): DiagnosticLogEntry[] 
 export class CioDiagnosticsService {
   private readonly threadRepo: ThreadRepo
   private readonly messageRepo: AgentMessageRepo
+  private readonly checkpointRepo: ThreadCheckpointRepo
   private readonly projects: ProjectRepo
   private readonly assistants: AssistantRepo
 
@@ -401,6 +484,7 @@ export class CioDiagnosticsService {
   ) {
     this.threadRepo = new ThreadRepo(db)
     this.messageRepo = new AgentMessageRepo(db)
+    this.checkpointRepo = new ThreadCheckpointRepo(db)
     this.projects = new ProjectRepo(db)
     this.assistants = new AssistantRepo(db)
   }
@@ -539,17 +623,132 @@ export class CioDiagnosticsService {
   }
 
   /**
-   * Load a bounded newest page of mirrored conversation messages for a thread.
-   * `loadPageByThread` already returns the page oldest-to-newest.
+   * Load a bounded page of mirrored conversation messages for a thread.
+   *
+   * Without `beforeId` the page is the newest one. With it, the page is the one
+   * older than that message, which is how an agent handed only a thread id walks
+   * a long conversation back to its beginning. With `checkpointId` the page is
+   * one window: everything written between the previous checkpoint and that one,
+   * which is how a resumed agent asks "what did the window before this one do".
+   * `loadPageByThread` already returns its page oldest-to-newest and says whether
+   * more history exists.
    */
-  async loadThreadMessages(threadId: string, limit: number): Promise<DiagnosticMessage[]> {
+  async loadThreadMessages(
+    threadId: string,
+    limit: number,
+    beforeId?: string,
+    checkpointId?: string
+  ): Promise<DiagnosticMessagePage> {
     const boundedLimit = Math.max(1, Math.min(MAX_MESSAGES, Math.trunc(limit) || 40))
     const thread = await this.threadRepo.getViaWorker(threadId)
-    if (!thread) return []
-    const page = this.messageRepo.loadPageByThread(threadId, undefined, boundedLimit)
-    return page.messages
+    if (!thread) return { threadId, title: '', messages: [], hasOlder: false }
+    const title = redactSensitiveText(thread.title)
+    if (checkpointId) {
+      return this.loadCheckpointPage(threadId, title, boundedLimit, checkpointId)
+    }
+    const before = beforeId
+      ? await this.messageRepo.messageCursorViaWorker(threadId, beforeId)
+      : undefined
+    if (beforeId && !before) {
+      throw new Error(
+        `No message ${beforeId} in thread ${threadId}. Pass a message id from this thread as before_id, or omit before_id for the newest page.`
+      )
+    }
+    const page = this.messageRepo.loadPageByThread(threadId, before, boundedLimit)
+    return this.toMessagePage({
+      threadId,
+      title,
+      messages: page.messages,
+      hasOlder: page.hasOlder
+    })
+  }
+
+  /**
+   * One checkpoint window: the messages a closed session actually covered.
+   *
+   * The mirror rows carry no session tag (the thread is the conversation), so the
+   * window is the time range between the previous checkpoint of the same thread
+   * and this one's boundary.
+   */
+  private async loadCheckpointPage(
+    threadId: string,
+    title: string,
+    limit: number,
+    checkpointId: string
+  ): Promise<DiagnosticMessagePage> {
+    const checkpoints = await this.checkpointRepo.listViaWorker(threadId, 100)
+    const index = checkpoints.findIndex((checkpoint) => checkpoint.id === checkpointId)
+    if (index < 0) {
+      throw new Error(
+        `No checkpoint ${checkpointId} in thread ${threadId}. Omit checkpoint_id to read the newest page, or search the thread for the work instead.`
+      )
+    }
+    const target = checkpoints[index]
+    const previous = checkpoints[index + 1]
+    if (!target) {
+      throw new Error(`Checkpoint ${checkpointId} is unavailable`)
+    }
+    const from = previous?.closedAt ?? previous?.createdAt ?? 0
+    const to = target.closedAt ?? target.createdAt
+    const messages = await this.messageRepo.loadCheckpointWindowViaWorker(threadId, from, to, limit)
+    const page = this.toMessagePage({
+      threadId,
+      title,
+      messages,
+      hasOlder: messages.length >= limit,
+      checkpointId
+    })
+    if (messages.length === 0) {
+      page.note = `Checkpoint ${target.sequence} of this thread covered no mirrored messages. Omit checkpoint_id for the thread's newest page.`
+    }
+    return page
+  }
+
+  /**
+   * Project a slice of the mirror into a diagnostic page and bound its total size.
+   *
+   * Per-message caps alone leave the page unbounded (120 messages times a large
+   * message), and one page is meant to be cheap enough to read several of, so the
+   * page keeps the newest messages that fit the budget and says it was trimmed.
+   */
+  private toMessagePage(input: {
+    threadId: string
+    title: string
+    messages: AgentMessage[]
+    hasOlder: boolean
+    checkpointId?: string
+  }): DiagnosticMessagePage {
+    const mapped = input.messages
       .map((message) => this.toDiagnosticMessage(message))
       .filter((message): message is DiagnosticMessage => message !== null)
+    const kept: DiagnosticMessage[] = []
+    let used = 0
+    for (let index = mapped.length - 1; index >= 0; index -= 1) {
+      const message = mapped[index]
+      if (!message) continue
+      const cost =
+        message.text.length +
+        (message.actions?.reduce((total, action) => total + action.length, 0) ?? 0)
+      if (kept.length > 0 && used + cost > MAX_PAGE_CHARACTERS) break
+      used += cost
+      kept.unshift(message)
+    }
+    const trimmed = kept.length < mapped.length
+    const result: DiagnosticMessagePage = {
+      threadId: input.threadId,
+      title: input.title,
+      messages: kept,
+      hasOlder: input.hasOlder || trimmed
+    }
+    if (input.checkpointId) result.checkpointId = input.checkpointId
+    const oldest = kept[0]
+    if (result.hasOlder && oldest) {
+      result.nextBeforeId = oldest.id
+      result.note = input.checkpointId
+        ? `This is the checkpoint window, oldest to newest. Older windows exist: pass this page's nextBeforeId as before_id to continue reading back through the thread.`
+        : `Older messages exist: call read_messages again with thread_id "${input.threadId}" and before_id "${oldest.id}" for the page before it, and repeat with each page's nextBeforeId.`
+    }
+    return result
   }
 
   /**
@@ -749,13 +948,15 @@ export class CioDiagnosticsService {
       .map((part) => part.text)
       .join('\n')
       .slice(0, MAX_MESSAGE_TEXT_LENGTH)
-    if (!text.trim() && !message.error) return null
+    const actions = diagnosticActions(message.parts)
+    if (!text.trim() && !message.error && actions.length === 0) return null
     const result: DiagnosticMessage = {
       id: message.id,
       role: message.role,
       createdAt: message.createdAt,
       text: redactSensitiveText(text)
     }
+    if (actions.length > 0) result.actions = actions
     if (message.error) result.error = redactSensitiveText(message.error).slice(0, 500)
     if (message.modelId) result.modelId = message.modelId
     if (message.providerId) result.providerId = message.providerId

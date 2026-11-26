@@ -1,23 +1,16 @@
 <script lang="ts">
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioEye from '@pdslng/cio-icon/CioEye.svelte'
-  import CioHammer from '@pdslng/cio-icon/CioHammer.svelte'
-  import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
-  import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
-  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey } from '$lib/model-keys'
   import ModelPicker from '../shared/ModelPicker.svelte'
-  import Switch from '../ui/Switch.svelte'
-  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
   import WorkerNamesSettings from './WorkerNamesSettings.svelte'
   import type {
     AgentDefaultsConfig,
     AgentModelSelection,
-    AgentRole,
     AppConfig,
     AppConfigPatch,
     ProviderCatalog,
@@ -32,51 +25,6 @@
   }
 
   let { config, settingsReady, updateConfig }: Props = $props()
-
-  /**
-   * The roles the Agents page configures. `pawn` is not an Engineering role: its
-   * value configures the worker threads an agent spawns for itself, so it lives
-   * beside the roles without joining them.
-   */
-  type RoleId = AgentRole | 'pawn'
-
-  const roles = [
-    {
-      id: 'seniorEngineer',
-      label: 'Sr. Engineer',
-      description: 'Plans the specification and coordinates Assignment work.',
-      emptyHint: 'Not set · uses the current thread model',
-      icon: CioMemory
-    },
-    {
-      id: 'worker',
-      label: 'Worker',
-      description: 'Implements Assignment tasks when a task or phase has no override.',
-      emptyHint: 'Not set · uses the current thread model',
-      icon: CioHammer
-    },
-    {
-      id: 'auditor',
-      label: 'Auditor',
-      description: 'Independently audits completed Engineering and Achievement work.',
-      emptyHint: 'Not set · uses the current thread model',
-      icon: CioShieldCheck
-    },
-    {
-      id: 'pawn',
-      label: 'Pawn',
-      description:
-        'Background worker thread an agent spawns for itself. It answers only to that agent, you never prompt it, and any harness, account and model can serve it.',
-      emptyHint: 'Not set · a pawn runs on the spawning model at the lowest thinking level',
-      icon: CioSubagent
-    }
-  ] satisfies Array<{
-    id: RoleId
-    label: string
-    description: string
-    emptyHint: string
-    icon: typeof CioMemory
-  }>
 
   let providers = $state<ProviderCatalog[]>([])
   // Intentional initial snapshot; onMount refreshes from main-process config.
@@ -105,69 +53,6 @@
     }
     void load()
   })
-
-  function selectionFor(role: RoleId): AgentModelSelection | undefined {
-    return defaults[role]
-  }
-
-  async function selectModel(
-    role: RoleId,
-    providerId: string,
-    modelId: string,
-    nextHarnessId?: string,
-    accountId?: string
-  ): Promise<void> {
-    const provider = providers.find(
-      (candidate) =>
-        candidate.id === providerId &&
-        (nextHarnessId ? candidate.harnessId === nextHarnessId : true)
-    )
-    if (!provider) return
-    const harnessId = nextHarnessId ?? provider.harnessId
-    const next: AgentDefaultsConfig = {
-      ...defaults,
-      [role]: {
-        harnessId,
-        providerId,
-        modelId,
-        accountId,
-        thinkingLevel: defaults[role]?.thinkingLevel
-      }
-    }
-    defaults = next
-    rendererRecovery.addRecentModel(modelKey(harnessId, providerId, modelId))
-    await updateConfig({ agentDefaults: next })
-  }
-
-  async function selectThinking(role: RoleId, level: ThinkingLevel): Promise<void> {
-    if (!defaults[role]) return
-    const next: AgentDefaultsConfig = {
-      ...defaults,
-      [role]: { ...defaults[role], thinkingLevel: level }
-    }
-    defaults = next
-    await updateConfig({ agentDefaults: next })
-  }
-
-  async function selectRuntime(
-    role: RoleId,
-    runtime: import('$shared/types').ModelRuntimeSettings
-  ): Promise<void> {
-    if (!defaults[role]) return
-    const next: AgentDefaultsConfig = {
-      ...defaults,
-      [role]: { ...defaults[role], ...runtime }
-    }
-    defaults = next
-    await updateConfig({ agentDefaults: next })
-  }
-
-  async function clearModel(role: RoleId): Promise<void> {
-    const next = { ...defaults }
-    delete next[role]
-    defaults = next
-    await updateConfig({ agentDefaults: next })
-  }
 
   async function selectImageDescriptor(
     providerId: string,
@@ -297,110 +182,25 @@
     defaults = next
     await updateConfig({ agentDefaults: next })
   }
-
-  async function toggleThreadSync(): Promise<void> {
-    const next = { ...defaults, syncFromThreadChanges: !defaults.syncFromThreadChanges }
-    defaults = next
-    await updateConfig({ agentDefaults: next })
-  }
 </script>
 
 <div class="p-6 pb-24">
   <div class="mb-6">
     <h1 class="text-xl font-bold tracking-tight">Agents</h1>
     <p class="mt-0.5 text-sm text-muted">
-      Choose global models for Engineering roles, pawn agents and image description. A thread can
-      still override them.
+      Worker names, and the vision model that describes images for a thread whose model cannot read
+      them. Every worker a thread spawns now inherits that thread's own harness, account, model and
+      Oven, so there is no role model left to choose here.
     </p>
   </div>
 
-  <section class="mb-4 border bg-surface" aria-label="Agent defaults">
-    <div class="divide-y">
-      {#each roles as role (role.id)}
-        {@const Icon = role.icon}
-        {@const selection = selectionFor(role.id)}
-        <div class="flex items-center gap-4 p-4">
-          <div class="bg-primary/10 p-2 text-primary"><Icon size={18} /></div>
-          <div class="min-w-0 flex-1">
-            <h2 class="text-sm font-semibold text-foreground">{role.label}</h2>
-            <p class="mt-0.5 text-xs text-muted">{role.description}</p>
-            {#if !selection}
-              <p class="mt-1 text-[0.6875rem] text-dimmed">
-                {role.emptyHint}
-              </p>
-            {/if}
-          </div>
-          <div class="flex w-60 shrink-0 items-center gap-1.5">
-            <div class="min-w-0 flex-1">
-              <ModelPicker
-                {providers}
-                projectId={rendererRecovery.selectedProjectId}
-                harnessId={selection?.harnessId ?? providers[0]?.harnessId ?? DEFAULT_HARNESS}
-                providerId={selection?.providerId ?? ''}
-                modelId={selection?.modelId ?? ''}
-                accountId={selection?.accountId}
-                favoriteModels={rendererRecovery.favoriteModels}
-                recentModels={rendererRecovery.recentModels}
-                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
-                side="bottom"
-                variant="field"
-                label={selection ? undefined : 'Choose model'}
-                disabled={!settingsReady || loading || providers.length === 0}
-                onSelect={(providerId, modelId, harnessId, accountId) =>
-                  void selectModel(role.id, providerId, modelId, harnessId, accountId)}
-                thinkingLevel={selection?.thinkingLevel}
-                runtimeSettings={selection}
-                onSelectThinking={(level) => void selectThinking(role.id, level)}
-                onSelectRuntime={(runtime) => void selectRuntime(role.id, runtime)}
-                onToggleFavorite={(providerId, modelId, harnessId) =>
-                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-                onReorderFavorite={(draggedKey, targetKey, position) =>
-                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-              />
-            </div>
-            {#if selection}
-              <button
-                type="button"
-                class="p-2 text-dimmed hover:bg-elevated hover:text-foreground"
-                title={`Clear ${role.label} default`}
-                aria-label={`Clear ${role.label} default`}
-                onclick={() => void clearModel(role.id)}
-              >
-                <CioClose size={14} />
-              </button>
-            {/if}
-          </div>
-        </div>
-      {/each}
-    </div>
-
-    {#if loading}
-      <div class="flex items-center gap-2 border-t px-4 py-3 text-xs text-muted">
-        <CioSpinner size={14} class="animate-spin" /> Loading models…
-      </div>
-    {:else if providers.length === 0}
-      <p class="border-t px-4 py-3 text-xs text-muted">
-        Select a configured project to choose role models. Unset roles use the current thread model.
-      </p>
-    {/if}
-
-    {#if error}<p class="border-t px-4 py-3 text-xs text-danger" role="alert">{error}</p>{/if}
-
-    <div class="flex items-center justify-between gap-4 border-t p-4">
-      <div>
-        <p class="text-sm font-medium text-foreground">Follow thread changes</p>
-        <p class="mt-0.5 text-xs text-muted">
-          Replace a role's global default when that role's model is changed inside a thread.
-        </p>
-      </div>
-      <Switch
-        checked={defaults.syncFromThreadChanges}
-        onchange={() => void toggleThreadSync()}
-        aria-label="Follow agent model changes from threads"
-        disabled={!settingsReady}
-      />
-    </div>
-  </section>
+  {#if loading}
+    <p class="mb-4 flex items-center gap-2 text-xs text-muted">Loading models…</p>
+  {:else if error}
+    <p class="mb-4 text-xs text-danger" role="alert">{error}</p>
+  {:else if providers.length === 0}
+    <p class="mb-4 text-xs text-muted">Select a configured project to choose a vision model.</p>
+  {/if}
 
   <section class="border bg-surface" aria-label="Image descriptor default">
     <div class="flex items-center gap-4 p-4">

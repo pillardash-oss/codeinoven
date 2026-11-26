@@ -231,7 +231,13 @@ export class ThreadSearchService {
       Logger.dev('Intent search found no meaning-based match', { ranked: 0 })
       return null
     }
-    const threads = await this.threadRepo.listByIdsViaWorker(matches.map((match) => match.threadId))
+    const threads = await this.threadRepo.listByIdsViaWorker(
+      matches.map((match) => match.threadId),
+      // Hydrating the semantic matches is part of answering this search, so it
+      // runs where the search reads run: on the async lane's own thread and
+      // connection, never in the queue a click is waiting in.
+      { lane: 'async' }
+    )
     const byId = new Map(threads.map((thread) => [thread.id, thread]))
     const intent: ThreadSearchResult[] = []
     for (const match of matches) {
@@ -311,29 +317,27 @@ export class ThreadSearchService {
     // queue, and neither may hold the answer past the interactive deadline.
     const first = await this.readKeywordHalves(built, raw, INTERACTIVE_SEARCH_DEADLINE_MS)
     if (first.complete) return { results: first.results, limit: built.limit }
-    if (first.allFailed) {
-      if (first.timedOut) {
-        // Both halves ran out of time. A deadline stops the wait, never the
-        // answer: the two reads are already queued on the worker, so they are
-        // re-issued without a deadline and the rows arrive instead of an empty
-        // list that reads to the user as "nothing matches". Nothing here runs on
-        // the main thread, and the palette's own watchdog has already stopped
-        // claiming to be busy.
-        const late = await this.readKeywordHalves(built, raw)
-        return { results: late.results, limit: built.limit }
-      }
-      return { results: this.threadRepo.search(raw, options, useSearchMeta), limit: built.limit }
+    if (!first.allFailed) {
+      // One half answered and the other did not. Use the answer in hand instead
+      // of throwing the reply away for a slower, complete one.
+      return { results: first.results, limit: built.limit }
     }
-    // One half answered and the other did not. Use the answer in hand instead
-    // of throwing the reply away for a slower, complete one.
-    return { results: first.results, limit: built.limit }
+    // Both halves failed: the deadline passed, or the worker refused them. A
+    // deadline stops the wait, never the answer, so the same two reads are
+    // re-issued without one and the rows arrive instead of an empty list that
+    // reads to the user as "nothing matches". They stay on the async lane, whose
+    // own primary-connection fallback is what answers when no worker exists at
+    // all; a search statement is never run synchronously inside a frame (that
+    // fallback used to be a one-second FTS read on Electron main).
+    const late = await this.readKeywordHalves(built, raw)
+    return { results: late.results, limit: built.limit }
   }
 
   /**
    * Read both keyword halves and report how much of the answer is usable.
    *
    * `deadlineMs` bounds the wait only; the same reads are issued again without
-   * one when the whole answer timed out, which is what keeps a busy worker from
+   * one when neither half answered, which is what keeps a busy worker from
    * turning a real match into an empty result.
    */
   private async readKeywordHalves(
@@ -344,7 +348,6 @@ export class ThreadSearchService {
     results: ThreadSearchResult[]
     complete: boolean
     allFailed: boolean
-    timedOut: boolean
   }> {
     // Both halves are the query the durable log shows at 5,960 ms. They are not
     // deferrable (the palette is waiting for them) and they are not click
@@ -374,8 +377,7 @@ export class ThreadSearchService {
     return {
       results,
       complete: title.ok && messageOk,
-      allFailed: !title.ok && !messageOk,
-      timedOut: Boolean(title.timedOut || message?.timedOut)
+      allFailed: !title.ok && !messageOk
     }
   }
 }

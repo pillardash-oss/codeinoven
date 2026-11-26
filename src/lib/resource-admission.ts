@@ -2,14 +2,17 @@
  * Device admission policy for new agent work.
  *
  * One question, three answers. Enough device means the work starts now, a busy
- * CPU means it starts anyway on a process of its own so it is not queued behind
- * whatever is pinning the CPU, and a machine short on both CPU and memory means
- * the work waits instead of making the machine worse.
+ * CPU means the device is in use but a second process would not help it, and a
+ * machine short on both CPU and memory means the work waits instead of making
+ * the machine worse.
  *
  * The numbers are the user's, not a guess: 5% CPU available, a 0.5 GB memory
  * floor on a machine with 16 GB or more, and 10% of total RAM below that. The
  * policy is pure and shared so main and the renderer can never disagree about a
  * threshold, and main stays the only place that makes the call.
+ *
+ * Where one Pi session runs, on the other hand, is not this policy's question:
+ * see {@link hostIsSaturated}, which reads the host's own CPU instead.
  */
 
 /** Percent of total CPU that has to be idle for new work to be considered safe. */
@@ -192,12 +195,17 @@ export function decideOvenAdmission(
 }
 
 /**
- * Decide whether new work starts now, starts on another process, or waits.
+ * Decide whether new work starts now, or waits.
  *
  * The two shortages are deliberately asymmetric: a busy CPU alone never queues
- * work, it moves it, because a queue would not free any CPU and the user would
- * lose the turn for nothing. A queue only protects the machine when memory is
- * short too, which is the case where another process would make things worse.
+ * work, it only reports `offload`, because a queue would not free any CPU and
+ * the user would lose the turn for nothing. A queue only protects the machine
+ * when memory is short too, which is the case where another process would make
+ * things worse.
+ *
+ * `offload` is a statement about the device, and no longer about where a Pi
+ * session goes: a second process cannot free another program's CPU. Placement
+ * between hosts is decided by the host's own CPU, in {@link hostIsSaturated}.
  */
 export function decideAdmission(sample: ResourceSample, sampledAt = Date.now()): AdmissionDecision {
   const cpuAvailablePercent = clampPercent(sample.cpuAvailablePercent)
@@ -232,4 +240,54 @@ export function decideAdmission(sample: ResourceSample, sampledAt = Date.now()):
     totalMemoryBytes,
     sampledAt
   }
+}
+
+/**
+ * Host placement: one process's own CPU, never the machine's.
+ *
+ * A hosted Pi session is a Node process that spends almost all of its life
+ * waiting on a provider, so its own CPU use sits near one percent. What a second
+ * host can actually relieve is that process's event loop, which only matters
+ * when the host is spending a whole core on its sessions. The device's CPU is a
+ * different question with a different answer: offloading a session because some
+ * other program is busy moves no work off that program and only adds another
+ * process to the machine.
+ *
+ * The numbers below are percentages of one core, which is how
+ * `app.getAppMetrics()` reports `percentCPUUsage`, so `100` is a process using
+ * one core solid.
+ */
+
+/** A host at or above this much of one core is saturated: a second host helps. */
+export const HOST_SATURATION_PERCENT = 95
+
+/**
+ * The load a borrowed host's sessions are handed back to the primary at.
+ *
+ * Deliberately far below the saturation gate: draining at 94% would hand the
+ * sessions home, saturate the primary again, and open a host again on the next
+ * turn. A host has to be comfortably unloaded before its sessions travel.
+ */
+export const HOST_REJOIN_PERCENT = 60
+
+/**
+ * Whether a host's own CPU use says a second process would take work off it.
+ *
+ * A reading that never arrived is not saturation: nothing is known to be busy,
+ * and an unknown reading must never cost the user another process.
+ */
+export function hostIsSaturated(cpuPercent: number | null): boolean {
+  if (cpuPercent === null || !Number.isFinite(cpuPercent)) return false
+  return cpuPercent >= HOST_SATURATION_PERCENT
+}
+
+/**
+ * Whether a host is unloaded enough to take a borrowed session back.
+ *
+ * An unread host counts as having room, because one host is the arrangement the
+ * app is always trying to return to.
+ */
+export function hostHasRoom(cpuPercent: number | null): boolean {
+  if (cpuPercent === null || !Number.isFinite(cpuPercent)) return true
+  return cpuPercent < HOST_REJOIN_PERCENT
 }

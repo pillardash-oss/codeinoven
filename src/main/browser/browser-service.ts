@@ -144,6 +144,12 @@ import { BrowserServiceViewLifecycle } from './browser-service/browser-service-v
 import { BrowserServiceStatusOverlay } from './browser-service/browser-service-status-overlay'
 import { BrowserServiceJars } from './browser-service/browser-service-jars'
 import { BrowserServiceConversationPages } from './browser-service/browser-service-conversation-pages'
+import {
+  BrowserServiceWorkspacePreview,
+  type WorkspacePreviewDeps,
+  type WorkspacePreviewRequest,
+  type WorkspacePreviewResult
+} from './browser-service/browser-service-workspace-preview'
 
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
@@ -569,6 +575,7 @@ export class BrowserService {
   private readonly statusOverlayUnit: BrowserServiceStatusOverlay
   private readonly jarsUnit: BrowserServiceJars
   private readonly conversationPagesUnit: BrowserServiceConversationPages
+  private readonly workspacePreviewUnit = new BrowserServiceWorkspacePreview()
 
   constructor(
     public readonly window: BrowserWindow,
@@ -855,6 +862,23 @@ export class BrowserService {
     }
   ): Promise<unknown> {
     return this.agentUtilityUnit.executeUtility(operation, input, context)
+  }
+
+  /**
+   * Serve this conversation's own folder so the browser can open its files.
+   *
+   * The browser only navigates http(s), and a chat's workspace has no server, so
+   * a page the chat wrote was unopenable in the very browser it has. The loopback
+   * preview server the app already runs for design and video is handed the
+   * conversation's mount root here; the agent gets a URL it can `open`.
+   */
+  attachWorkspacePreview(deps: WorkspacePreviewDeps): void {
+    this.workspacePreviewUnit.attach(deps)
+  }
+
+  /** The unit's answer for one preview request. See `attachWorkspacePreview`. */
+  serveWorkspacePreview(request: WorkspacePreviewRequest): Promise<WorkspacePreviewResult> {
+    return this.workspacePreviewUnit.serve(request)
   }
 
   // ---------------------------------------------------------------------------

@@ -208,7 +208,18 @@ export function inspectorInstallScript(key: string): string {
     // stylesheet hands every element the pick cursor while the attribute is
     // there, which is what makes the whole page answer as one pickable surface
     // and goes away in a single attribute removal.
-    const CURSOR_CSS = 'html[data-cio-inspecting] *{cursor:pointer !important}';
+    // One style, two jobs. The first line is the pick cursor. The rest is the only
+    // way a disabled form control can be noticed at all: Chromium dispatches no
+    // pointer event to or through one, so the pointer silently stops reporting
+    // while it sits on the very control a reader wants to ask about. Its hover
+    // state is still real, and an animation that paints nothing (empty keyframes)
+    // turns that state into an animationstart event. The selector is a compound,
+    // so it matches only the hovered control itself: no descendant invalidation
+    // runs for the rest of the page, and no enabled element ever matches it.
+    const CURSOR_CSS =
+      'html[data-cio-inspecting] *{cursor:pointer !important}' +
+      '@keyframes cio-hover-seen{}' +
+      'html[data-cio-inspecting] *:disabled:hover{animation:cio-hover-seen 1ms linear}';
     const cursorStyle = document.createElement('style');
     cursorStyle.setAttribute('data-cio-inspector-cursor', '');
     cursorStyle.textContent = CURSOR_CSS;
@@ -241,7 +252,11 @@ export function inspectorInstallScript(key: string): string {
       /** Whether this engine put the overlay in the top layer at all. */
       topLayer: topLayer,
       /** Set when the page's top layer moved, so the next draw re-raises. */
-      topLayerDirty: false
+      topLayerDirty: false,
+      /** The transparent surface that carries the pointer to a disabled control. */
+      hitProxy: null,
+      /** The element that surface stands in for, or null when it is not placed. */
+      hitTarget: null
     };
 
     // Lucide's message-circle icon, the same one the app's own annotation
@@ -658,7 +673,10 @@ export function inspectorInstallScript(key: string): string {
       name.textContent = shortName(element);
       const size = document.createElement('span');
       size.className = 'd';
-      size.textContent = '  ' + Math.round(rect.width) + 'x' + Math.round(rect.height);
+      // A disabled control is worth naming: the page will not act on it, which is
+      // usually exactly why someone is looking at it.
+      const off = element.matches && element.matches(':disabled');
+      size.textContent = '  ' + Math.round(rect.width) + 'x' + Math.round(rect.height) + (off ? '  disabled' : '');
       labelEl.appendChild(name);
       labelEl.appendChild(size);
       labelEl.style.display = 'block';
@@ -710,6 +728,12 @@ export function inspectorInstallScript(key: string): string {
      * or marker change puts the beat straight back to the fast one.
      */
     function layout() {
+      // The surface that carries the pointer to a disabled control follows it like
+      // a box does, and goes away with it.
+      if (state.hitTarget) {
+        if (state.hitTarget.isConnected) place(viewportRect(state.hitTarget), state.hitProxy);
+        else dropHitProxy();
+      }
       const placed = [];
       for (const marker of state.markers.values()) {
         const element = resolveElement(marker);
@@ -799,6 +823,111 @@ export function inspectorInstallScript(key: string): string {
       return false;
     }
 
+    /**
+     * The pointer is over a control that will never report itself.
+     *
+     * Chromium dispatches no pointer event to, or through, a disabled form
+     * control: the hover box and the pick both went silent on exactly the
+     * elements a reader still wants to comment on ("why is this save disabled?").
+     * The control's hover state is real all the same, and CURSOR_CSS turns that
+     * state into an animationstart event, which is the only news the page offers.
+     * The deepest hovered element is the one the pointer is really on, so that is
+     * the element the box describes and the one a hit surface is put over.
+     */
+    function onHoverSeen(event) {
+      if (!state.armed) return;
+      if (ourNode(event)) return;
+      const target = event.target;
+      if (!target || target.nodeType !== 1) return;
+      let deepest = target;
+      try {
+        // The hovered elements are always one ancestor chain, so document order
+        // ends at the element under the pointer.
+        const chain = documentOf(target).querySelectorAll(':hover');
+        if (chain.length > 0) deepest = chain[chain.length - 1];
+      } catch (error) {}
+      if (!deepest || deepest.nodeType !== 1 || isDocumentLevel(deepest)) return;
+      state.hovered = deepest;
+      placeHitProxy(deepest);
+      scheduleHoverFrame();
+    }
+
+    /**
+     * A transparent surface over a control the pointer cannot reach.
+     *
+     * The box is one thing; the pick is the other. Without something to catch it,
+     * the click that comments on a disabled control is never dispatched at all, so
+     * the overlay lays its own surface over that one element: pointer movement
+     * and the click arrive here, and both are reported as the element's own. It
+     * covers only that element, which keeps hover everywhere else on the page the
+     * page's own.
+     */
+    function placeHitProxy(element) {
+      if (!state.hitProxy) {
+        const proxy = document.createElement('div');
+        proxy.setAttribute('data-cio-hit', '');
+        proxy.style.cssText =
+          'position:fixed;display:none;background:transparent;pointer-events:auto;cursor:pointer';
+        attachHitProxy(proxy);
+        layer.appendChild(proxy);
+        state.hitProxy = proxy;
+      }
+      state.hitTarget = element;
+      place(viewportRect(element), state.hitProxy);
+    }
+
+    function dropHitProxy() {
+      const target = state.hitTarget;
+      state.hitTarget = null;
+      if (state.hitProxy) state.hitProxy.style.display = 'none';
+      if (target && state.hovered === target) {
+        state.hovered = null;
+        hoverBox.style.display = 'none';
+        labelEl.style.display = 'none';
+      }
+    }
+
+    function attachHitProxy(proxy) {
+      // Inspection is stealth over a live control too: a press on this surface is
+      // swallowed exactly like one on the page behind it.
+      const swallow = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+      };
+      proxy.addEventListener('pointerdown', swallow);
+      proxy.addEventListener('mousedown', swallow);
+      proxy.addEventListener('pointerup', swallow);
+      proxy.addEventListener('mouseup', swallow);
+      proxy.addEventListener('dblclick', swallow);
+      proxy.addEventListener('auxclick', swallow);
+      proxy.addEventListener('pointermove', (event) => {
+        const target = state.hitTarget;
+        if (!state.armed || !target) {
+          dropHitProxy();
+          return;
+        }
+        const rect = viewportRect(target);
+        const inside =
+          event.clientX >= rect.x &&
+          event.clientX <= rect.x + rect.width &&
+          event.clientY >= rect.y &&
+          event.clientY <= rect.y + rect.height;
+        // Leaving the control is the signal to hand the pointer back to the page.
+        if (!inside) {
+          dropHitProxy();
+          return;
+        }
+        if (state.hovered !== target) state.hovered = target;
+      });
+      proxy.addEventListener('click', (event) => {
+        swallow(event);
+        if (!state.armed) return;
+        const target = state.hitTarget;
+        if (target && target.isConnected) pickElement(target);
+      });
+    }
+
     function markerForHover(element) {
       for (const marker of state.markers.values()) {
         const node = resolveElement(marker);
@@ -873,6 +1002,8 @@ export function inspectorInstallScript(key: string): string {
       // goes: with nothing armed and nothing pinned there is nothing to track.
       if (!state.armed && state.markers.size === 0) return;
       if (ourNode(event)) return;
+      // A pointer that reached the page is not on the disabled control any more.
+      if (state.hitTarget) dropHitProxy();
       const raw = event.target && event.target.nodeType === 1 ? event.target : null;
       const element = raw && !isDocumentLevel(raw) ? raw : null;
       const hover = raw ? markerForHover(raw) : null;
@@ -993,6 +1124,7 @@ export function inspectorInstallScript(key: string): string {
       state.armed = false;
       state.hovered = null;
       state.hoverId = null;
+      dropHitProxy();
       setPickCursor(false);
       syncCursor();
       layout();
@@ -1052,6 +1184,7 @@ export function inspectorInstallScript(key: string): string {
       doc.documentElement[flag] = true;
       ensureCursorStyle(doc);
       doc.addEventListener('pointermove', onPointerMove, true);
+      doc.addEventListener('animationstart', onHoverSeen, true);
       addPressListeners(doc);
       doc.addEventListener('keydown', onKeyDown, true);
       doc.addEventListener('load', onFrameLoad, true);
@@ -1099,6 +1232,7 @@ export function inspectorInstallScript(key: string): string {
       addEventListener('resize', onViewportChange);
       document.addEventListener('toggle', onToggle, true);
       document.addEventListener('fullscreenchange', onFullscreenChange, true);
+      document.addEventListener('animationstart', onHoverSeen, true);
       state.listeners = true;
       installFrames();
     }
@@ -1114,6 +1248,7 @@ export function inspectorInstallScript(key: string): string {
       removeEventListener('resize', onViewportChange);
       document.removeEventListener('toggle', onToggle, true);
       document.removeEventListener('fullscreenchange', onFullscreenChange, true);
+      document.removeEventListener('animationstart', onHoverSeen, true);
       state.listeners = false;
     }
 
@@ -1385,6 +1520,7 @@ export function inspectorInstallScript(key: string): string {
         state.hovered = null;
         state.hoverId = null;
         state.activeId = null;
+        dropHitProxy();
         setPickCursor(false);
         syncCursor();
         layout();
@@ -1424,6 +1560,7 @@ export function inspectorInstallScript(key: string): string {
       if (command.type === 'cease') {
         state.armed = false;
         state.hovered = null;
+        dropHitProxy();
         setPickCursor(false);
         cursorStyle.remove();
         removeListener();

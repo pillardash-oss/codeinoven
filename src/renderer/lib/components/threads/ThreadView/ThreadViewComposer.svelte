@@ -162,7 +162,7 @@
     <!-- A failed Assignment draft stays on the thread that asked for it: the
          retry continues the draft's own session, and the model can be changed
          here before retrying. -->
-    {#if board.sources.assignmentDraftError}
+    {#if board.sources.assignmentDraftFailure}
       <div class="conversation-gutter shrink-0 px-6">
         <div class="mx-auto max-w-3xl">
           <AgentProviderStatusCard
@@ -170,8 +170,8 @@
               state: 'error',
               issue: {
                 kind: 'unknown',
-                message: board.sources.assignmentDraftError,
-                rawError: board.sources.assignmentDraftError,
+                message: board.sources.assignmentDraftFailure,
+                rawError: board.sources.assignmentDraftFailure,
                 harnessId: board.loadOlderMessages.settings.harnessId,
                 retryable: true
               }
@@ -190,7 +190,7 @@
             threadId={board.handleAgentEvent.thread.id}
             foldKey="assignment-draft"
             joinsBelow
-            onDismiss={() => (board.sources.assignmentDraftError = '')}
+            onDismiss={board.sources.dismissAssignmentDraftFailure}
             onModelChange={(selected) => board.contextUsage.updateSettings(selected)}
             onToggleFavorite={(providerId, modelId, harnessId) =>
               rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
@@ -914,7 +914,6 @@
               onSave={(content) => void board.submitSpecDecision.saveAssignment(content)}
               onApprove={(content) => void board.submitSpecDecision.approveAssignment(content)}
               onOpenFullscreen={board.submitSpecDecision.openAssignmentStudio}
-              onWorkerModelChange={(selection) => board.sources.syncAgentRole('worker', selection)}
               onSeniorModelChange={board.sources.updateAssignmentSeniorModel}
               onTaskScopeChange={board.submitSpecDecision.updateAssignmentTaskScope}
               onWorkerScopeChange={board.submitSpecDecision.updateAssignmentWorkerScope}

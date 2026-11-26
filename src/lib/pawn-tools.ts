@@ -1,6 +1,5 @@
 import type { GatewayToolDefinition } from './gateway-tools'
 import { APP_NAME } from './brand'
-import { CREATE_ASSIGNMENT_TOOL_NAME } from './engineering-tools'
 
 /**
  * The pawn agent tool, as its own app-owned catalog.
@@ -32,6 +31,17 @@ export function isPawnTool(name: string): boolean {
 /** The thinking level a pawn runs at when the spawning agent names none. */
 export const PAWN_DEFAULT_THINKING_LEVEL = 'minimal'
 
+/**
+ * The permission tier a pawn starts at when the spawning agent names none.
+ *
+ * The app default, not the spawner's own tier: a background worker the user never
+ * watches should not silently inherit full access from a conversation that had it.
+ * An agent raises it to full_access only when the user instructed that, and the
+ * permission card for anything below it reaches the agent, which is the one that
+ * can decide.
+ */
+export const PAWN_DEFAULT_PERMISSION_LEVEL = 'auto_review'
+
 const THINKING_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
 const PAWN_INPUT_SCHEMA: Record<string, unknown> = {
@@ -55,7 +65,38 @@ const PAWN_INPUT_SCHEMA: Record<string, unknown> = {
     model: {
       type: 'string',
       description:
-        "Model override as 'provider/model-id' or a model id. Defaults to the user's pawn default when one is configured, otherwise your own model."
+        "Model override as 'provider/model-id' or a model id. Omit it to run on the model this thread is using; a bare model id keeps this thread's provider, account and harness."
+    },
+    harnessId: {
+      type: 'string',
+      description:
+        'Run the pawn on this harness instead of your own, e.g. claude-code, codex, opencode or pi. Read cio_orchestrate_targets for the harnesses this workstation can run, and name providerId and modelId with it. Omit it to inherit your harness.'
+    },
+    providerId: {
+      type: 'string',
+      description:
+        'Provider for a model you are naming with modelId. Required whenever you name a harness or a provider, and ignored when you name neither.'
+    },
+    modelId: {
+      type: 'string',
+      description:
+        'Exact model id from cio_orchestrate_targets. Required whenever you name a harness or a provider, and ignored when you name neither.'
+    },
+    accountId: {
+      type: 'string',
+      description:
+        "Run the pawn on this saved account instead of this harness's default one, e.g. a second Claude subscription with capacity left. Read cio_orchestrate_targets for the real account ids."
+    },
+    ovenId: {
+      type: 'string',
+      description:
+        'Run the pawn on this Oven (machine) instead of the one this thread runs on, so the work happens where the checkout and its tools live. Omit it to inherit the Oven this thread already runs on.'
+    },
+    permissionLevel: {
+      type: 'string',
+      enum: ['auto_review', 'full_access'],
+      description:
+        'How much the pawn may do without asking. Omit it to start at the app default (auto_review); raise it to full_access only when the user told you to let this work run unsupervised, because a permission card the pawn raises reaches you, not the user.'
     },
     thinking_level: {
       type: 'string',
@@ -76,7 +117,13 @@ const PAWN_INPUT_SCHEMA: Record<string, unknown> = {
 export const PAWN_TOOLS: GatewayToolDefinition[] = [
   {
     name: PAWN_AGENT_TOOL_NAME,
-    description: `Spawn or continue a pawn agent for ${APP_NAME}: an independent worker thread that answers only to you, the agent that spawned it. The user cannot prompt it; they can watch it work. Use a pawn when the work needs the project's real tools and its own full context   long implementations, broad refactors, independent verification, research that would otherwise flood your context   and hand back only a final report. Choose between the three by ownership and power: ${PAWN_AGENT_TOOL_NAME} is a full thread you direct yourself, cio_spawn_agent is a lighter nested sub-agent with a small tool allowlist, and ${CREATE_ASSIGNMENT_TOOL_NAME} is for work the user wants to monitor and prompt personally. It is not extra sub-agent capacity: the sub-agent tool runs at most four workers at once, so a pawn is the way past that ceiling only when the work genuinely needs five or more worker runs in flight at the same time and waiting for a free slot would stall it, or when the user explicitly asks for pawns   and then it is one pawn carrying the overflow, never a fan-out of pawns you decided on yourself. You direct a pawn for as long as it lives: when the user answers, corrects or redirects work a pawn is doing, call this tool again with that pawn's pawn_id and their instruction, and the pawn takes it into the work in progress   never spawn a second pawn because you want to change direction. A pawn inherits the project rules: it must verify its own changes, it must list every file it touched, and it must not commit   committing stays with you, because you review its work before it lands.`,
+    description: `Spawn or continue a pawn agent for ${APP_NAME}: an independent worker thread that answers only to you, the agent that spawned it. The user cannot prompt it; they can watch it work. Use a pawn when the work needs the project's real tools and its own full context   long implementations, broad refactors, independent verification, research that would otherwise flood your context   and hand back only a final report.
+
+Where a pawn runs. With no target named, the pawn inherits everything you are: the same harness, the same account, the same model, the same Oven, so it is you working on a thread of your own. Name harnessId, providerId and modelId to run it on another harness, accountId to run it on another account of the same harness, ovenId to run it on another machine, and permissionLevel to change how much it may do unsupervised. That is the whole difference between the worker shapes: a sub-agent lives inside the harness that started it and can only ever be that harness on that account, while a pawn is a real thread, so a cross-harness, cross-account or cross-Oven worker is simply a thread opened there. Nothing about the work is special-cased per harness: the pawn reports its result back to you the same way wherever it ran.
+
+Choosing the shape. Same harness, same account and no larger job than the harness's own sub-agent can carry: use cio_spawn_agent, whose workers stay nested in this harness and cost it nothing outside its own turn. Anything else   another harness, another account, another Oven, or more runs in flight than the four-worker cap   is a pawn. cio_create_assignment stays the tool for work the user wants to monitor and prompt personally.
+
+You direct a pawn for as long as it lives: when the user answers, corrects or redirects work a pawn is doing, call this tool again with that pawn's pawn_id and their instruction, and the pawn takes it into the work in progress   never spawn a second pawn because you want to change direction. A pawn inherits the project rules: it must verify its own changes, it must list every file it touched, and it must not commit   committing stays with you, because you review its work before it lands.`,
     inputSchema: PAWN_INPUT_SCHEMA,
     outputSchema: { type: 'object', additionalProperties: true },
     route: '/pawn/agent',

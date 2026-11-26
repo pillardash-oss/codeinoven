@@ -57,7 +57,9 @@ import { ChatEngineLifecycle } from './chat-engine-lifecycle'
 import { ChatEngineThreadsCreate } from './chat-engine-threads-create'
 import { ChatEngineTurnsSessionIdle } from './chat-engine-turns-session-idle'
 import { ChatEngineCitations } from './chat-engine-citations'
+import { ChatEngineCheckpoints } from './chat-engine-checkpoints'
 import { ChatEngineDirectReply } from './chat-engine-direct-reply'
+import { ChatEngineOpenDigest } from './chat-engine-open-digest'
 
 /** The concern units a ChatEngine delegates to, built once in its constructor. */
 export function buildChatEngineUnits(engine: ChatEngine) {
@@ -82,6 +84,7 @@ export function buildChatEngineUnits(engine: ChatEngine) {
     'lifecycle-shutdown': new ChatEngineLifecycleShutdown(engine),
     processes: new ChatEngineProcesses(engine),
     'turns-sessions': new ChatEngineTurnsSessions(engine),
+    checkpoints: new ChatEngineCheckpoints(engine),
     'thread-lifecycle': new ChatEngineThreadLifecycle(engine),
     'media-artifacts': new ChatEngineMediaArtifacts(engine),
     audit: new ChatEngineAudit(engine),
@@ -120,7 +123,8 @@ export function buildChatEngineUnits(engine: ChatEngine) {
     lifecycle: new ChatEngineLifecycle(engine),
     'threads-create': new ChatEngineThreadsCreate(engine),
     'turns-session-idle': new ChatEngineTurnsSessionIdle(engine),
-    'direct-reply': new ChatEngineDirectReply(engine)
+    'direct-reply': new ChatEngineDirectReply(engine),
+    'open-digest': new ChatEngineOpenDigest(engine)
   } as const
 }
 

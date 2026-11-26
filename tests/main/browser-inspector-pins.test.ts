@@ -276,3 +276,50 @@ describe('the overlay against the page top layer', () => {
     expect(calls).toEqual([])
   })
 })
+
+function shadowElement(selector: string): HTMLElement | null {
+  const host = document.querySelector('[data-cio-inspector]')
+  return (host?.shadowRoot?.querySelector(selector) as HTMLElement | null) ?? null
+}
+
+/**
+ * A disabled form control is the one element the browser refuses to report:
+ * Chromium dispatches no pointer event to it or through it, so hovering it would
+ * otherwise say nothing and the click that comments on it would never arrive.
+ */
+describe('a control the pointer never reports', () => {
+  it('turns the hover state of a disabled control into the news the page has', () => {
+    install()
+    const style = document.querySelector('style[data-cio-inspector-cursor]') as HTMLStyleElement
+
+    // An animation that paints nothing is what makes that hover state audible,
+    // and the selector is a compound so no other element can match it.
+    expect(style.textContent).toContain('*:disabled:hover{animation:cio-hover-seen')
+    expect(style.textContent).toContain('@keyframes cio-hover-seen{}')
+  })
+
+  it('draws the box and takes the pick for a disabled control', async () => {
+    document.body.innerHTML = '<button id="locked" disabled>Save</button>'
+    const button = document.querySelector('#locked') as HTMLElement
+    button.getBoundingClientRect = rect
+    install()
+    inspector().run({ type: 'arm' })
+
+    const pending = inspector().wait()
+    button.dispatchEvent(new Event('animationstart'))
+    await new Promise((resolve) => setTimeout(resolve, 80))
+
+    const proxy = shadowElement('[data-cio-hit]')
+    expect(proxy).not.toBeNull()
+    expect(proxy!.style.display).toBe('block')
+    expect(shadowElement('.cio-hover')!.style.display).toBe('block')
+
+    proxy!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    const event = await pending
+
+    expect(event.kind).toBe('pick')
+    // The agent is told the control is disabled, which is why it was inspected.
+    expect(event.target.state).toEqual({ disabled: 'true' })
+    expect(event.target.selector).toContain('#locked')
+  })
+})

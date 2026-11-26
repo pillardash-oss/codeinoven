@@ -97,7 +97,7 @@ const SYNC_READ_ALLOWANCES: readonly SyncReadAllowance[] = [
     maxSites: 1,
     reason: REPOSITORY_READ
   },
-  { file: 'src/main/database/repositories/thread-repo.ts', maxSites: 10, reason: REPOSITORY_READ },
+  { file: 'src/main/database/repositories/thread-repo.ts', maxSites: 8, reason: REPOSITORY_READ },
   {
     file: 'src/main/database/repositories/work-group-repo.ts',
     maxSites: 8,

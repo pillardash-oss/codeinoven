@@ -86,10 +86,13 @@ export function slideWidth(
  *
  * It exists so every reordering list moves at the same rate and skips the same
  * work: a row that is offscreen in either its old or its new position moves
- * instantly instead of animating for nobody, and the OS reduced-motion setting
- * turns the travel into a jump. Both guards read here rather than at each call
- * site, so a list cannot accidentally animate offscreen rows or ignore the
- * user's motion preference.
+ * instantly instead of animating for nobody, the OS reduced-motion setting
+ * turns the travel into a jump, and a row that lands *lower* than it was snaps
+ * instead of gliding - the same rule {@link ListRowReflow} keeps, so a descent
+ * reads as the row being put down rather than as a row that drops and comes
+ * back. Both guards read here rather than at each call site, so a list cannot
+ * accidentally animate offscreen rows, ignore the user's motion preference, or
+ * invent its own direction rule.
  */
 export function listRowMove(
   node: HTMLElement,
@@ -99,7 +102,10 @@ export function listRowMove(
   const visible = [positions.from, positions.to].some(
     (rect) => rect.bottom > 0 && rect.top < window.innerHeight
   )
-  return flip(node, positions, { duration: visible ? motionDuration(duration) : 0 })
+  const descends = positions.to.top > positions.from.top
+  return flip(node, positions, {
+    duration: visible && !descends ? motionDuration(duration) : 0
+  })
 }
 
 /**
@@ -254,7 +260,15 @@ export class ListRowReflow {
     }
   }
 
-  /** Move every row the capture holds from where it was to where it now is. */
+  /**
+   * Move every row the capture holds from where it was to where it now is.
+   *
+   * A row that landed lower than it was does not travel: the descent is over on
+   * the frame it happens, and only the rows that rise (and a row that moved
+   * sideways) glide into place. A row dropping out from under a reader and then
+   * coming straight back is the one move a list misreads as fighting itself, so
+   * the descent is what the list refuses to slow down.
+   */
   play(root: HTMLElement | null, scroller: HTMLElement | null, arrangement: string): void {
     if (!this.#captured || arrangement !== this.#arrangement) return
     this.#captured = false
@@ -272,6 +286,12 @@ export class ListRowReflow {
       const dx = from.left - to.left
       const dy = from.top - to.top
       if (dx === 0 && dy === 0) continue
+      // Only a row that rises glides. A row that lands lower than it was snaps
+      // into its new place: heading *down* is the motion a reader misreads, the
+      // drop a settling thread or a cleared draft makes on its way to a slot it
+      // often leaves again a moment later, so it is over on the frame it
+      // happens and the ascent that follows is the only travel there is.
+      if (dy < 0) continue
       moves.push({ node, dx, dy })
     }
     for (const { node, dx, dy } of moves) {

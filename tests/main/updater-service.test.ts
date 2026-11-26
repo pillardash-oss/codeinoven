@@ -116,7 +116,7 @@ function defaultConfig(): AppConfig {
     prototypeCdnAllowlist: [],
     inAppNotificationSound: { success: true, issue: true },
     memory: { enabled: true, chatEnabled: true, entries: [] },
-    agentDefaults: { syncFromThreadChanges: false },
+    agentDefaults: {},
     auxiliaryAgents: {},
     design: { assignments: [] },
     modelProfiles: [],

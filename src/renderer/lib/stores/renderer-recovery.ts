@@ -340,6 +340,12 @@ function isQueuedResponseReference(value: unknown): value is QueuedResponseRefer
     value.kind !== undefined &&
     value.kind !== 'selection' &&
     value.kind !== 'design' &&
+    // A pick from an ordinary page is a reference in its own right, spelled
+    // separately from a design pick. Leaving it out of this list dropped every
+    // page comment on the way through a draft: a composer restored from the
+    // database came back without them, and a carry into a chat that held one
+    // read an empty list and wrote the carried comment in place of them.
+    value.kind !== 'page' &&
     value.kind !== 'file' &&
     value.kind !== 'video' &&
     value.kind !== 'image' &&

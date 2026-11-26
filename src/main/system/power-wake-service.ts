@@ -7,6 +7,7 @@ import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { RetrySchedulerService } from './retry-scheduler-service'
+import { CoalescedRun } from '../../lib/coalesced-run'
 
 /**
  * Coordinated work can briefly have no active persisted thread while control
@@ -14,6 +15,18 @@ import type { RetrySchedulerService } from './retry-scheduler-service'
  * releasing the wake blockers so those handoffs do not let the device sleep.
  */
 const IDLE_RELEASE_DELAY_MS = 5_000
+
+/**
+ * Shortest gap between two wake evaluations while notices keep arriving.
+ *
+ * Every persisted thread update is a notice, and every notice used to be a
+ * `countActiveViaWorker` read on the one database connection the whole app
+ * shares. A provider window parks several threads at once, so a burst of
+ * updates became a burst of reads queued behind each other, and everything the
+ * person was doing waited behind them. The decision only depends on what the
+ * thread statuses are now, so a burst needs one read, not one per notice.
+ */
+const WAKE_EVALUATION_COALESCE_MS = 250
 
 /**
  * PowerWakeService   prevents the system and display from sleeping while
@@ -57,6 +70,11 @@ export class PowerWakeService {
   private refreshRequest = 0
   /** True once the service is torn down; in-flight reads are then dropped. */
   private stopped = false
+  /** Collapses a burst of notices into one read (see the constant's comment). */
+  private readonly evaluations = new CoalescedRun({
+    intervalMs: WAKE_EVALUATION_COALESCE_MS,
+    run: () => this.runEvaluation(false)
+  })
 
   constructor(
     private storage: StorageEngine,
@@ -138,6 +156,7 @@ export class PowerWakeService {
   /** Release the blocker on shutdown. */
   stop(): void {
     this.stopped = true
+    this.evaluations.cancel()
     this.cancelScheduledRelease()
     this.retryWakeWindows.clear()
     if (this.backgroundTimer !== null) {
@@ -153,9 +172,21 @@ export class PowerWakeService {
    *
    * Only the newest evaluation applies its decision, so a burst of thread
    * updates (or one slow read landing after a newer one) can never leave the
-   * blockers in a state an older read described.
+   * blockers in a state an older read described. The notices themselves are
+   * coalesced, so a burst is one read: the first notice after a quiet spell runs
+   * at once and the rest collapse into a trailing run.
    */
   private refresh(releaseImmediately = false): void {
+    if (releaseImmediately) {
+      // Turning the feature off must release now, not after a coalescing window.
+      this.evaluations.cancel()
+      this.runEvaluation(true)
+      return
+    }
+    this.evaluations.request()
+  }
+
+  private runEvaluation(releaseImmediately: boolean): void {
     const request = ++this.refreshRequest
     void this.applyWakeState(request, releaseImmediately).catch((error: unknown) => {
       Logger.error('Power wake: evaluation failed (non-fatal)', error)

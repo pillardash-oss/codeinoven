@@ -158,6 +158,22 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
     }
   },
   {
+    name: 'preview',
+    description:
+      'Serve a file or folder from this conversation\u2019s own workspace on a loopback origin the app owns, and return its http URL. This is how a page you wrote yourself becomes a page you can open: the browser only navigates http(s) and a chat\u2019s folder has no server, so without this a file you saved has no address at all. It is not a substitute for the app\u2019s own previews of design, prototype, video or a dev server, which already have their URL. Pass path relative to the workspace root (.cio/tmp/report.html or .cio/tmp/site); omit it to serve the root. The answer carries url and root, and the folder stays served for this conversation, so open the url and then read it with snapshot, screenshot or console. It never leaves this conversation\u2019s folder.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'string',
+          description:
+            'A file or folder inside this conversation\u2019s workspace, e.g. .cio/tmp/report.html. Defaults to the workspace root.'
+        }
+      },
+      additionalProperties: false
+    }
+  },
+  {
     name: 'viewport',
     description:
       'Set the viewport this thread browser tab is laid out at while it runs offscreen, for checking responsive layouts. Give a preset or explicit width and height. A tab the user is currently viewing keeps the on-screen size and uses this viewport once it is offscreen again. The page the user is on is laid out at the width of their browser panel while they watch it, which is narrow, so a console or gallery whose desktop layout only exists at desktop widths (a store console and its screenshot editor, for example) is incomplete there until you set a desktop viewport: that size then holds for as long as the tab is offscreen, however wide or narrow the user had it, until you change it.',

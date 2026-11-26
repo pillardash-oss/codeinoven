@@ -33,6 +33,7 @@ import { type AgentSecretResolution } from '../utilities/agent-secret-service'
 import { type OrchestrationRuntime } from './chat-engine-orchestration'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import { type EffectiveExperts } from '../../lib/experts'
+import type { ThreadOpenDigest } from '../../lib/ipc/invoke-thread'
 import type { ExpertSettingsService } from '../design/expert-settings-service'
 import { McpOAuthService } from '../utilities/mcp-oauth/mcp-oauth-service'
 import type { ReapOrphansOptions, ReapOrphansResult } from '../agents/agent-process-service'
@@ -131,6 +132,7 @@ import type {
   VirtualTaskOptions
 } from './chat-engine/chat-engine-types'
 import { buildChatEngineUnits } from './chat-engine/chat-engine-units'
+import { ThreadCheckpointRepo } from '../database/repositories/thread-checkpoint-repo'
 import type { DirectReplyInput } from './chat-engine/chat-engine-direct-reply'
 
 /**
@@ -176,6 +178,7 @@ export {
 export {
   textForMessage,
   formatBrainstormInterviewDecisions,
+  formatHistoryBrief,
   formatHistoryHandoff,
   formatHistoryPointer,
   formatHistoryRecap,
@@ -286,6 +289,16 @@ export class ChatEngine {
    */
   readonly units = buildChatEngineUnits(this)
   readonly state = new ChatEngineState(this)
+  private checkpointRepo?: ThreadCheckpointRepo
+
+  /**
+   * The thread's context checkpoints: the record of every closed session and of
+   * a fork's lineage. Built on first use so it cannot depend on the order of the
+   * constructor's parameter properties.
+   */
+  get checkpoints(): ThreadCheckpointRepo {
+    return (this.checkpointRepo ??= new ThreadCheckpointRepo(this.database))
+  }
   /**
    * How long a "can the TypeSafe capability answer?" reading is reused.
    *
@@ -1185,6 +1198,17 @@ export class ChatEngine {
   async listPermissions(projectId: string, threadId: string): Promise<PermissionRequest[]> {
     return this.units['permissions'].listPermissions(projectId, threadId)
   }
+  /**
+   * Every read a thread mount needs, from one thread-row read.
+   *
+   * The mount used to spend five round trips on this (the row, permissions,
+   * questions, image-descriptor cards, session status) and each of them re-read
+   * the same row. A failed digest must never take the open with it: the renderer
+   * falls back to the individual channels it used before.
+   */
+  async readOpenDigest(projectId: string, threadId: string): Promise<ThreadOpenDigest> {
+    return this.units['open-digest'].readOpenDigest(projectId, threadId)
+  }
   async listImageDescriptorErrors(
     projectId: string,
     threadId: string
@@ -1329,13 +1353,15 @@ export class ChatEngine {
     projectId: string,
     coordinatorThreadId: string,
     settings: ThreadSettings,
-    instructions?: string
+    instructions?: string,
+    rejected?: string
   ): Promise<AssignmentPlan> {
     return this.units['assignment'].generateAssignmentDraft(
       projectId,
       coordinatorThreadId,
       settings,
-      instructions
+      instructions,
+      rejected
     )
   }
   /** Start or join the thread's Assignment draft without waiting for it. */
@@ -1344,6 +1370,7 @@ export class ChatEngine {
     coordinatorThreadId: string
     settings: ThreadSettings
     instructions?: string
+    rejected?: string
     sessionId: string
   }): Promise<AssignmentDraftStart> {
     return this.units['assignment'].requestAssignmentDraft(input)

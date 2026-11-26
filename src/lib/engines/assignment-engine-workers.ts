@@ -92,8 +92,11 @@ export class AssignmentWorkerSelection {
     coordinator: ThreadSettings
   ): Promise<ThreadSettings> {
     const phase = plan.content.phases.find((candidate) => candidate.id === task.phaseId)
-    const configuredWorker = (await this.storage.getConfig()).agentDefaults.worker
-    const selected = task.model ?? phase?.defaultModel ?? configuredWorker
+    // A worker inherits the coordinator's harness, account, model and Oven. Only
+    // a model the plan itself named replaces it: a saved global worker default
+    // used to outrank the thread that created the work, which is how a worker
+    // spawned from a Codex thread could run on a Claude model.
+    const selected = task.model ?? phase?.defaultModel
     return {
       ...coordinator,
       ...(selected ?? {}),

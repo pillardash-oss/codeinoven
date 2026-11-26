@@ -127,6 +127,35 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
       return thread
     })
   }
+  /**
+   * One aggregate read for opening a thread.
+   *
+   * A mount needs the row, its pending permissions, its pending questions, its
+   * unresolved image-descriptor cards, and the live session status, and it used
+   * to ask five channels for them   each one a job on the shared database
+   * worker that re-read the same thread row. This answers all of it from a
+   * single row read. The individual channels keep their own behaviour; this is
+   * an aggregate on top, so a failure here is safe: the renderer falls back to
+   * them and opens the thread exactly as it did before.
+   */
+  ipcMain.handle('thread:openDigest', async (_, rawProjectId: unknown, rawThreadId: unknown) => {
+    const projectId = validateEntityId(rawProjectId, 'Project ID')
+    const threadId = validateEntityId(rawThreadId, 'Thread ID')
+    const chatEngine = ctx.chatEngine
+    if (!chatEngine?.readOpenDigest) {
+      // A handler set without the chat engine (a bare boot) has no live session
+      // state to report, so the renderer's fallback is the honest answer. It
+      // must not be mistaken for an empty digest, which would tell the mount a
+      // working thread is idle.
+      throw new Error('The thread open digest is unavailable.')
+    }
+    const digest = await chatEngine.readOpenDigest(projectId, threadId)
+    // The one read `thread:get` did that is not data: a thread whose creation-time
+    // branch settle never completed heals on its next open. Kept off the
+    // response path, exactly as it was there.
+    if (digest.thread) settleThreadBranch(branchBackfillDeps, digest.thread)
+    return digest
+  })
   ipcMain.handle('thread:list', (_, projectId: string) => threadManager.listThreads(projectId))
   ipcMain.handle('thread:listAll', () => threadManager.listAllThreads())
   if (!options.hydrationHandlersRegistered) {

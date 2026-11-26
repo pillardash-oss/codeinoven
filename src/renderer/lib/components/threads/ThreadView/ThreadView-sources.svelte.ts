@@ -28,7 +28,6 @@ import type {
   AgentPart,
   AgentDefaultsConfig,
   AgentModelSelection,
-  AgentRole,
   AgentQuestion,
   SpecGenerationTraceUpdate,
   AssignmentGenerationTraceUpdate,
@@ -89,7 +88,7 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
     return this.root.props.chatMode ? normalizeChatSettings(next) : next
   }
 
-  agentDefaults = $state<AgentDefaultsConfig>({ syncFromThreadChanges: false })
+  agentDefaults = $state<AgentDefaultsConfig>({})
 
   /** Commit to the model memory of this conversation's family, so a model picked
    *  for a chat or an assistant task never changes what another kind starts on. */
@@ -311,6 +310,39 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
    */
   assignmentDraftError = $state('')
 
+  /**
+   * The failure a failed Assignment draft left on the thread row, recovered from
+   * the persisted row so the card survives a reload.
+   *
+   * The draft's own card and the thread's `failed` status are both durable, so a
+   * rebuilt view has to derive the same failure instead of falling back to the
+   * spec-less entry, which asked the user to send work the thread already holds.
+   */
+  private assignmentDraftFailureDurable = $derived.by((): string => {
+    const thread = this.root.handleAgentEvent.thread
+    if (thread.status !== 'failed' || !thread.lastError) return ''
+    if (this.root.loadOlderMessages.settings.loopMode === true) return ''
+    if (this.root.submitBrainstormDecision.spec !== null) return ''
+    if (this.root.submitSpecDecision.assignment !== null) return ''
+    return thread.lastError
+  })
+
+  /** The user closed the failed-draft card for this view. */
+  assignmentDraftFailureDismissed = $state(false)
+
+  /** The one failure the composer shows for a failed Assignment draft. */
+  assignmentDraftFailure = $derived(
+    this.assignmentDraftFailureDismissed
+      ? ''
+      : this.assignmentDraftError || this.assignmentDraftFailureDurable
+  )
+
+  /** Close the failed-draft card without dropping the failing run's session. */
+  dismissAssignmentDraftFailure(): void {
+    this.assignmentDraftFailureDismissed = true
+    this.assignmentDraftError = ''
+  }
+
   /** True while the retry of a failed draft is being started. */
   assignmentDraftRetrying = $state(false)
 
@@ -325,6 +357,7 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
   async retryAssignmentDraft(): Promise<void> {
     if (this.assignmentDraftRetrying) return
     this.assignmentDraftRetrying = true
+    this.assignmentDraftFailureDismissed = false
     try {
       await invoke(
         'agent:retryAssignmentDraft',
@@ -471,25 +504,22 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
         loopMode: false
       }
     }
-    return this.agentDefaults.auditor
-      ? { ...this.root.loadOlderMessages.settings, ...this.agentDefaults.auditor }
-      : { ...this.root.loadOlderMessages.settings }
+    return { ...this.root.loadOlderMessages.settings }
   }
 
   /**
    * The model a worker dispatched from this thread right now would run on.
    *
    * It must resolve exactly like `AssignmentWorkerSelection.workerSettings`:
-   * the configured worker default laid over the thread settings, so an account
-   * pinned on either one survives. Dropping `accountId` here made every
-   * inherited phase/task model render the provider's default account (leo-1)
-   * while the worker was actually dispatched on the thread's account (cio-5).
+   * the thread's own settings, since a worker inherits the harness, account and
+   * model of the thread that created it and an explicit task or phase model is
+   * the only thing that replaces it. Keeping `accountId` here matters: dropping
+   * it made every inherited phase/task model render the provider's default
+   * account (leo-1) while the worker was actually dispatched on the thread's
+   * account (cio-5).
    */
   workerModelForThread(): AssignmentModelSelection {
-    const settings = this.root.loadOlderMessages.settings
-    const selected = this.agentDefaults.worker
-      ? { ...settings, ...this.agentDefaults.worker }
-      : settings
+    const selected = this.root.loadOlderMessages.settings
     return {
       harnessId: selected.harnessId,
       providerId: selected.providerId,
@@ -499,15 +529,6 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
       inferenceMode: selected.inferenceMode,
       contextWindow: selected.contextWindow
     }
-  }
-
-  syncAgentRole(role: AgentRole, selection: AgentModelSelection): void {
-    void invoke('config:syncAgentRole', role, selection)
-      .then((config) => {
-        if (!this.root.loadOlderMessages.alive) return
-        this.agentDefaults = config.agentDefaults
-      })
-      .catch(() => undefined)
   }
 
   /**
@@ -657,7 +678,6 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
       this.root.contextUsage.contextUsageDisplay = undefined
       this.root.contextUsage.accountUsageCache.markStale()
     }
-    this.syncAgentRole('seniorEngineer', selection)
     this.commitSettings(updated)
 
     this.assignmentSeniorSettingsPersistence = this.assignmentSeniorSettingsPersistence

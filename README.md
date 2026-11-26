@@ -190,6 +190,7 @@ Download an x64 Windows ffmpeg build from [gyan.dev](https://www.gyan.dev/ffmpeg
 | [`docs/APP-BIBLE.md`](docs/APP-BIBLE.md)                                         | Product philosophy, design system, engineering standards. This one wins conflicts. |
 | [`docs/ENGINEERING-LIFECYCLE.md`](docs/ENGINEERING-LIFECYCLE.md)                 | Stage order, human gates, stage tools, Assignment workers, recovery                |
 | [`docs/ASSISTANT-VIEW.md`](docs/ASSISTANT-VIEW.md)                               | Assistants, tasks, scheduled runs, missed runs, hand-off                           |
+| [`docs/CONTEXT-CHECKPOINTS.md`](docs/CONTEXT-CHECKPOINTS.md)                     | Resume briefs, history reads, checkpoints replacing compaction, forks as lineage   |
 | [`docs/GIT-WORKTREES.md`](docs/GIT-WORKTREES.md)                                 | Scope-owned worktrees, setup, health, destructive lifecycle                        |
 | [`docs/EMBEDDED_BROWSER_ARCHITECTURE.md`](docs/EMBEDDED_BROWSER_ARCHITECTURE.md) | Inner browser, its trust boundaries, and its lifecycle                             |
 | [`docs/SPEECH.md`](docs/SPEECH.md)                                               | Local speech runtimes, model catalog, dictation, cleanup                           |

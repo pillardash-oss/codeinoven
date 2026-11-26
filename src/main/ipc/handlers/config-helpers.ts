@@ -226,13 +226,20 @@ const CONFIG_PATCH_FIELDS = new Set([
   'llamaCppUnload'
 ])
 
-const AGENT_DEFAULT_FIELDS = new Set([
+const AGENT_DEFAULT_FIELDS = new Set(['imageDescriptor', 'imageDescriptorFallback'])
+/**
+ * Role defaults this build no longer has.
+ *
+ * They are dropped rather than refused: an install that stored them still has
+ * them in its config file, and a validator that threw on its own old fields
+ * would lock that user out of every settings save. The roles now inherit the
+ * thread that created them, so there is nothing left to carry the value into.
+ */
+const RETIRED_AGENT_DEFAULT_FIELDS = new Set([
   'seniorEngineer',
   'worker',
   'auditor',
   'pawn',
-  'imageDescriptor',
-  'imageDescriptorFallback',
   'syncFromThreadChanges'
 ])
 function isUnloadOption(value: unknown): value is '5m' | '10m' | '20m' | '30m' | 'keep' {
@@ -278,29 +285,10 @@ function validateAgentModelSelection(value: unknown, label: string): AgentModelS
 function validateAgentDefaults(value: unknown): AgentDefaultsConfig {
   if (!isRecord(value)) throw new TypeError('Agent defaults must be an object')
   for (const field of Object.keys(value)) {
-    if (!AGENT_DEFAULT_FIELDS.has(field)) {
-      throw new TypeError(`Unsupported agent defaults field: ${field}`)
-    }
-  }
-  if (typeof value.syncFromThreadChanges !== 'boolean') {
-    throw new TypeError('Agent default thread synchronization must be a boolean')
+    if (AGENT_DEFAULT_FIELDS.has(field) || RETIRED_AGENT_DEFAULT_FIELDS.has(field)) continue
+    throw new TypeError(`Unsupported agent defaults field: ${field}`)
   }
   return {
-    syncFromThreadChanges: value.syncFromThreadChanges,
-    ...(value.seniorEngineer === undefined
-      ? {}
-      : {
-          seniorEngineer: validateAgentModelSelection(value.seniorEngineer, 'Sr. Engineer default')
-        }),
-    ...(value.worker === undefined
-      ? {}
-      : { worker: validateAgentModelSelection(value.worker, 'Worker default') }),
-    ...(value.auditor === undefined
-      ? {}
-      : { auditor: validateAgentModelSelection(value.auditor, 'Auditor default') }),
-    ...(value.pawn === undefined
-      ? {}
-      : { pawn: validateAgentModelSelection(value.pawn, 'Pawn default') }),
     ...(value.imageDescriptor === undefined
       ? {}
       : {

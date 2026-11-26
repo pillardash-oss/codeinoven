@@ -910,8 +910,9 @@ stored by an older build is folded into the knowledge at startup
   therefore reaches the agent with the same contract as a fresh composer send.
 - **The interview keeps app-owned checkpoints.** A Getting started conversation
   is an interview, so what it agreed cannot live only in the harness transcript:
-  a model or harness switch rotates the session and replays a budgeted recap, and
-  a compaction drops the oldest exchanges. Two app-owned records ride beside the
+  a model or harness switch closes the session and hands the next one a short
+  recap with the thread id, and a checkpoint ends the window the same way. Two
+  app-owned records ride beside the
   contract on every authoring turn instead, and both are instructions for that
   turn's behavior, so they ride the system prompt and never accumulate in the
   harness transcript:

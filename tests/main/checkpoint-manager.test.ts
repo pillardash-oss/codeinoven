@@ -988,6 +988,76 @@ describe('CheckpointManager', () => {
     expect(await manager.backfillChangeProvenance()).toBe(0)
   })
 
+  // Reading a candidate costs a parse of the row's whole file map, and the
+  // predicate cannot be answered from an index, so the pass has to bound its own
+  // scan: an old finished turn is never worth re-reading, and on a long-lived
+  // install scanning all of them held the one database connection for seconds at
+  // launch and again every half hour.
+  it('does not re-read a card older than the provenance window', async () => {
+    const projectRoot = await realpath(await temporaryDirectory('codeinoven-project-'))
+    const database = await createTestDb()
+    testDatabases.push(database)
+    const manager = new CheckpointManager(database)
+    const source = join(projectRoot, 'src', 'aged.ts')
+    await mkdir(join(projectRoot, 'src'), { recursive: true })
+    await writeFile(source, 'before', 'utf-8')
+    database.run(
+      `INSERT OR IGNORE INTO projects(id, name, path, source, provider_id, workflow_id, thread_limit, change_tracking_mode, created_at, updated_at)
+       VALUES('project-aged', 'Project', ?, 'local', 'pi', 'default', 70, 'manual', 1, 1)`,
+      [projectRoot]
+    )
+    database.run(
+      `INSERT INTO threads(id, project_id, provider_id, title, status, pinned, archived, read, scope_bucket_id, created_at, updated_at, last_activity)
+       VALUES('thread-aged', 'project-aged', '', 'Aged', 'created', 0, 0, 1, 'default', 1, 1, 1)`
+    )
+    const turn = await manager.beginTurn('project-aged', 'thread-aged', projectRoot, 'Turn', false)
+    await writeFile(source, 'edited', 'utf-8')
+    database.run(
+      `INSERT INTO agent_messages(id, thread_id, role, parts, created_at)
+       VALUES('msg-aged', 'thread-aged', 'assistant', ?, ?)`,
+      [
+        JSON.stringify([
+          {
+            type: 'tool',
+            id: 'msg-aged:tool:call-1',
+            messageID: 'msg-aged',
+            callID: 'call-1',
+            tool: 'edit',
+            state: { status: 'completed', input: { path: source } }
+          }
+        ]),
+        turn.before.createdAt
+      ]
+    )
+    const completed = await manager.completeTurn(
+      'project-aged',
+      'thread-aged',
+      turn.id,
+      projectRoot,
+      'completed'
+    )
+    expect(completed.changeSourceRefs).toBeUndefined()
+
+    // Far outside the window: the row would be a candidate on every other field,
+    // and it must not be read at all.
+    database.run(`UPDATE turn_checkpoints SET created_at = ? WHERE turn_id = ?`, [
+      Date.now() - 60 * 24 * 60 * 60 * 1000,
+      turn.id
+    ])
+    expect(await manager.backfillChangeProvenance()).toBe(0)
+    const untouched = await manager.get('project-aged', 'thread-aged', turn.id)
+    expect(untouched?.changeSourceRefs).toBeUndefined()
+
+    // The same row inside the window is read and filled in.
+    database.run(`UPDATE turn_checkpoints SET created_at = ? WHERE turn_id = ?`, [
+      Date.now(),
+      turn.id
+    ])
+    expect(await manager.backfillChangeProvenance()).toBe(1)
+    const filled = await manager.get('project-aged', 'thread-aged', turn.id)
+    expect(Object.keys(filled?.changeSourceRefs ?? {})).toEqual(['src/aged.ts'])
+  })
+
   it('repairs an empty card from the scope worktree its snapshots were taken in', async () => {
     const database = await createTestDb()
     testDatabases.push(database)

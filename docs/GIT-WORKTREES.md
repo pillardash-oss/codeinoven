@@ -410,8 +410,9 @@ it the same way:
    and `input: <the action's fields>`.
 
 The activation is banked per thread, so later turns can invoke it by id without
-searching again, and `cio_util_docs_lookup` re-lists the contract after
-compaction. Because it is an ordinary registry utility, the Utilities screen
+searching again, and `cio_util_docs_lookup` re-lists the contract after a
+checkpoint or a harness switch (the bank is per thread, not per session, so the
+next window keeps every activation). Because it is an ordinary registry utility, the Utilities screen
 lists it and its contract is editable there, but its availability is locked:
 the Git panel's review flow tells an agent to activate `cio:scope` by id
 (`src/renderer/lib/components/git/git-status-panel-prompts.ts`), so switching it

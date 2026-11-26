@@ -34,7 +34,7 @@
      the lookup the agent was handed, so this is the whole life cycle of the
      attachment in one control. -->
 <div
-  class="flex items-stretch overflow-hidden border border-info/30 bg-info/10 text-[0.6875rem] text-muted transition-colors"
+  class="flex shrink-0 items-stretch overflow-hidden border border-info/30 bg-info/10 text-[0.6875rem] text-muted transition-colors"
 >
   <button
     type="button"

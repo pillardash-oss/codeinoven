@@ -5,7 +5,7 @@ import {
 import type { HandedOffWorker } from '../thread-transfer-service/thread-transfer-workers'
 import { randomInt } from 'crypto'
 import { Logger } from '../../system/logger'
-import { PAWN_DEFAULT_THINKING_LEVEL } from '../../../lib/pawn-tools'
+import { PAWN_DEFAULT_PERMISSION_LEVEL, PAWN_DEFAULT_THINKING_LEVEL } from '../../../lib/pawn-tools'
 import { PAWN_AGENT_CONTRACT } from '../../../lib/agent-behavior'
 import { AssignmentEngineError } from '../../../lib/engines/assignment-engine'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
@@ -61,6 +61,11 @@ import {
   preserveMirrorToolStamps
 } from './chat-engine-pure'
 import { ChatEngine, pawnModelOverride, pawnThinkingOverride } from '../chat-engine'
+import {
+  type DelegationTarget,
+  delegationFieldsFromInput,
+  resolveDelegationTarget
+} from '../delegation/delegation-target'
 
 /** ChatEngine assignment-workers: one concern, moved verbatim from the composition root. */
 export class ChatEngineAssignmentWorkers {
@@ -1416,6 +1421,7 @@ export class ChatEngineAssignmentWorkers {
     const prompt = [
       `You are a CodeInOven pawn agent: an independent worker thread spawned by the agent working on thread ${threadId}, and you answer to that agent alone.`,
       purpose ? `Purpose: ${purpose}.` : '',
+      `You run on ${settings.harnessId}${settings.ovenId === spawner.settings?.ovenId ? '' : ` on the Oven ${settings.ovenId}`}, which may be a different harness from the agent that spawned you. Nothing about your instructions changes because of that: work in this checkout, use this harness's own tools, and report back the same way.`,
       'The user cannot prompt you and does not answer you. Work autonomously, do not ask the user questions, and do not commit: the agent that spawned you reviews your work and commits it. Your report lists every path you changed as uncommitted, because that list is the only thing its commit can rely on.',
       isUnrestrictedLevel(settings.permissionLevel)
         ? 'You have full access to this project.'
@@ -1586,10 +1592,16 @@ export class ChatEngineAssignmentWorkers {
   }
 
   /**
-   * Create the pawn's thread. Hidden (owned by the spawner) and locked against
-   * user input, with the model resolved as: this call's override, then the
-   * user's pawn default, then the spawner's own model; and the thinking level as:
-   * this call's override, then the user's pawn default, then the lowest level.
+   * Create the pawn's thread.
+   *
+   * The target is resolved exactly as a dispatch resolves one: nothing named
+   * inherits the spawner's harness, account, model and Oven, and anything named
+   * is validated against the real catalogs before a thread exists. A pawn is
+   * therefore not tied to the harness that spawned it   `harnessId`, `accountId`
+   * and `ovenId` decide where it runs, and the thread is created there.
+   *
+   * Hidden (owned by the spawner) and locked against user input, with the
+   * thinking level at the lowest one unless this call named another.
    */
   async spawnPawnThread(
     projectId: string,
@@ -1599,13 +1611,9 @@ export class ChatEngineAssignmentWorkers {
     purpose: string,
     instructions: string
   ): Promise<Thread> {
-    const configured = (await this.host.storage.getConfig()).agentDefaults.pawn
-    const modelOverride = pawnModelOverride(input['model'])
-    const thinkingOverride = pawnThinkingOverride(input['thinking_level'])
+    const target = await this.resolvePawnTarget(projectId, spawnerSettings, input)
     const settings: ThreadSettings = {
-      ...spawnerSettings,
-      ...(modelOverride ?? configured ?? {}),
-      thinkingLevel: thinkingOverride ?? configured?.thinkingLevel ?? PAWN_DEFAULT_THINKING_LEVEL,
+      ...target.settings,
       // A pawn owns one task, so the Engineering planning modes and any audit
       // loop never follow it in: they belong to the thread the user is watching.
       assignmentMode: false,
@@ -1624,9 +1632,65 @@ export class ChatEngineAssignmentWorkers {
       settings,
       featureSlug: spawner.featureSlug,
       scopeBucketId: spawner.scopeBucketId,
-      workingDirectory: spawner.workingDirectory,
+      // A working directory belongs to the machine that holds it. A pawn moved to
+      // another Oven checks that machine's own checkout, so the spawner's local
+      // path would point at a tree the pawn cannot see.
+      ...(settings.ovenId === spawner.settings?.ovenId && spawner.workingDirectory
+        ? { workingDirectory: spawner.workingDirectory }
+        : {}),
       coordinatorThreadId: spawner.id,
       userInputLocked: true
+    })
+  }
+
+  /**
+   * Read where a pawn should run.
+   *
+   * The same resolver a dispatch uses, with the two pawn policies layered on: it
+   * thinks at the lowest level unless told otherwise, and it starts at the app
+   * default permission tier rather than inheriting full access from a
+   * conversation nobody is watching.
+   */
+  async resolvePawnTarget(
+    projectId: string,
+    spawnerSettings: ThreadSettings,
+    input: Record<string, unknown>
+  ): Promise<DelegationTarget> {
+    const deps = this.host.orchestration?.delegationDeps
+    if (!deps) {
+      throw new Error('Delegating work is not available on this thread yet. Try again.')
+    }
+    // `model` is the compact form the tool has always accepted. A model is only
+    // "named" when this call named one: filling the rest in from the spawner
+    // would turn every inheritance into a validated model switch.
+    const compactModel = pawnModelOverride(input['model'])
+    const explicit = delegationFieldsFromInput(input)
+    const namedProviderId =
+      explicit.providerId ??
+      (compactModel && 'providerId' in compactModel ? compactModel.providerId : undefined)
+    const namedModelId = explicit.modelId ?? compactModel?.modelId
+    const namesModel = Boolean(explicit.harnessId || namedProviderId || namedModelId)
+    // A provider and model named without a harness run on this thread's harness,
+    // which is what the compact `provider/model` form has always meant. A harness
+    // named on its own is passed through alone so the resolver refuses it with
+    // the rule the agent has to follow.
+    const namedHarnessId =
+      explicit.harnessId ??
+      (namedProviderId && namedModelId ? spawnerSettings.harnessId : undefined)
+    const thinkingLevel = pawnThinkingOverride(input['thinking_level'])
+    return resolveDelegationTarget(deps, {
+      projectId,
+      base: spawnerSettings,
+      ...(namesModel && namedHarnessId ? { harnessId: namedHarnessId } : {}),
+      ...(namedProviderId ? { providerId: namedProviderId } : {}),
+      ...(namedModelId ? { modelId: namedModelId } : {}),
+      ...(explicit.accountId ? { accountId: explicit.accountId } : {}),
+      ...(explicit.ovenId ? { ovenId: explicit.ovenId } : {}),
+      ...(explicit.ovenPath ? { ovenPath: explicit.ovenPath } : {}),
+      ...(thinkingLevel ? { thinkingLevel } : {}),
+      thinkingFloor: PAWN_DEFAULT_THINKING_LEVEL,
+      ...(explicit.permissionLevel ? { permissionLevel: explicit.permissionLevel } : {}),
+      permissionFallback: PAWN_DEFAULT_PERMISSION_LEVEL
     })
   }
 

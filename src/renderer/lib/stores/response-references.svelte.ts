@@ -269,14 +269,16 @@ class ResponseReferencesState {
     typingComment = false
   ): void {
     const key = referenceKey(projectId, threadId)
-    const next = { ...this.references }
     let stored: ResponseReferenceAnchor[] = []
     if (references.length === 0) {
-      delete next[key]
+      delete this.references[key]
     } else {
-      if (!(key in next) && Object.keys(next).length >= MAX_THREADS_WITH_REFERENCES) {
-        const oldestKey = Object.keys(next)[0]
-        if (oldestKey) delete next[oldestKey]
+      if (
+        !(key in this.references) &&
+        Object.keys(this.references).length >= MAX_THREADS_WITH_REFERENCES
+      ) {
+        const oldestKey = Object.keys(this.references)[0]
+        if (oldestKey) delete this.references[oldestKey]
       }
       stored = uniqueReferencesById(references).map((reference, index) => ({
         ...reference,
@@ -302,9 +304,13 @@ class ResponseReferencesState {
                   ? `Page element ${index + 1}`
                   : `Design element ${index + 1}`
       }))
-      next[key] = stored
+      this.references[key] = stored
     }
-    this.references = next
+    // Written per thread, never by replacing the whole record: the record is
+    // `$state`, so a keyed write invalidates only the surfaces reading that one
+    // thread, while a fresh record invalidates every reader in the app — the
+    // sidebar, the header and each open composer — on every keystroke of an
+    // annotation comment.
     // Mirror into the recovery snapshot so annotations survive thread switches
     // and app restarts, alongside the rest of the composer draft. Writing the
     // references is a deliberate edit, so the store commits the slot at once

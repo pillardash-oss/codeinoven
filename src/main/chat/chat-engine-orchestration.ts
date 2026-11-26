@@ -14,17 +14,14 @@ import type {
   ThinkingLevel
 } from '../../lib/types'
 import type { OvenHarnessInventoryItem, OvenState } from '../../lib/ovens'
-import {
-  MODEL_PROFILE_INFERENCE_MODES,
-  MODEL_PROFILE_PERMISSION_LEVELS
-} from '../../lib/model-profiles'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
 import {
   DEFAULT_THINKING_LEVEL,
   STANDARD_THINKING_PRESETS,
+  parseThinkingLevel,
   resolveDefaultThinkingLevel
 } from '../../lib/thinking-presets'
-import { isRemoteOvenId, LOCAL_OVEN_ID } from '../../lib/ovens'
+import { LOCAL_OVEN_ID } from '../../lib/ovens'
 import { isThreadBusyStatus } from '../../lib/thread-status-policy'
 import { ASSISTANT_SPACE_ID } from '../../lib/types/project'
 import type { Assistant } from '../../lib/types/assistant'
@@ -42,6 +39,16 @@ import type {
   OrchestrationExecutor,
   OrchestrationToolContext
 } from '../utilities/utility-orchestration-service'
+import {
+  type DelegationTargetDeps,
+  delegationFieldsFromInput,
+  findDelegationModel,
+  resolveDelegationAccount,
+  resolveDelegationInferenceMode,
+  resolveDelegationPermissionLevel,
+  resolveDelegationTarget,
+  resolveDelegationThinkingLevel
+} from './delegation/delegation-target'
 
 /**
  * The main-process implementation behind the orchestration tools.
@@ -252,6 +259,15 @@ export interface OrchestrationAssistantDirectory {
 export interface OrchestrationRuntime {
   executor: OrchestrationExecutor
   dispatches: OrchestrationDispatches
+  /**
+   * The target resolver a delegated run is created from, wired to the same
+   * catalog, account and Oven reads a dispatch uses.
+   *
+   * The pawn tool reads it from here rather than rebuilding the reads, so a pawn
+   * and a dispatch resolve a named harness, account or model through one code
+   * path: there is no second answer to "what does this name mean".
+   */
+  delegationDeps: DelegationTargetDeps
   setAssistantDirectory: (directory: OrchestrationAssistantDirectory | null) => void
 }
 
@@ -260,6 +276,7 @@ export function createOrchestrationRuntime(deps: OrchestrationDeps): Orchestrati
   const assistants: { current: OrchestrationAssistantDirectory | null } = { current: null }
   return {
     dispatches,
+    delegationDeps: delegationDeps(deps),
     executor: createOrchestrationExecutor(deps, dispatches, assistants),
     setAssistantDirectory: (directory) => {
       assistants.current = directory
@@ -554,23 +571,6 @@ function describeCreditsRemaining(credits: AgentAccountUsage['credits']): string
   return undefined
 }
 
-/**
- * The provider catalog and model a dispatch names, or null when this snapshot
- * does not carry them.
- */
-function findCatalogModel(
-  catalogs: readonly ProviderCatalog[],
-  harnessId: string,
-  providerId: string,
-  modelId: string
-): { catalog: ProviderCatalog; model: ProviderModel } | null {
-  const catalog = catalogs.find(
-    (candidate) => candidate.harnessId === harnessId && candidate.id === providerId
-  )
-  const model = catalog?.models.find((candidate) => candidate.id === modelId)
-  return catalog && model ? { catalog, model } : null
-}
-
 /** Resolve and start a real run, refusing anything the catalog does not confirm. */
 async function dispatchWork(
   deps: OrchestrationDeps,
@@ -598,120 +598,18 @@ async function dispatchWork(
     : (optionalString(input, 'projectId') ?? context.projectId)
 
   const requestingThread = await deps.getThread(context.projectId, context.threadId)
-  const base = requestingThread?.settings
-  const namedHarness = optionalString(input, 'harnessId')
-  const namedProvider = optionalString(input, 'providerId')
-  const namedModel = optionalString(input, 'modelId')
-  const namesModel = Boolean(namedHarness || namedProvider || namedModel)
-
   // A dispatch that names no model runs on the model this conversation is
   // already using. That is the point of delegating from a chat: the answer comes
   // from the same mind the user is talking to, not from a model left over on the
-  // assistant's own row.
-  let harnessId: string
-  let providerId: string
-  let modelId: string
-  if (namesModel) {
-    harnessId = requiredString(input, 'harnessId')
-    providerId = requiredString(input, 'providerId')
-    modelId = requiredString(input, 'modelId')
-  } else if (base) {
-    harnessId = base.harnessId
-    providerId = base.providerId
-    modelId = base.modelId
-  } else {
-    throw new Error(
-      'This conversation has no model to inherit, so the dispatch must name harnessId, providerId and modelId.'
-    )
-  }
-
-  const ovenId = optionalString(input, 'ovenId') ?? base?.ovenId ?? LOCAL_OVEN_ID
-  const ovenPath =
-    optionalString(input, 'ovenPath') ?? (ovenId === base?.ovenId ? base?.ovenPath : undefined)
-  const accountId = optionalString(input, 'accountId')
-
-  const acpAgents = await acpAgentsList()
-  const harness =
-    listHarnesses().find((candidate) => candidate.id === harnessId) ??
-    acpHarnessDescriptors(acpAgents).find((candidate) => candidate.id === harnessId)
-  if (!harness) throw new Error(`Unknown harness "${harnessId}". Read cio_orchestrate_targets.`)
-
-  const [catalogs, accounts, state] = await Promise.all([
-    deps.listProviderCatalogs(assistant ? context.projectId : projectId),
-    deps.listAccounts(),
-    deps.listOvens()
-  ])
-
-  let resolved = namesModel ? findCatalogModel(catalogs, harnessId, providerId, modelId) : null
-  if (namesModel && !resolved) {
-    // The snapshot the model picker holds is the only source dispatch checks, and
-    // it is empty until the app has discovered once. Discover here rather than
-    // telling the agent to re-read a target list built from the same snapshot.
-    resolved = findCatalogModel(
-      await deps.refreshProviderCatalogs(assistant ? context.projectId : projectId),
-      harnessId,
-      providerId,
-      modelId
-    )
-    if (!resolved) {
-      throw new Error(
-        `The ${harnessId} catalog has no provider "${providerId}" with model "${modelId}", even after discovering the catalogs again. Read cio_orchestrate_targets and copy an id from it exactly.`
-      )
-    }
-  }
-  const { catalog, model } = resolved ?? { catalog: null, model: null }
-
-  const oven = state.ovens.find((candidate) => candidate.id === ovenId)
-  if (!oven) throw new Error(`Unknown Oven "${ovenId}". Read cio_orchestrate_targets.`)
-
-  if (isRemoteOvenId(ovenId)) {
-    const inventory = await deps.harnessInventory(ovenId)
-    const item = inventory.find((entry) => entry.harnessId === harnessId)
-    if (
-      item &&
-      (item.health === 'missing' || item.health === 'broken' || item.health === 'unsupported')
-    ) {
-      throw new Error(
-        `The Oven "${oven.name}" cannot run ${harness.name}: its inventory reports ${item.health}. Pick a machine that has it, or ask the user.`
-      )
-    }
-  }
-
-  const inheritsSameModel = !namesModel && base?.harnessId === harnessId
-  const account =
-    inheritsSameModel && !accountId
-      ? { id: base?.accountId ?? resolveAccount(accounts, harnessId, accountId).id }
-      : resolveAccount(accounts, harnessId, accountId)
-  const accountLabel =
-    accounts.find((candidate) => candidate.id === account.id)?.label ?? account.id
-  const thinkingLevel =
-    resolveThinkingLevel(
-      input,
-      model?.thinkingPresets?.map((preset) => preset.id)
-    ) ??
-    (inheritsSameModel ? base?.thinkingLevel : undefined) ??
-    DEFAULT_THINKING_LEVEL
-  const inferenceMode =
-    optionalString(input, 'inferenceMode') ?? (inheritsSameModel ? base?.inferenceMode : undefined)
-  // A dispatch always runs under a real permission tier: the one the agent
-  // named, the one the requesting thread already runs with, or the app default.
-  const permissionLevel: PermissionLevel =
-    resolvePermissionLevel(input['permissionLevel']) ?? base?.permissionLevel ?? 'auto_review'
-
-  const settings: ThreadSettings = {
-    harnessId,
-    providerId,
-    modelId,
-    accountId: account.id,
-    thinkingLevel,
-    ...(inferenceMode ? { inferenceMode: inferenceMode as ThreadSettings['inferenceMode'] } : {}),
-    ...(inheritsSameModel && base?.contextWindow !== undefined
-      ? { contextWindow: base.contextWindow }
-      : {}),
-    permissionLevel,
-    ovenId,
-    ...(ovenPath ? { ovenPath } : {})
-  }
+  // assistant's own row. The pawn tool resolves its target through the same
+  // function, so the two surfaces can never disagree about what a name means.
+  const target = await resolveDelegationTarget(delegationDeps(deps), {
+    projectId: assistant ? context.projectId : projectId,
+    ...(requestingThread?.settings ? { base: requestingThread.settings } : {}),
+    ...delegationFieldsFromInput(input)
+  })
+  const { harness, oven, catalog, model, account, accountLabel, settings } = target
+  const { harnessId, providerId, modelId, thinkingLevel } = settings
 
   const author = assistant ? delegationAuthor(assistant) : null
   const thread = await deps.createThread({
@@ -995,14 +893,14 @@ async function continueThread(
     thread.projectId === ASSISTANT_SPACE_ID ? context.projectId : thread.projectId
   let resolvedModel: ProviderModel | null = null
   if (modelChanged) {
-    let found = findCatalogModel(
+    let found = findDelegationModel(
       await deps.listProviderCatalogs(catalogProjectId),
       harnessId,
       providerId,
       modelId
     )
     if (!found) {
-      found = findCatalogModel(
+      found = findDelegationModel(
         await deps.refreshProviderCatalogs(catalogProjectId),
         harnessId,
         providerId,
@@ -1022,7 +920,7 @@ async function continueThread(
   const currentModel =
     modelChanged || namedThinking
       ? (resolvedModel ??
-        findCatalogModel(
+        findDelegationModel(
           await deps.listProviderCatalogs(catalogProjectId),
           harnessId,
           providerId,
@@ -1034,7 +932,7 @@ async function continueThread(
   const offered = offeredPresets?.map((preset) => preset.id)
   let thinkingLevel: ThinkingLevel = base.thinkingLevel
   if (namedThinking) {
-    const chosen = resolveThinkingLevel(input, offered)
+    const chosen = resolveDelegationThinkingLevel(parseThinkingLevel(namedThinking), offered)
     if (!chosen) throw new Error(`Unknown thinking level "${namedThinking}".`)
     thinkingLevel = chosen
   } else if (modelChanged) {
@@ -1045,16 +943,18 @@ async function continueThread(
       base.thinkingLevel
   }
 
-  const inferenceMode = namedInference ? resolveInferenceMode(namedInference) : base.inferenceMode
+  const inferenceMode = namedInference
+    ? resolveDelegationInferenceMode(namedInference)
+    : base.inferenceMode
   const permissionLevel: PermissionLevel =
-    resolvePermissionLevel(namedPermission) ?? base.permissionLevel
+    resolveDelegationPermissionLevel(namedPermission) ?? base.permissionLevel
 
   const accounts = await deps.listAccounts()
   const accountId = namedAccount
-    ? resolveAccount(accounts, harnessId, namedAccount).id
+    ? resolveDelegationAccount(accounts, harnessId, namedAccount).id
     : sameHarness && base.accountId
       ? base.accountId
-      : resolveAccount(accounts, harnessId, undefined).id
+      : resolveDelegationAccount(accounts, harnessId, undefined).id
   const accountLabel = accounts.find((candidate) => candidate.id === accountId)?.label ?? accountId
 
   const ovenId = namedOven ?? base.ovenId ?? LOCAL_OVEN_ID
@@ -1248,84 +1148,26 @@ async function resolveThread(
 }
 
 /**
- * The account a dispatch runs under.
+ * The shared resolver, wired to the workstation this engine owns.
  *
- * A named account must exist for the harness; an unnamed one falls back to the
- * account the app marks as default, and then to the harness default. The caller
- * is expected to have asked the user when the harness has no default and none
- * was named, so reaching the harness default here is a definite choice, never a
- * silent substitution between two real accounts.
+ * Every read it needs already exists on the orchestration deps, so the adapter is
+ * only the harness lookup: the registry plus the user's own ACP agents, which is
+ * the same pair a target list is built from.
  */
-function resolveAccount(
-  accounts: readonly HarnessAccount[],
-  harnessId: string,
-  accountId: string | undefined
-): HarnessAccount {
-  const forHarness = accounts.filter((account) => account.harnessId === harnessId)
-  if (accountId) {
-    const named = forHarness.find((account) => account.id === accountId)
-    if (!named) throw new Error(`Unknown account "${accountId}" for ${harnessId}.`)
-    return named
-  }
-  const preferred = forHarness.find((account) => account.isDefault === true) ?? forHarness[0]
-  if (preferred) return preferred
-  // A harness with no managed account still runs under its synthetic default,
-  // which is what the composer does when the picker has nothing to show.
+function delegationDeps(deps: OrchestrationDeps): DelegationTargetDeps {
   return {
-    id: `${harnessId}.default`,
-    harnessId,
-    providerId: '',
-    providerName: harnessId,
-    label: 'Default',
-    containerKind: 'legacy-default',
-    createdAt: 0,
-    updatedAt: 0
-  }
-}
-
-/** The named inference tier, validating the value the tool accepted. */
-function resolveInferenceMode(value: string): ThreadSettings['inferenceMode'] {
-  if (
-    !MODEL_PROFILE_INFERENCE_MODES.includes(value as NonNullable<ThreadSettings['inferenceMode']>)
-  ) {
-    throw new Error(
-      `Unknown inference mode "${value}". Use one of: ${MODEL_PROFILE_INFERENCE_MODES.join(', ')}.`
-    )
-  }
-  return value as NonNullable<ThreadSettings['inferenceMode']>
-}
-
-/** The named permission tier, or undefined when the caller did not name one. */
-function resolvePermissionLevel(value: unknown): PermissionLevel | undefined {
-  const named = stringValue(value)
-  if (!named) return undefined
-  if (!MODEL_PROFILE_PERMISSION_LEVELS.includes(named as PermissionLevel)) {
-    throw new Error(
-      `Unknown permission level "${named}". Use one of: ${MODEL_PROFILE_PERMISSION_LEVELS.join(', ')}.`
-    )
-  }
-  return named as PermissionLevel
-}
-
-/** The named thinking level, or the model's own default when it was omitted. */
-function resolveThinkingLevel(
-  input: Record<string, unknown>,
-  offered: readonly string[] | undefined
-): ThinkingLevel | undefined {
-  const named = optionalString(input, 'thinkingLevel')
-  if (named) {
-    if (offered && offered.length > 0 && !offered.includes(named)) {
-      throw new Error(
-        `This model does not offer the "${named}" thinking level. It offers: ${offered.join(', ')}.`
-      )
+    listProviderCatalogs: deps.listProviderCatalogs,
+    refreshProviderCatalogs: deps.refreshProviderCatalogs,
+    listAccounts: deps.listAccounts,
+    listOvens: deps.listOvens,
+    harnessInventory: deps.harnessInventory,
+    resolveHarness: async (harnessId) => {
+      const found =
+        listHarnesses().find((candidate) => candidate.id === harnessId) ??
+        acpHarnessDescriptors(await acpAgentsList()).find((candidate) => candidate.id === harnessId)
+      return found ? { id: found.id, name: found.name } : null
     }
-    return named as ThinkingLevel
   }
-  return resolveDefaultThinkingLevel(
-    offered?.map((id) => ({ id, label: id })),
-    undefined,
-    undefined
-  )
 }
 
 /**

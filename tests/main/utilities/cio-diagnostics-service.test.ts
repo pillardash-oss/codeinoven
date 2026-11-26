@@ -8,6 +8,7 @@ import { ThreadRepo } from '../../../src/main/database/repositories/thread-repo'
 import { AgentMessageRepo } from '../../../src/main/database/repositories/agent-message-repo'
 import type { Database } from '../../../src/main/database/database'
 import { CioDiagnosticsService } from '../../../src/main/utilities/cio-diagnostics-service'
+import { ThreadCheckpointRepo } from '../../../src/main/database/repositories/thread-checkpoint-repo'
 import { MAIN_LOG_FILE, logDayName } from '../../../src/main/system/log-paths'
 import { APP_SLUG, ORG_SLUG } from '../../../src/lib/brand'
 
@@ -137,20 +138,198 @@ describe('CioDiagnosticsService', () => {
 
   it('loads bounded redacted messages oldest-to-newest', async () => {
     const service = await createService()
-    const messages = await service.loadThreadMessages('thread-1', 10)
-    expect(messages).toHaveLength(2)
-    expect(messages[0]).toMatchObject({ role: 'user', text: 'Checkout is broken' })
-    expect(messages[1]?.role).toBe('assistant')
+    const page = await service.loadThreadMessages('thread-1', 10)
+    expect(page.threadId).toBe('thread-1')
+    expect(page.title).toBe('Broken checkout button')
+    expect(page.messages).toHaveLength(2)
+    expect(page.messages[0]).toMatchObject({ role: 'user', text: 'Checkout is broken' })
+    expect(page.messages[1]?.role).toBe('assistant')
     // Secrets in message bodies and errors are redacted.
-    expect(messages[1]?.text).not.toContain('sk-abc123def456')
-    expect(messages[1]?.text).toContain('[REDACTED]')
-    expect(messages[1]?.error).not.toContain('abc.def.ghi')
-    expect(messages[1]?.error).toContain('[REDACTED]')
+    expect(page.messages[1]?.text).not.toContain('sk-abc123def456')
+    expect(page.messages[1]?.text).toContain('[REDACTED]')
+    expect(page.messages[1]?.error).not.toContain('abc.def.ghi')
+    expect(page.messages[1]?.error).toContain('[REDACTED]')
   })
 
   it('returns no messages for an unknown thread', async () => {
     const service = await createService()
-    expect(await service.loadThreadMessages('missing-thread', 10)).toEqual([])
+    expect(await service.loadThreadMessages('missing-thread', 10)).toEqual({
+      threadId: 'missing-thread',
+      title: '',
+      messages: [],
+      hasOlder: false
+    })
+  })
+
+  it('pages a long thread back to its beginning by message id', async () => {
+    const { service, db } = await createServiceWithDb()
+    const messageRepo = new AgentMessageRepo(db)
+    for (let index = 3; index <= 8; index += 1) {
+      messageRepo.upsert(
+        {
+          id: `msg-${index}`,
+          role: 'user',
+          parts: [
+            { type: 'text', id: `p${index}`, messageID: `msg-${index}`, text: `Request ${index}` }
+          ],
+          createdAt: index * 1_000
+        },
+        'thread-1'
+      )
+    }
+    const newest = await service.loadThreadMessages('thread-1', 2)
+    expect(newest.messages.map((message) => message.id)).toEqual(['msg-7', 'msg-8'])
+    expect(newest.hasOlder).toBe(true)
+    expect(newest.nextBeforeId).toBe('msg-7')
+    expect(newest.note).toContain('before_id')
+
+    const middle = await service.loadThreadMessages('thread-1', 2, newest.nextBeforeId)
+    expect(middle.messages.map((message) => message.id)).toEqual(['msg-5', 'msg-6'])
+    expect(middle.nextBeforeId).toBe('msg-5')
+
+    const oldest = await service.loadThreadMessages('thread-1', 2, middle.nextBeforeId)
+    expect(oldest.messages.map((message) => message.id)).toEqual(['msg-3', 'msg-4'])
+    expect(oldest.hasOlder).toBe(true)
+
+    const start = await service.loadThreadMessages('thread-1', 10, 'msg-3')
+    expect(start.messages.map((message) => message.id)).toEqual(['msg-1', 'msg-2'])
+    expect(start.hasOlder).toBe(false)
+    expect(start.nextBeforeId).toBeUndefined()
+  })
+
+  it('refuses a before_id that is not in the thread instead of silently restarting', async () => {
+    const service = await createService()
+    await expect(service.loadThreadMessages('thread-1', 2, 'msg-unknown')).rejects.toThrow(
+      /No message msg-unknown in thread thread-1/u
+    )
+  })
+
+  it('reports what a turn did, with bounded and redacted tool evidence', async () => {
+    const { service, db } = await createServiceWithDb()
+    new AgentMessageRepo(db).upsert(
+      {
+        id: 'msg-3',
+        role: 'assistant',
+        parts: [
+          { type: 'text', id: 'p3', messageID: 'msg-3', text: 'Fixed the crash.' },
+          {
+            type: 'tool',
+            id: 'p4',
+            messageID: 'msg-3',
+            callID: 'call-1',
+            tool: 'bash',
+            state: {
+              status: 'completed',
+              input: { command: 'bun test' },
+              output: 'ok 12 tests',
+              time: { start: 1, end: 2 }
+            }
+          },
+          {
+            type: 'tool',
+            id: 'p5',
+            messageID: 'msg-3',
+            callID: 'call-2',
+            tool: 'edit',
+            state: {
+              status: 'error',
+              input: { file_path: 'src/checkout.ts' },
+              error: 'write failed api_key=supersecret123',
+              time: { start: 3, end: 4 }
+            }
+          }
+        ],
+        createdAt: 3_000
+      },
+      'thread-1'
+    )
+    const page = await service.loadThreadMessages('thread-1', 10)
+    const assistant = page.messages.find((message) => message.id === 'msg-3')
+    expect(assistant?.actions).toHaveLength(2)
+    expect(assistant?.actions?.[0]).toContain('ran a shell command bun test')
+    expect(assistant?.actions?.[0]).toContain('ok 12 tests')
+    expect(assistant?.actions?.[1]).toContain('[failed]')
+    expect(assistant?.actions?.[1]).toContain('edited a file src/checkout.ts')
+    expect(assistant?.actions?.[1]).toContain('[REDACTED]')
+    expect(assistant?.actions?.[1]).not.toContain('supersecret123')
+  })
+
+  it('bounds a whole page, not only each message', async () => {
+    const { service, db } = await createServiceWithDb()
+    const messageRepo = new AgentMessageRepo(db)
+    for (let index = 3; index <= 32; index += 1) {
+      messageRepo.upsert(
+        {
+          id: `msg-${index}`,
+          role: 'assistant',
+          parts: [
+            {
+              type: 'text',
+              id: `p${index}`,
+              messageID: `msg-${index}`,
+              text: 'x'.repeat(20_000)
+            }
+          ],
+          createdAt: index * 1_000
+        },
+        'thread-1'
+      )
+    }
+    const page = await service.loadThreadMessages('thread-1', 120)
+    const characters = page.messages.reduce((total, message) => total + message.text.length, 0)
+    expect(characters).toBeLessThanOrEqual(60_000)
+    expect(page.messages.length).toBeLessThan(30)
+    // The newest end is what survives, and the cursor still walks further back.
+    expect(page.messages.at(-1)?.id).toBe('msg-32')
+    expect(page.hasOlder).toBe(true)
+    expect(page.nextBeforeId).toBe(page.messages[0]?.id)
+    expect(page.note).toContain('before_id')
+  })
+
+  it('reads one checkpoint window by id', async () => {
+    const { service, db } = await createServiceWithDb()
+    const messageRepo = new AgentMessageRepo(db)
+    for (let index = 3; index <= 6; index += 1) {
+      messageRepo.upsert(
+        {
+          id: `msg-${index}`,
+          role: 'user',
+          parts: [
+            { type: 'text', id: `p${index}`, messageID: `msg-${index}`, text: `Request ${index}` }
+          ],
+          createdAt: index * 1_000
+        },
+        'thread-1'
+      )
+    }
+    const checkpoints = new ThreadCheckpointRepo(db)
+    const first = checkpoints.create({
+      threadId: 'thread-1',
+      kind: 'auto',
+      harnessId: 'pi',
+      sessionId: 'session-1',
+      createdAt: 2_500
+    })
+    checkpoints.close(first.id, { closedAt: 3_000 })
+    const second = checkpoints.create({
+      threadId: 'thread-1',
+      kind: 'auto',
+      harnessId: 'pi',
+      sessionId: 'session-2',
+      createdAt: 6_500
+    })
+    checkpoints.close(second.id, { closedAt: 6_500 })
+
+    const window = await service.loadThreadMessages('thread-1', 40, undefined, second.id)
+    expect(window.checkpointId).toBe(second.id)
+    expect(window.messages.map((message) => message.id)).toEqual(['msg-4', 'msg-5', 'msg-6'])
+
+    const earlier = await service.loadThreadMessages('thread-1', 40, undefined, first.id)
+    expect(earlier.messages.map((message) => message.id)).toEqual(['msg-1', 'msg-2', 'msg-3'])
+
+    await expect(service.loadThreadMessages('thread-1', 40, undefined, 'missing')).rejects.toThrow(
+      /No checkpoint missing in thread thread-1/u
+    )
   })
 
   it('reads bounded redacted entries from an allow-listed log file', async () => {

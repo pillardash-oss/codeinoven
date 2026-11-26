@@ -488,6 +488,17 @@ const windowBoundaryValidator = new PrivilegedIpcValidator({
 const storage = new StorageEngine()
 const windowStateService = new WindowStateService(storage)
 const database = new Database()
+// The daily whole-file integrity check reads every page of the database. Off the
+// click path is not the same as free, so the database layer is told when a person
+// is actually working and holds the probe back until nobody is: a window on
+// screen that holds focus, or any database traffic, keeps it waiting.
+database.setActivitySignal({
+  isUserActive: () =>
+    BrowserWindow.getAllWindows().some(
+      (window) =>
+        !window.isDestroyed() && window.isVisible() && !window.isMinimized() && window.isFocused()
+    )
+})
 
 const threadCreation = new ThreadCreationCoordinator()
 const threadDeletion = new ThreadDeletionCoordinator()

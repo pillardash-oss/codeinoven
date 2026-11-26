@@ -739,6 +739,24 @@ const PROVENANCE_MAX_CHECKPOINTS = 40
 const PROVENANCE_RECHECK_MS = 6 * 60 * 60 * 1000
 
 /**
+ * How far back the provenance pass looks for cards to fill in.
+ *
+ * The work this pass exists for is the turn that finished minutes ago whose
+ * tool calls were mirrored after its checkpoint settled. Reading a card from
+ * last month buys nothing and costs a full parse of its file maps: the candidate
+ * predicate is evaluated against the JSON of every row it considers, and on a
+ * long-lived install that is hundreds of megabytes the worker parses at launch
+ * and again every half hour (`SELECT ... WHERE json_extract(tc.data,'$.status')
+ * = 'completed'` measured 0.5-3.5 s a pass, 50 s in one day, each pass holding
+ * the one connection every click waits on). The age bound turns that scan into a
+ * few rows read through `idx_turn_checkpoints_created`.
+ *
+ * A card older than this keeps its honest "Detected" provenance. Nothing about
+ * the turn is lost, and a card is re-openable by any later read that heals it.
+ */
+const PROVENANCE_CANDIDATE_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000
+
+/**
  * Record which tool wrote each file on cards that only hold a detected diff.
  *
  * A card says `Edited` only when every file it lists was proven by a tool, so a
@@ -759,7 +777,8 @@ export async function backfillChangeProvenance(host: CheckpointMaintenanceHost):
     rows = await host.queryRows(
       `SELECT tc.turn_id AS turn_id, tc.project_id AS project_id, tc.thread_id AS thread_id
          FROM turn_checkpoints tc
-        WHERE json_extract(tc.data, '$.status') = 'completed'
+        WHERE tc.created_at >= ?
+          AND json_extract(tc.data, '$.status') = 'completed'
           AND json_array_length(json_extract(tc.data, '$.changes')) > 0
           AND (SELECT COUNT(*) FROM json_each(json_extract(tc.data, '$.changeSourceRefs')) je
                 WHERE json_array_length(je.value) > 0)
@@ -768,7 +787,11 @@ export async function backfillChangeProvenance(host: CheckpointMaintenanceHost):
                OR json_extract(tc.data, '$.provenanceCheckedAt') < ?)
         ORDER BY tc.created_at DESC
         LIMIT ?`,
-      [Date.now() - PROVENANCE_RECHECK_MS, PROVENANCE_MAX_CHECKPOINTS],
+      [
+        Date.now() - PROVENANCE_CANDIDATE_MAX_AGE_MS,
+        Date.now() - PROVENANCE_RECHECK_MS,
+        PROVENANCE_MAX_CHECKPOINTS
+      ],
       PROVENANCE_MAX_CHECKPOINTS
     )
   } catch (error) {

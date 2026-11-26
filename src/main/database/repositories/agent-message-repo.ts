@@ -46,13 +46,27 @@ function summarizeUserMessage(partsJson: string): { content: string; isAction: b
   }
 }
 
-/** Plain-text content of an agent message used for full-text search indexing. */
+/**
+ * Plain-text content of an agent message used for full-text search indexing.
+ *
+ * The corpus is deliberately the words the people in the conversation wrote:
+ * the user's request (text, or the presentation an app action produced) and the
+ * agent's own reply. Nothing else is searchable.
+ *
+ * Human search and the agent's `search_threads` read this same text, through
+ * FTS and through the embedding index, so what is good for one is good for the
+ * other: a person searches for what was said, never for the command that ran or
+ * the sub-agent that reported. Reasoning is excluded for the same reason as
+ * tool calls   it is working noise the conversation never actually showed, and
+ * indexing it made searches match text the user cannot see. Tool calls and
+ * results stay out permanently; an agent that needs them reads the mirror by
+ * thread id with `read_messages`, which returns them with the turn.
+ */
 export function partsToSearchText(parts: AgentPart[]): string {
   const chunks: string[] = []
   for (const part of parts) {
     switch (part.type) {
       case 'text':
-      case 'reasoning':
         if (part.text) chunks.push(part.text)
         break
       case 'question': {
@@ -63,13 +77,6 @@ export function partsToSearchText(parts: AgentPart[]): string {
       case 'user-presentation': {
         const { action, body } = part.presentation
         chunks.push(`${action}${body ? `\n${body}` : ''}`)
-        break
-      }
-      case 'subagent': {
-        const { activity } = part
-        if (activity.description) chunks.push(activity.description)
-        if (activity.prompt) chunks.push(activity.prompt)
-        if (activity.output) chunks.push(activity.output)
         break
       }
       default:
@@ -1160,6 +1167,59 @@ export class AgentMessageRepo {
       hasOlder,
       hasNewer
     }
+  }
+
+  /**
+   * The ordering key of one message in one thread, read on the worker.
+   *
+   * `read_messages` pages backwards from a message id the agent was handed, and
+   * resolving that id to its `(created_at, id)` cursor is a single primary-key
+   * seek on an interaction path (an agent's own read), so it goes through the
+   * worker like every other read there. An id that is not in the thread resolves
+   * to undefined, which the caller reports by name instead of silently paging
+   * from the newest message.
+   */
+  async messageCursorViaWorker(
+    threadId: string,
+    messageId: string
+  ): Promise<ThreadMessageCursor | undefined> {
+    const result = await this.db.queryViaWorker(
+      'SELECT created_at FROM agent_messages WHERE thread_id = ? AND id = ?',
+      [threadId, messageId],
+      1
+    )
+    if (!result.ok) throw new Error(result.error ?? 'Cannot read the message cursor')
+    const createdAt = result.rows[0]?.created_at
+    return typeof createdAt === 'number' ? { createdAt, id: messageId } : undefined
+  }
+
+  /**
+   * One checkpoint window's conversation, oldest-to-newest.
+   *
+   * A checkpoint covers everything written between the previous checkpoint and
+   * its own boundary, which is what `read_messages` answers with a
+   * `checkpoint_id`: "what did the window that ended at checkpoint 3 do". The
+   * mirror rows carry no per-session tag (the thread is the conversation), so
+   * the window is a time range, taken from the checkpoint rows themselves.
+   */
+  async loadCheckpointWindowViaWorker(
+    threadId: string,
+    fromExclusive: number,
+    toInclusive: number,
+    limit: number
+  ): Promise<AgentMessage[]> {
+    const result = await this.db.queryMessagesViaWorker(
+      `SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages
+        WHERE thread_id = ? AND session_id IS NULL
+          AND visibility IN ('conversation', 'working_trace')
+          AND created_at > ? AND created_at <= ?
+        ORDER BY created_at ASC, id ASC
+        LIMIT ?`,
+      [threadId, fromExclusive, toInclusive, Math.max(1, Math.trunc(limit))],
+      Math.max(1, Math.trunc(limit))
+    )
+    if (!result.ok) throw new Error(result.error ?? 'Cannot read the checkpoint window')
+    return result.messages
   }
 
   /**

@@ -366,6 +366,15 @@ export class ChatEngineState {
    */
   preservedAssignmentDraftSessions = new Map<string, ActiveAssignmentDraftSession>()
 
+  /**
+   * Why a draft run's last answer was rejected.
+   *
+   * A retry continues the failed session, so the model still has to be told what
+   * the validator refused about its previous answer; without this the same graph
+   * comes back and the same issues fail it again. Cleared when a draft lands.
+   */
+  assignmentDraftFailures = new Map<string, string>()
+
   /** Parent-thread session a draft run reports its card into, so it stays live. */
   assignmentDraftParentSessions = new Map<string, string>()
 

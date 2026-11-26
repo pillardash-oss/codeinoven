@@ -31,6 +31,7 @@ import { ASSIGNMENT_PLAN_SCHEMA } from '../../../lib/agent-tools'
 import { ChatEngineAssignmentDraftRun } from './chat-engine-assignment-draft-run'
 import { ensureFeatureSlug, featureArtifactDirectory } from '../../../lib/project-artifacts'
 import { parseGeneratedAssignmentContent } from '../../../lib/assignment/assignment-validation'
+import { assignmentRejectionBlock } from '../../../lib/assignment/assignment-draft-continuation'
 import type {
   AssignmentGenerationSource,
   CoordinatorHandoffQueue,
@@ -1048,8 +1049,8 @@ export class ChatEngineAssignment {
     return this.draftRun.request({
       ...input,
       ...(instructions === undefined ? {} : { instructions }),
-      generate: (projectId, coordinatorThreadId, settings, request) =>
-        this.generateAssignmentDraft(projectId, coordinatorThreadId, settings, request)
+      generate: (projectId, coordinatorThreadId, settings, request, rejected) =>
+        this.generateAssignmentDraft(projectId, coordinatorThreadId, settings, request, rejected)
     })
   }
 
@@ -1066,8 +1067,8 @@ export class ChatEngineAssignment {
   }): Promise<AssignmentDraftStart> {
     return this.draftRun.retry({
       ...input,
-      generate: (projectId, coordinatorThreadId, settings, request) =>
-        this.generateAssignmentDraft(projectId, coordinatorThreadId, settings, request),
+      generate: (projectId, coordinatorThreadId, settings, request, rejected) =>
+        this.generateAssignmentDraft(projectId, coordinatorThreadId, settings, request, rejected),
       persist: (content) => {
         const threadId = input.coordinatorThreadId
         return this.host.threadManager.getThread(input.projectId, threadId).then((thread) => {
@@ -1179,14 +1180,12 @@ export class ChatEngineAssignment {
     projectId: string,
     coordinatorThreadId: string,
     settings: ThreadSettings,
-    instructions?: string
+    instructions?: string,
+    rejected?: string
   ): Promise<AssignmentPlan> {
     projectId = validateEntityId(projectId, 'Project ID')
     coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
     settings = validateThreadSettings(settings)
-    if (settings.assignmentMode !== true) {
-      throw new Error('Assignment mode must be enabled to generate an Assignment.')
-    }
     const request =
       instructions === undefined
         ? undefined
@@ -1203,7 +1202,8 @@ export class ChatEngineAssignment {
       projectId,
       coordinatorThreadId,
       settings,
-      request
+      request,
+      rejected
     )
     this.host.state.activeAssignmentDraftRuns.set(key, task)
     void task.then(
@@ -1230,7 +1230,8 @@ export class ChatEngineAssignment {
     projectId: string,
     coordinatorThreadId: string,
     settings: ThreadSettings,
-    instructions?: string
+    instructions?: string,
+    rejected?: string
   ): Promise<AssignmentPlan> {
     const existing = this.host.state.assignmentEngine.getActive(projectId, coordinatorThreadId)
     if (existing) return existing
@@ -1258,7 +1259,8 @@ export class ChatEngineAssignment {
         coordinatorThreadId,
         settings,
         source,
-        instructions
+        instructions,
+        rejected
       )
       // The agent authored the draft while this run was generating, or the run was
       // cancelled: its content is the thread's draft and this result is thrown away
@@ -1386,7 +1388,8 @@ export class ChatEngineAssignment {
     coordinatorThreadId: string,
     settings: ThreadSettings,
     source: AssignmentGenerationSource,
-    instructions?: string
+    instructions?: string,
+    rejected?: string
   ): Promise<AssignmentPlanContent> {
     const driverId = settings.harnessId || DEFAULT_HARNESS
     const { driver, projectPath } = await this.host.resolve(
@@ -1409,6 +1412,10 @@ export class ChatEngineAssignment {
     // The specification branch reads the persisted spec by path; the
     // conversation branch has no spec to read, so the transcript is the only
     // authoritative scope and the model verifies it against the project.
+    // A model picked after a rejected answer never saw that refusal, so the
+    // validator's own words travel with the request. Without them the next draft
+    // repeats the graph that was refused and fails identically.
+    const rejection = assignmentRejectionBlock(rejected)
     const prompt =
       source.kind === 'spec'
         ? [
@@ -1421,6 +1428,7 @@ export class ChatEngineAssignment {
             )}`,
             `Open annotations on the specification:\n${formatOpenAnnotations(source.spec.annotations)}`,
             instructions ? `The user's request for this Assignment:\n${instructions}` : '',
+            rejection,
             transcript ? `Conversation context:\n${transcript}` : ''
           ]
             .filter(Boolean)
@@ -1428,6 +1436,7 @@ export class ChatEngineAssignment {
         : [
             CONVERSATION_ASSIGNMENT_INSTRUCTION,
             instructions ? `The user's request for this Assignment:\n${instructions}` : '',
+            rejection,
             transcript
               ? `Conversation context (authoritative scope):\n${transcript}`
               : 'Conversation context (authoritative scope):\n(none recorded)'

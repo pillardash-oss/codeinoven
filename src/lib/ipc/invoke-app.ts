@@ -1,6 +1,4 @@
 import type {
-  AgentModelSelection,
-  AgentRole,
   AppConfig,
   AppConfigPatch,
   AttachmentStorageScope,
@@ -58,10 +56,6 @@ export const invokeAppContract = {
   'config:get': {} as Contract<[], AppConfig>,
   'community:getIssueUrl': {} as Contract<[], string>,
   'config:update': {} as Contract<[patch: AppConfigPatch], AppConfig>,
-  'config:syncAgentRole': {} as Contract<
-    [role: AgentRole, selection: AgentModelSelection],
-    AppConfig
-  >,
   /** The engine's binary, its version, and the installer that manages it here. */
   'localAi:detect': {} as Contract<[runtime: LocalAiRuntimeId], LocalAiRuntimeStatus>,
   'localAi:unloadNow': {} as Contract<[], LocalAiUnloadResult>,

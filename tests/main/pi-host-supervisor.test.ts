@@ -476,30 +476,47 @@ describe('PiHostSupervisor', () => {
  * Where a new session lands, and how it gets home again.
  *
  * One host is the app's cheapest arrangement in RAM, so a second host is only
- * ever a loan against CPU pressure: it opens for new work while the CPU is busy,
- * and every session it borrowed resumes on the primary as soon as the same
- * reading says there is room.
+ * ever a loan against the primary host's own CPU: it opens while that process is
+ * spending a whole core on its sessions, and every session it borrowed resumes
+ * on the primary once the host has room again. The machine being busy is never
+ * the reason, because a second process cannot free a CPU that some other program
+ * is holding: it only adds one more process to the machine.
  */
 describe('PiHostSupervisor placement and rejoin', () => {
-  /** A reading that says the CPU is busy, so new work needs a process of its own. */
-  function busyCpu(): AdmissionDecision {
+  const GIGABYTE = 1024 ** 3
+
+  /** A host spending a whole core on its own sessions. */
+  const SATURATED = 98
+  /** What a hosted Pi session normally looks like. */
+  const IDLE_HOST = 1.2
+  /** A loaded host, still below the gate that opens another process. */
+  const BUSY_HOST = 70
+
+  /** A device short enough on memory that one more process would make it worse. */
+  function shortDevice(): AdmissionDecision {
     return decideAdmission({
       cpuAvailablePercent: 1,
-      memoryAvailableBytes: 6 * 1024 ** 3,
-      totalMemoryBytes: 32 * 1024 ** 3
+      memoryAvailableBytes: 0.2 * GIGABYTE,
+      totalMemoryBytes: 32 * GIGABYTE
     })
   }
 
-  /** A reading that says the device has room, so one host can carry everything. */
-  function roomy(): AdmissionDecision {
+  /** A device with memory to spare, so it never refuses a process of its own. */
+  function roomyDevice(): AdmissionDecision {
     return decideAdmission({
-      cpuAvailablePercent: 55,
-      memoryAvailableBytes: 6 * 1024 ** 3,
-      totalMemoryBytes: 32 * 1024 ** 3
+      cpuAvailablePercent: 1,
+      memoryAvailableBytes: 6 * GIGABYTE,
+      totalMemoryBytes: 32 * GIGABYTE
     })
   }
 
-  function harness(read: () => AdmissionDecision, rebalanceIntervalMs = 60_000) {
+  function harness(
+    readHostCpu: (pid: number) => number | null,
+    options: {
+      rebalanceIntervalMs?: number
+      readPressure?: () => Promise<AdmissionDecision>
+    } = {}
+  ) {
     const hosts: FakeHost[] = []
     const supervisor = new PiHostSupervisor(
       () => {
@@ -507,7 +524,11 @@ describe('PiHostSupervisor placement and rejoin', () => {
         hosts.push(host)
         return host.transport
       },
-      { readPressure: async () => read(), rebalanceIntervalMs }
+      {
+        readHostCpu,
+        readPressure: options.readPressure ?? (async () => roomyDevice()),
+        rebalanceIntervalMs: options.rebalanceIntervalMs ?? 60_000
+      }
     )
     return { supervisor, hosts }
   }
@@ -519,21 +540,33 @@ describe('PiHostSupervisor placement and rejoin', () => {
     })
   }
 
-  it('opens one temporary host for new work while the CPU is busy', async () => {
-    const { supervisor, hosts } = harness(busyCpu)
+  it('opens one temporary host while the primary host is saturated', async () => {
+    const asked: number[] = []
+    const { supervisor, hosts } = harness((pid) => {
+      asked.push(pid)
+      return SATURATED
+    })
     await create(supervisor, 'atlas')
     await create(supervisor, 'ledger')
-    // Both landed on the same temporary process: a loan against the CPU, not a
+    // Both landed on the same temporary process: a loan against the host, not a
     // host per thread, which is what would spend the RAM a single host saves.
     expect(hosts).toHaveLength(2)
     expect(supervisor.hostOf('atlas')).toBe(501)
     expect(supervisor.hostOf('ledger')).toBe(501)
     expect(supervisor.pid()).toBe(500)
+    // The reading is always about the process that would carry the work.
+    expect(asked[0]).toBe(500)
     supervisor.stop()
   })
 
-  it('keeps new work on the primary while the device has room', async () => {
-    const { supervisor, hosts } = harness(roomy)
+  /**
+   * The regression this arrangement exists for: a machine pegged by something
+   * else, with a host that is idle, opened a second host anyway and kept it. A
+   * session that is not spending a core of its own has nothing to gain from
+   * another process, and the machine has a process more to carry.
+   */
+  it('keeps new work on the primary while the machine is busy elsewhere', async () => {
+    const { supervisor, hosts } = harness(() => IDLE_HOST)
     await create(supervisor, 'atlas')
     await create(supervisor, 'ledger')
     expect(hosts).toHaveLength(1)
@@ -541,14 +574,40 @@ describe('PiHostSupervisor placement and rejoin', () => {
     expect(supervisor.hostOf('ledger')).toBe(500)
   })
 
-  it('rejoins both sessions into the primary once the device has room', async () => {
-    let reading = busyCpu
-    const { supervisor, hosts } = harness(() => reading())
+  it('keeps new work on the primary while the host is loaded but not saturated', async () => {
+    const { supervisor, hosts } = harness(() => BUSY_HOST)
+    await create(supervisor, 'atlas')
+    await create(supervisor, 'ledger')
+    expect(hosts).toHaveLength(1)
+  })
+
+  it('stays on the primary when no host reading arrives', async () => {
+    const { supervisor, hosts } = harness(() => null)
+    await create(supervisor, 'atlas')
+    await create(supervisor, 'ledger')
+    expect(hosts).toHaveLength(1)
+  })
+
+  it('refuses to open a host on a machine short on memory', async () => {
+    const { supervisor, hosts } = harness(() => SATURATED, {
+      readPressure: async () => shortDevice()
+    })
+    await create(supervisor, 'atlas')
+    await create(supervisor, 'ledger')
+    // A saturated host is a reason to open one, and a machine that cannot carry
+    // another process is the one thing that outranks it.
+    expect(hosts).toHaveLength(1)
+    expect(supervisor.hostOf('ledger')).toBe(500)
+  })
+
+  it('rejoins both sessions into the primary once the host has room', async () => {
+    let cpu = SATURATED
+    const { supervisor, hosts } = harness(() => cpu)
     await create(supervisor, 'atlas')
     await create(supervisor, 'ledger')
     expect(supervisor.hostOf('atlas')).toBe(501)
 
-    reading = roomy
+    cpu = IDLE_HOST
     await supervisor.rebalance()
 
     expect(supervisor.hostOf('atlas')).toBe(500)
@@ -565,14 +624,14 @@ describe('PiHostSupervisor placement and rejoin', () => {
   })
 
   it('leaves a session with a turn in flight on its temporary host', async () => {
-    let reading = busyCpu
-    const { supervisor, hosts } = harness(() => reading())
+    let cpu = SATURATED
+    const { supervisor, hosts } = harness(() => cpu)
     await create(supervisor, 'atlas')
     await create(supervisor, 'ledger')
     // A move is a resume, so picking up a session mid-answer would lose the turn.
     hosts[1]?.streaming.add('atlas')
 
-    reading = roomy
+    cpu = IDLE_HOST
     await supervisor.rebalance()
 
     expect(supervisor.hostOf('atlas')).toBe(501)
@@ -580,9 +639,14 @@ describe('PiHostSupervisor placement and rejoin', () => {
     expect(hosts[1]?.stopped).toBe(false)
   })
 
-  it('holds the temporary host while the CPU is still busy', async () => {
-    const { supervisor } = harness(busyCpu)
+  it('holds the temporary host while the primary host is still loaded', async () => {
+    let cpu = SATURATED
+    const { supervisor } = harness(() => cpu)
     await create(supervisor, 'atlas')
+
+    // Below the gate that opened it, but not roomy enough to hand back: draining
+    // here would only saturate the primary and open a host again next turn.
+    cpu = BUSY_HOST
     await supervisor.rebalance()
     expect(supervisor.hostOf('atlas')).toBe(501)
     supervisor.stop()
@@ -591,12 +655,12 @@ describe('PiHostSupervisor placement and rejoin', () => {
   it('drains the temporary host on its own once the reading clears', async () => {
     vi.useFakeTimers()
     try {
-      let reading = busyCpu
-      const { supervisor } = harness(() => reading(), 1000)
+      let cpu = SATURATED
+      const { supervisor } = harness(() => cpu, { rebalanceIntervalMs: 1000 })
       await create(supervisor, 'atlas')
       expect(supervisor.hostOf('atlas')).toBe(501)
 
-      reading = roomy
+      cpu = IDLE_HOST
       await vi.advanceTimersByTimeAsync(1000)
 
       expect(supervisor.hostOf('atlas')).toBe(500)

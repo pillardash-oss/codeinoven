@@ -55,10 +55,14 @@ export class UtilityOrchestrationServiceDiagnostics {
     if (action === 'read_messages') {
       const threadId = requiredString(input['thread_id'], 'thread_id', 128)
       const limit = typeof input['limit'] === 'number' ? input['limit'] : 40
-      return {
+      const beforeId = optionalString(input['before_id'], 128)
+      const checkpointId = optionalString(input['checkpoint_id'], 128)
+      return diagnostics.loadThreadMessages(
         threadId,
-        messages: await diagnostics.loadThreadMessages(threadId, limit)
-      }
+        limit,
+        beforeId || undefined,
+        checkpointId || undefined
+      )
     }
     if (action === 'read_log') {
       const file = requiredString(input['file'], 'file', 120)

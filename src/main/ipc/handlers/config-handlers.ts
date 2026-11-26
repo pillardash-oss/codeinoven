@@ -12,7 +12,6 @@ import type {
 } from '../../../lib/project-actions'
 import { validateBoolean, validateBoundedString, validateEntityId } from '../ipc-validation'
 import {
-  validateAgentModelSelection,
   validateAppConfigPatch,
   validateHeartbeatCreateInput,
   validateHeartbeatPatchInput,
@@ -23,12 +22,7 @@ import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { Logger } from '../../system/logger'
 import { sharedLocalAiRuntimeRegistry } from '../../local-ai/local-ai-runtime-registry'
 import { sendToRenderer } from '../renderer-delivery'
-import type {
-  AgentRole,
-  AppConfig,
-  LocalUsageClearInput,
-  LocalUsageRecordCounts
-} from '../../../lib/types'
+import type { AppConfig, LocalUsageClearInput, LocalUsageRecordCounts } from '../../../lib/types'
 
 /**
  * A single action save is a small JSON read and a small JSON write, so a save
@@ -39,8 +33,6 @@ import type {
  */
 const SLOW_PROJECT_ACTION_SAVE_MS = 1000
 import type { IpcHandlerContext } from './context'
-
-const AGENT_ROLES = new Set<AgentRole>(['seniorEngineer', 'worker', 'auditor'])
 
 /** Human label for each clearable store, used only in the purge log line. */
 const RECORD_STORE_LABELS: Record<LocalUsageClearInput['store'], string> = {
@@ -327,24 +319,6 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     }
     broadcastConfigChanged(config)
     return config
-  })
-  ipcMain.handle('config:syncAgentRole', async (_, role: unknown, selection: unknown) => {
-    if (typeof role !== 'string' || !AGENT_ROLES.has(role as AgentRole)) {
-      throw new TypeError('Invalid agent role')
-    }
-    const safeRole = role as AgentRole
-    const safeSelection = validateAgentModelSelection(selection, `${safeRole} thread model`)
-    const config = await storage.getConfig()
-    if (!config.agentDefaults.syncFromThreadChanges) return config
-    const updated: AppConfig = {
-      ...config,
-      agentDefaults: {
-        ...config.agentDefaults,
-        [safeRole]: safeSelection
-      }
-    }
-    await storage.saveConfig(updated)
-    return updated
   })
   ipcMain.handle('cioPrompts:list', () => storage.getCioPromptSettings())
   // The runtime text of one prompt, resolved the same way the agent gets it, so

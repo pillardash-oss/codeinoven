@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { SweepCoalescer } from '$lib/stores/queued-sweep-coalescer'
+import { CoalescedRun } from '$shared/coalesced-run'
 
 /** A scripted clock and scheduler, so a burst costs no real time. */
 function harness(intervalMs = 250): {
-  coalescer: SweepCoalescer
+  coalescer: CoalescedRun
   runs: number[]
   advance: (ms: number) => void
   pending: () => number
@@ -13,7 +13,7 @@ function harness(intervalMs = 250): {
   const timers = new Map<number, { at: number; handler: () => void }>()
   const runs: number[] = []
 
-  const coalescer = new SweepCoalescer({
+  const coalescer = new CoalescedRun({
     intervalMs,
     run: () => runs.push(now),
     now: () => now,
@@ -46,7 +46,7 @@ function harness(intervalMs = 250): {
   return { coalescer, runs, advance, pending: () => timers.size }
 }
 
-describe('SweepCoalescer', () => {
+describe('CoalescedRun', () => {
   it('runs the first notice of a quiet spell immediately', () => {
     const { coalescer, runs } = harness()
     coalescer.request()

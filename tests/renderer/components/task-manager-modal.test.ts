@@ -160,4 +160,23 @@ describe('task manager modal', () => {
     expect(document.body.textContent).toContain('4242')
     expect(document.body.textContent).toContain('Build the preview')
   })
+
+  it('makes the search toggle the footer default action', async () => {
+    render()
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('Demo')
+    })
+    // The modal focuses (and so highlights) its primary action on open, so
+    // search   not the pause toggle   must be the one it lands on.
+    const searchToggle = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-modal-footer] button')
+    ).find((button) =>
+      button.getAttribute('aria-label')?.startsWith('Search running processes by pid')
+    )
+    const pauseToggle = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-modal-footer] button')
+    ).find((button) => button.getAttribute('aria-label')?.startsWith('Pause automatic refresh'))
+    expect(searchToggle?.hasAttribute('data-modal-primary')).toBe(true)
+    expect(pauseToggle?.hasAttribute('data-modal-primary')).toBe(false)
+  })
 })

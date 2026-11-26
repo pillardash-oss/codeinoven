@@ -14,8 +14,8 @@ import { threadUnreadIntent } from '$lib/stores/thread-unread-intent'
 import {
   findEmptyNewThread,
   pinnedThreadSort,
-  splitTimelineThreads,
   threadSort,
+  threadStatusSort,
   threadVisitKey,
   workspaceState
 } from '$lib/stores/workspace.svelte'
@@ -36,6 +36,26 @@ import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import type { NewAssistantDraft } from '../../assistant/assistant-create'
 import type { Workspace } from './Workspace-board.svelte'
 import { BoardUnit } from '$lib/components/board-unit'
+
+/**
+ * The fields that decide a row's place inside a project strip.
+ *
+ * A strip has to be re-sorted only when one of these moves, so this is what the
+ * list index compares between passes: an activity stamp, a read flag or a title
+ * change leaves the order exactly where it was, and the strip keeps the array it
+ * already had (so its rows are not rebuilt either).
+ */
+function threadOrderSignature(thread: Thread, draftKeys: ReadonlySet<string>): string {
+  return [
+    thread.id,
+    thread.status,
+    thread.bookmarked ? 1 : 0,
+    thread.pinned ? 1 : 0,
+    thread.sortOrder ?? -1,
+    thread.lastActivity,
+    draftKeys.has(threadVisitKey(thread)) ? 1 : 0
+  ].join(':')
+}
 /** One concern of the Workspace board. */
 export class WorkspaceMarkThreadReadAndApply extends BoardUnit<Workspace> {
   constructor(root: Workspace) {
@@ -94,25 +114,106 @@ export class WorkspaceMarkThreadReadAndApply extends BoardUnit<Workspace> {
 
   // ─── Derived ─────────────────────────────────────────────────────────────
 
-  pinnedThreads = $derived(
-    this.root.createThreadInProject.allThreads
-      .filter(
-        (t) =>
-          t.pinned &&
-          !t.archived &&
-          t.projectId !== INBOX_PROJECT_ID &&
-          // Assistant tasks live only in Assistant View: a pinned assistant
-          // thread (every assistant's knowledge thread is pinned) must never surface
-          // in the Projects sidebar's pinned section.
-          t.projectId !== ASSISTANT_SPACE_ID
-      )
-      .sort((a, b) => pinnedThreadSort(a, b, this.draftThreadKeys))
-  )
+  /**
+   * Every thread list the workspace draws, built in one pass over the threads.
+   *
+   * Seven separate derivations each walked the whole list and sorted their own
+   * slice, and the list changed identity several times per created or updated
+   * thread, so a single new thread re-filtered and re-sorted every project's
+   * rows two to four times over. One pass now collects the rows each list needs,
+   * sorts the activity-ordered ones once, and re-sorts only the projects whose
+   * membership or position actually moved (the rest keep the array they had, so
+   * their rows are not rebuilt either).
+   */
+  threadLists = $derived.by(() => {
+    const draftKeys = this.draftThreadKeys
+    const byProject = new SvelteMap<string, Thread[]>()
+    // Plain maps: the grouping and the per-project memo are working state for
+    // this one pass, never read reactively, so a signal behind them would only
+    // invalidate the lists they build.
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const grouped = new Map<string, Thread[]>()
+    const pinned: Thread[] = []
+    const pinnedInbox: Thread[] = []
+    const standalone: Thread[] = []
+    const timelinePinned: Thread[] = []
+    const timelineListed: Thread[] = []
+    const timelineAll: Thread[] = []
+
+    for (const thread of this.root.createThreadInProject.allThreads) {
+      // A project strip holds the rows the folder draws: not archived, and not
+      // one of the plain pins that live in the Pinned section instead. A
+      // bookmarked row stays in its project's strip at the head of it.
+      if (!thread.archived && !(thread.pinned && !thread.bookmarked)) {
+        const rows = grouped.get(thread.projectId)
+        if (rows === undefined) grouped.set(thread.projectId, [thread])
+        else rows.push(thread)
+      }
+      if (thread.archived) continue
+      if (thread.projectId === INBOX_PROJECT_ID) {
+        // Chats: pinned ones open the column, the rest follow by activity.
+        if (thread.pinned) pinnedInbox.push(thread)
+        else standalone.push(thread)
+        continue
+      }
+      // Assistant tasks are Assistant View's own rows, never the timeline's.
+      if (thread.projectId === ASSISTANT_SPACE_ID) continue
+      if (thread.pinned && !thread.bookmarked) {
+        pinned.push(thread)
+        continue
+      }
+      timelineAll.push(thread)
+      if (!threadProjectFilterState.matches(thread.projectId)) continue
+      if (thread.pinned) timelinePinned.push(thread)
+      else timelineListed.push(thread)
+    }
+
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const projectLists = new Map<string, { signature: string; list: Thread[] }>()
+    for (const [projectId, rows] of grouped) {
+      const signature = rows.map((row) => threadOrderSignature(row, draftKeys)).join('|')
+      const cached = this.projectListCache.get(projectId)
+      const list =
+        cached !== undefined && cached.signature === signature
+          ? cached.list
+          : rows.sort((a, b) => threadSort(a, b, draftKeys))
+      projectLists.set(projectId, { signature, list })
+      byProject.set(projectId, list)
+    }
+    this.projectListCache = projectLists
+
+    pinned.sort((a, b) => pinnedThreadSort(a, b, draftKeys))
+    pinnedInbox.sort((a, b) => pinnedThreadSort(a, b, draftKeys))
+    standalone.sort((a, b) => threadSort(a, b, draftKeys))
+    timelinePinned.sort((a, b) => pinnedThreadSort(a, b, draftKeys))
+    timelineListed.sort((a, b) => threadStatusSort(a, b, draftKeys))
+
+    return {
+      byProject,
+      pinned,
+      pinnedInbox,
+      standalone,
+      timeline: { pinned: timelinePinned, statusListed: timelineListed },
+      timelineAll
+    }
+  })
+
+  /**
+   * Sorted project strips, reused while a project's rows have not moved.
+   *
+   * Plain, not a SvelteMap: this is the memo the derivation reads, nothing on
+   * screen derives from it, and a signal behind it would invalidate the very
+   * lists it serves.
+   */
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  private projectListCache = new Map<string, { signature: string; list: Thread[] }>()
+
+  pinnedThreads = $derived(this.threadLists.pinned)
 
   pinnedProjects = $derived(this.root.mergeThreadsInList.visibleProjects.filter((p) => p.pinned))
 
   // ─── Assistant space ──────────────────────────────────────────────────────
-  /** The hidden assistant container (assistant tasks live here). */
+  /** The hidden assistant container (assistant tasks live there). */
   assistantProject = $derived(
     this.root.createThreadInProject.projects.find((project) => project.id === ASSISTANT_SPACE_ID) ??
       null
@@ -126,65 +227,22 @@ export class WorkspaceMarkThreadReadAndApply extends BoardUnit<Workspace> {
       .sort((a, b) => b.lastActivity - a.lastActivity)
   )
 
-  threadsByProject = $derived.by(() => {
-    const map = new SvelteMap<string, Thread[]>()
-    for (const t of this.root.createThreadInProject.allThreads) {
-      // Bookmarks stay in their project's strip in Projects view. Other pinned
-      // threads live exclusively in the Pinned section.
-      if (t.archived || (t.pinned && !t.bookmarked)) continue
-      const list = map.get(t.projectId) ?? []
-      list.push(t)
-      map.set(t.projectId, list)
-    }
-    // Working threads first, then by activity
-    for (const list of map.values()) {
-      list.sort((a, b) => threadSort(a, b, this.draftThreadKeys))
-    }
-    return map
-  })
+  threadsByProject = $derived(this.threadLists.byProject)
 
   /** Pinned standalone chats (inbox project), ordered newest-pinned first. */
-  pinnedInboxThreads = $derived(
-    this.root.createThreadInProject.allThreads
-      .filter((t) => t.projectId === INBOX_PROJECT_ID && !t.archived && t.pinned)
-      .sort((a, b) => pinnedThreadSort(a, b, this.draftThreadKeys))
-  )
+  pinnedInboxThreads = $derived(this.threadLists.pinnedInbox)
 
   /** Non-pinned standalone chats (inbox project), working first then by activity. */
-  standaloneThreads = $derived(
-    this.root.createThreadInProject.allThreads
-      .filter((t) => t.projectId === INBOX_PROJECT_ID && !t.archived && !t.pinned)
-      .sort((a, b) => threadSort(a, b, this.draftThreadKeys))
-  )
+  standaloneThreads = $derived(this.threadLists.standalone)
 
   /** Threads mode: the filtered active threads as the two lists the timeline
    *  renders   the pinned rows that open the view, then every row that carries
    *  its own status, ordered by status and then by the row's own place in it. An
    *  empty project-filter selection means all projects. */
-  timelineLists = $derived.by(() =>
-    splitTimelineThreads(
-      this.root.createThreadInProject.allThreads.filter(
-        (t) =>
-          !t.archived &&
-          t.projectId !== INBOX_PROJECT_ID &&
-          // Assistant tasks are Assistant View's own rows, never the Threads
-          // timeline's, so a pinned knowledge thread cannot appear among them.
-          t.projectId !== ASSISTANT_SPACE_ID &&
-          threadProjectFilterState.matches(t.projectId)
-      ),
-      this.draftThreadKeys
-    )
-  )
+  timelineLists = $derived(this.threadLists.timeline)
 
   /** Every thread the Threads timeline lists, before its project filter. */
-  timelineThreads = $derived(
-    this.root.createThreadInProject.allThreads.filter(
-      (thread) =>
-        !thread.archived &&
-        thread.projectId !== INBOX_PROJECT_ID &&
-        thread.projectId !== ASSISTANT_SPACE_ID
-    )
-  )
+  timelineThreads = $derived(this.threadLists.timelineAll)
 
   /**
    * Whether the active view's left sidebar has anything to show.

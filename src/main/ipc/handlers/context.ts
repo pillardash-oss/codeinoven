@@ -169,6 +169,7 @@ export type IpcChatEngine = Pick<
       | 'setAssignmentWorkerScopeProvisioner'
       | 'refreshSensitiveFilePermissions'
       | 'gitHeadCommit'
+      | 'readOpenDigest'
     >
   >
 

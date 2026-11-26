@@ -109,6 +109,19 @@ describe('live floating panel controller', () => {
       true
     )
   })
+  it('sends nothing for an update that repeats the geometry it already has', async () => {
+    await open()
+    const updates = (): number =>
+      bridge.invoke.mock.calls.filter(([channel]) => channel === 'app:updateFloatingPanel').length
+    const sent = updates()
+    expect(sent).toBeGreaterThan(0)
+    // A re-render, not a move: the content's text changed under a window that is
+    // already exactly where it belongs.
+    panel.update(true, true, { ...bounds })
+    await vi.advanceTimersByTimeAsync(40)
+
+    expect(updates()).toBe(sent)
+  })
   it('restores the original node and releases the native window on disposal', async () => {
     await open()
     release()

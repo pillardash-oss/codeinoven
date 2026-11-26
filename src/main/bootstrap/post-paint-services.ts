@@ -913,6 +913,15 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   }
   await loadProjectWorkRoots(database)
   state.directoryPreviewService = new DirectoryPreviewService()
+  // The in-app browser only navigates http(s), and a chat's own folder has no
+  // server, so a page a chat wrote had no URL to open. The same loopback preview
+  // server design and video already use now also serves a conversation's mount
+  // root, which is what makes `preview` on cio:browser work in a chat.
+  state.browserService?.attachWorkspacePreview({
+    resolveMountRoot: (projectId, scopeBucketId, threadId) =>
+      projectFilesService.resolveMountRoot(projectId, scopeBucketId, threadId),
+    openPreview: (root) => state.directoryPreviewService!.open(root)
+  })
   state.chatEngine.setPrototypePreviewRegistrar(
     (previewSlug, canonicalRoot) =>
       state.prototypePreviewService?.register(previewSlug, canonicalRoot) ?? Promise.resolve()

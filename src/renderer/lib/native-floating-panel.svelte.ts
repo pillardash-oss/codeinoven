@@ -14,6 +14,11 @@ import {
 import NativeFloatingEventRoot from '$lib/components/ui/NativeFloatingEventRoot.svelte'
 import { terminalEntryForHost } from '$lib/terminal/host-registry'
 
+/** Whether a geometry report asks for the window the host already has. */
+function sameBounds(a: NativeFloatingPanelBounds, b: NativeFloatingPanelBounds): boolean {
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+}
+
 /** Hosts the original component tree, not an inert copy of editor/terminal markup. */
 export class NativeFloatingPanel {
   live = $state(false)
@@ -71,11 +76,16 @@ export class NativeFloatingPanel {
 
   update(enabled: boolean, visible: boolean, bounds: NativeFloatingPanelBounds): void {
     const visibilityChanged = this.visible !== visible
+    const modeChanged = this.enabled !== enabled
+    const geometryChanged = !sameBounds(this.bounds, bounds)
     this.enabled = enabled
     this.visible = visible
     this.bounds = bounds
     if (visibilityChanged) this.focusPending = visible
     if (!enabled) {
+      // Off, and it was already off: the host is restored and its window hidden,
+      // so a caller repeating the same request has nothing left to send.
+      if (!modeChanged) return
       this.restore()
       void this.hide()
       return
@@ -89,7 +99,14 @@ export class NativeFloatingPanel {
       }
       return
     }
-    if (!this.live) this.moveIntoHost()
+    const adopting = !this.live
+    if (adopting) this.moveIntoHost()
+    // A request that changed nothing has nothing to publish. This is what keeps a
+    // re-rendered effect from costing an IPC per keystroke in the field it draws
+    // over: the content's own changes are followed by the host's mutation
+    // observer and by the measured size, and the window it sits in is already
+    // exactly where it belongs.
+    if (!adopting && !modeChanged && !visibilityChanged && !geometryChanged) return
     this.schedule(visibilityChanged)
   }
 

@@ -1135,7 +1135,6 @@
             onApprove={board.submitSpecDecision.approveAssignment}
             onOpenInEditor={board.unmirroredTraceStartTime.openAssignmentInEditor}
             onRevealInAppFile={board.composerScope.revealAssignmentInAppFile}
-            onWorkerModelChange={(selection) => board.sources.syncAgentRole('worker', selection)}
             onSeniorModelChange={board.sources.updateAssignmentSeniorModel}
             onPhaseModelChange={board.submitSpecDecision.updateAssignmentPhaseModel}
             onTaskModelChange={board.submitSpecDecision.updateAssignmentTaskModel}

@@ -317,17 +317,9 @@ describe('AssignmentEngine', () => {
     expect(Array.isArray(persistedDefaultNames)).toBe(true)
     expect(persistedDefaultNames).toContain('aaron')
     await storage.saveCustomWorkerNames(['zipporah'])
-    await storage.saveConfig({
-      ...(await storage.getConfig()),
-      agentDefaults: {
-        syncFromThreadChanges: false,
-        worker: {
-          harnessId: 'opencode',
-          providerId: 'anthropic',
-          modelId: 'claude-sonnet'
-        }
-      }
-    })
+    // A worker no longer has a global default to inherit: the task's own model is
+    // the only thing that can replace the coordinator's harness, account and model.
+    await storage.saveConfig(await storage.getConfig())
 
     const selectedModel = {
       harnessId: 'opencode',

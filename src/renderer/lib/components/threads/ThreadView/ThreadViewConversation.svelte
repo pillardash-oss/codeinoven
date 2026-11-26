@@ -46,7 +46,6 @@
   import InlineImageFigure from '../InlineImageFigure.svelte'
   import CitedEntryCard from '../CitedEntryCard.svelte'
   import type { CitedEntry } from '$shared/cited-work'
-  import RunChangesCard from '../RunChangesCard.svelte'
   import AuditGeneratedCard from '../AuditGeneratedCard.svelte'
   import DeferredMarkdownView from '../../markdown/DeferredMarkdownView.svelte'
   import FileCitationContextMenu from '../../markdown/FileCitationContextMenu.svelte'
@@ -1297,26 +1296,31 @@
                   {/if}
                   {#if !board.props.chatMode && turnCheckpoint && turnCheckpoint.changes.length > 0 && (board.pollStreamParts.transcriptIndex.checkpointCard[absIndex] ?? false)}
                     <div class="mt-3">
-                      <RunChangesCard
-                        checkpoint={turnCheckpoint}
-                        projectId={board.handleAgentEvent.thread.projectId}
-                        threadId={board.handleAgentEvent.thread.id}
-                        cited={citedForCard(absIndex)}
-                        onRevealFile={(path) =>
-                          board.unmirroredTraceStartTime.revealCheckpointFile(
-                            turnCheckpoint.id,
-                            path
-                          )}
-                        onOpenFile={(path) =>
-                          void board.unmirroredTraceStartTime.openCheckpointFile(
-                            turnCheckpoint.id,
-                            path
-                          )}
-                        onReview={() =>
-                          board.unmirroredTraceStartTime.reviewCheckpoint(turnCheckpoint.id)}
-                        onUndo={() => board.abortRun.undoCheckpoint(turnCheckpoint)}
-                        onRedo={() => board.abortRun.redoCheckpoint(turnCheckpoint)}
-                      />
+                      <!-- The run's change card only exists once a run has settled
+                           with changes to show, so it loads when that happens
+                           instead of riding the first screen. -->
+                      {#await loadCachedPanelModule('module:lib/components/threads/RunChangesCard.svelte', () => import('../RunChangesCard.svelte')) then { default: RunChangesCard }}
+                        <RunChangesCard
+                          checkpoint={turnCheckpoint}
+                          projectId={board.handleAgentEvent.thread.projectId}
+                          threadId={board.handleAgentEvent.thread.id}
+                          cited={citedForCard(absIndex)}
+                          onRevealFile={(path) =>
+                            board.unmirroredTraceStartTime.revealCheckpointFile(
+                              turnCheckpoint.id,
+                              path
+                            )}
+                          onOpenFile={(path) =>
+                            void board.unmirroredTraceStartTime.openCheckpointFile(
+                              turnCheckpoint.id,
+                              path
+                            )}
+                          onReview={() =>
+                            board.unmirroredTraceStartTime.reviewCheckpoint(turnCheckpoint.id)}
+                          onUndo={() => board.abortRun.undoCheckpoint(turnCheckpoint)}
+                          onRedo={() => board.abortRun.redoCheckpoint(turnCheckpoint)}
+                        />
+                      {/await}
                     </div>
                   {/if}
 
@@ -1337,26 +1341,28 @@
                         changes: steeredChanges
                       }}
                       <div class="mt-3">
-                        <RunChangesCard
-                          checkpoint={steeredCheckpoint}
-                          projectId={board.handleAgentEvent.thread.projectId}
-                          threadId={board.handleAgentEvent.thread.id}
-                          steered
-                          onRevealFile={(path) =>
-                            board.unmirroredTraceStartTime.revealCheckpointFile(
-                              turnCheckpoint.id,
-                              path
-                            )}
-                          onOpenFile={(path) =>
-                            void board.unmirroredTraceStartTime.openCheckpointFile(
-                              turnCheckpoint.id,
-                              path
-                            )}
-                          onReview={() =>
-                            board.unmirroredTraceStartTime.reviewCheckpoint(turnCheckpoint.id)}
-                          onUndo={() => board.abortRun.undoCheckpoint(turnCheckpoint)}
-                          onRedo={() => board.abortRun.redoCheckpoint(turnCheckpoint)}
-                        />
+                        {#await loadCachedPanelModule('module:lib/components/threads/RunChangesCard.svelte', () => import('../RunChangesCard.svelte')) then { default: RunChangesCard }}
+                          <RunChangesCard
+                            checkpoint={steeredCheckpoint}
+                            projectId={board.handleAgentEvent.thread.projectId}
+                            threadId={board.handleAgentEvent.thread.id}
+                            steered
+                            onRevealFile={(path) =>
+                              board.unmirroredTraceStartTime.revealCheckpointFile(
+                                turnCheckpoint.id,
+                                path
+                              )}
+                            onOpenFile={(path) =>
+                              void board.unmirroredTraceStartTime.openCheckpointFile(
+                                turnCheckpoint.id,
+                                path
+                              )}
+                            onReview={() =>
+                              board.unmirroredTraceStartTime.reviewCheckpoint(turnCheckpoint.id)}
+                            onUndo={() => board.abortRun.undoCheckpoint(turnCheckpoint)}
+                            onRedo={() => board.abortRun.redoCheckpoint(turnCheckpoint)}
+                          />
+                        {/await}
                       </div>
                     {/if}
                   {/if}
