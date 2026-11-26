@@ -9,6 +9,11 @@ import { ThreadOrderSettle } from '$lib/components/workspace/thread-order-settle
 const RETRY_PAUSE_SETTLE_MS = 4000
 /** The recency quiet window, which a retry hold must not be mistaken for. */
 const QUIET_MS = 450
+/**
+ * How long a row that moved down on its own activity keeps the slot it had, so a
+ * drop that is coming straight back never shows.
+ */
+const DESCENT_HOLD_MS = 1500
 
 function makeThread(id: string, status: ThreadStatus = 'executing'): Thread {
   return {
@@ -179,23 +184,6 @@ describe('thread order settle: retry wait', () => {
     expect(rows(settle, resumed)).toEqual(['b', 'a', 'c'])
   })
 
-  it('commits a thread settling into Done at once, retry held or not', () => {
-    const settle = new ThreadOrderSettle()
-    const a = makeThread('a')
-    const b = makeThread('b')
-    const c = makeThread('c')
-    settle.sync('threads', [a, b, c])
-
-    settle.sync('threads', [makeThread('b', 'working-paused'), a, c])
-
-    // A done thread sinks while the retry is still waiting: that is a real move
-    // and commits at once, carrying the retry with it.
-    const settled = [a, c, makeThread('b', 'completed')]
-    settle.sync('threads', settled)
-    expect(rows(settle, settled)).toEqual(['a', 'c', 'b'])
-    expect(vi.getTimerCount()).toBe(0)
-  })
-
   it('commits a read change and a row leaving at once', () => {
     const settle = new ThreadOrderSettle()
     const a = makeThread('a')
@@ -225,5 +213,98 @@ describe('thread order settle: retry wait', () => {
     expect(rows(settle, ticked)).toEqual(['a', 'b'])
     vi.advanceTimersByTime(QUIET_MS)
     expect(rows(settle, ticked)).toEqual(['b', 'a'])
+  })
+})
+
+/**
+ * A row that moves down on its own activity - a thread settling into Done, a
+ * draft that was just sent away - is the move a running thread undoes a moment
+ * later by starting its next turn. These pin the promise instead: the descent
+ * waits out its window, so a drop that is coming straight back never shows, and
+ * only a descent that lasts is drawn at all.
+ */
+describe('thread order settle: descent', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('holds a thread settling into Done, and shows nothing when it resumes', () => {
+    const settle = new ThreadOrderSettle()
+    const a = makeThread('a')
+    const b = makeThread('b')
+    const c = makeThread('c')
+    settle.sync('threads', [a, b, c])
+    expect(rows(settle, [a, b, c])).toEqual(['a', 'b', 'c'])
+
+    // The thread finishes and sinks below the two rows that were under it.
+    const settled = [a, c, makeThread('b', 'completed')]
+    settle.sync('threads', settled)
+    expect(rows(settle, settled)).toEqual(['a', 'b', 'c'])
+    expect(vi.getTimerCount()).toBe(1)
+
+    // The next turn starts inside the window, so the drop is never drawn: the
+    // row rises from the slot it still holds and the held move is dropped.
+    vi.advanceTimersByTime(DESCENT_HOLD_MS - 1)
+    expect(rows(settle, settled)).toEqual(['a', 'b', 'c'])
+
+    const resumed = [makeThread('b', 'executing'), a, c]
+    settle.sync('threads', resumed)
+    expect(rows(settle, resumed)).toEqual(['b', 'a', 'c'])
+    expect(vi.getTimerCount()).toBe(0)
+
+    vi.advanceTimersByTime(DESCENT_HOLD_MS * 2)
+    expect(rows(settle, resumed)).toEqual(['b', 'a', 'c'])
+  })
+
+  it('commits a descent that lasts the whole window', () => {
+    const settle = new ThreadOrderSettle()
+    const a = makeThread('a')
+    const b = makeThread('b')
+    const c = makeThread('c')
+    settle.sync('threads', [a, b, c])
+
+    const settled = [a, c, makeThread('b', 'completed')]
+    settle.sync('threads', settled)
+    expect(rows(settle, settled)).toEqual(['a', 'b', 'c'])
+    expect(vi.getTimerCount()).toBe(1)
+
+    // Nothing brought the row back, so the drop is a real placement and lands
+    // when the window is over.
+    vi.advanceTimersByTime(DESCENT_HOLD_MS + 1)
+    expect(rows(settle, settled)).toEqual(['a', 'c', 'b'])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('commits a drop the reader made at once, in either direction', () => {
+    const settle = new ThreadOrderSettle()
+    const a = makeThread('a')
+    const b = makeThread('b')
+    settle.sync('threads', [a, b])
+
+    // `a` was dragged below `b`: the manual anchor changed, so this is the
+    // reader's placement, not a descent to hold.
+    const dragged = [b, { ...a, sortOrder: 1 }]
+    settle.sync('threads', dragged)
+    expect(rows(settle, dragged)).toEqual(['b', 'a'])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('commits at once when another row rises in the same pass', () => {
+    const settle = new ThreadOrderSettle()
+    const a = makeThread('a')
+    const b = makeThread('b')
+    const c = makeThread('c')
+    settle.sync('threads', [a, b, c])
+
+    // A neighbour's activity lifts it over the settling row: the rise is what a
+    // reader has to see now, so the pass commits and carries the descent.
+    const mixed = [makeThread('c', 'completed'), a, makeThread('b', 'completed')]
+    settle.sync('threads', mixed)
+    expect(rows(settle, mixed)).toEqual(['c', 'a', 'b'])
   })
 })
