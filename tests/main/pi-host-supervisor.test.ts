@@ -16,6 +16,8 @@ class FakeHost {
   /** Leave `compact` in flight, so a checkpoint's timeout behaviour is testable. */
   holdCompactions = false
   /** Sessions that report a turn in flight, so a rejoin cannot pick them up. */
+  /** Refuse a create, the way a host that cannot open the session answers. */
+  refuseCreates = false
   readonly streaming = new Set<string>()
   readonly transport: HostTransport
   #listeners: ((line: string) => void)[] = []
@@ -63,12 +65,16 @@ class FakeHost {
   }
 
   #answer(request: HostRequestEnvelope): void {
-    const reply = (data: unknown): void => {
-      const line = JSON.stringify({ type: 'response', id: request.id, ok: true, data })
+    const reply = (data: unknown, ok = true, error?: string): void => {
+      const line = JSON.stringify({ type: 'response', id: request.id, ok, error, data })
       for (const listener of this.#listeners) listener(line)
     }
     switch (request.command.type) {
       case 'create_session':
+        if (this.refuseCreates) {
+          reply(undefined, false, 'create refused')
+          return
+        }
         this.#sessions.add(String(request.sessionId))
         reply(this.state(String(request.sessionId)))
         return
@@ -514,7 +520,10 @@ describe('PiHostSupervisor placement and rejoin', () => {
     readHostCpu: (pid: number) => number | null,
     options: {
       rebalanceIntervalMs?: number
+      maxSessionsPerHost?: number
       readPressure?: () => Promise<AdmissionDecision>
+      /** Configure each host the moment the supervisor starts it. */
+      configure?: (host: FakeHost) => void
     } = {}
   ) {
     const hosts: FakeHost[] = []
@@ -522,12 +531,14 @@ describe('PiHostSupervisor placement and rejoin', () => {
       () => {
         const host = new FakeHost(500 + hosts.length)
         hosts.push(host)
+        options.configure?.(host)
         return host.transport
       },
       {
         readHostCpu,
         readPressure: options.readPressure ?? (async () => roomyDevice()),
-        rebalanceIntervalMs: options.rebalanceIntervalMs ?? 60_000
+        rebalanceIntervalMs: options.rebalanceIntervalMs ?? 60_000,
+        maxSessionsPerHost: options.maxSessionsPerHost ?? 8
       }
     )
     return { supervisor, hosts }
@@ -719,6 +730,30 @@ describe('PiHostSupervisor placement and rejoin', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('stops a host whose session never arrived', async () => {
+    const { supervisor, hosts } = harness(() => IDLE_HOST, {
+      maxSessionsPerHost: 1,
+      // Every process the supervisor opens after the first one refuses the create
+      // it was started for, which is what a host that cannot open the session
+      // does.
+      configure: (host) => {
+        if (host.transport.pid > 500) host.refuseCreates = true
+      }
+    })
+    await create(supervisor, 'atlas')
+    expect(hosts).toHaveLength(1)
+    expect(supervisor.hostOf('atlas')).toBe(500)
+
+    // The primary already carries the one session it may carry, so this create
+    // opens a second host and then fails on it.
+    await expect(create(supervisor, 'ledger')).rejects.toThrow(/create refused/)
+
+    expect(hosts).toHaveLength(2)
+    expect(hosts[1].stopped).toBe(true)
+    expect(supervisor.pids()).toEqual([500])
+    expect(supervisor.sessions()).toEqual(['atlas'])
   })
 
   it('adopts the surviving host after the primary exits, never a third process', async () => {

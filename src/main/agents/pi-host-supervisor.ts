@@ -275,6 +275,10 @@ export class PiHostSupervisor {
       return state
     } catch (error) {
       this.#ownership.release(request.sessionId, host.id)
+      // The host this create asked for holds nothing now: a process started for
+      // a session that never landed is one more Pi host in the task manager,
+      // and no other path ever stops an empty one.
+      this.#stopHostIfEmpty(host.id)
       throw error
     }
   }
@@ -391,6 +395,9 @@ export class PiHostSupervisor {
       }
     } finally {
       this.#rebalancing = false
+      // A drain is also the moment a host with nothing left on it goes: the loan
+      // is repaid, and an empty process is a Pi host the app has no work for.
+      this.#stopEmptySecondaries()
       if (this.#secondaries().length === 0) this.#disarmRebalance()
     }
   }
@@ -837,6 +844,26 @@ export class PiHostSupervisor {
     if (waiting === undefined) return
     host.waiting.delete(response.id)
     waiting.resolve(response)
+  }
+
+  /**
+   * Stop a host that holds nothing and that no session is being landed on.
+   *
+   * Empty is both halves: no mounted session, and no claimed one, because a
+   * create claims its host before the session is mounted and stopping that host
+   * would kill the create in flight. Nothing else in the supervisor stops an
+   * empty host: a drain empties a host by moving its sessions out, so a host
+   * that started empty stays resident for the life of the app.
+   */
+  #stopHostIfEmpty(hostId: string): void {
+    if (this.#sessionsOn(hostId).length > 0) return
+    if (this.#ownership.ownedBy(hostId).length > 0) return
+    this.#stopHost(hostId)
+  }
+
+  /** Stop every temporary host that came up empty, leaving the primary alone. */
+  #stopEmptySecondaries(): void {
+    for (const host of this.#secondaries()) this.#stopHostIfEmpty(host.id)
   }
 
   /** Stop one host, answering with the sessions it had to drop. */
