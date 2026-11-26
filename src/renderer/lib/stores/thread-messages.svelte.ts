@@ -581,6 +581,11 @@ class ThreadMessagesStore {
     this.cache.releaseActive(projectId, threadId)
   }
 
+  /** Whether this thread is the transcript currently on screen. */
+  isActive(projectId: string, threadId: string): boolean {
+    return this.cache.isActive(projectId, threadId)
+  }
+
   /** Whether a thread's transcript is held frozen: in a slot, not on screen. */
   isFrozen(projectId: string, threadId: string): boolean {
     return this.cache.isFrozen(projectId, threadId)

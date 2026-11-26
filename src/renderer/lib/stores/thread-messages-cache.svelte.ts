@@ -195,6 +195,11 @@ export class ThreadMessagesCache {
     return this.#activeKey
   }
 
+  /** Whether this thread is the transcript currently on screen. */
+  isActive(projectId: string, threadId: string): boolean {
+    return this.#activeKey === threadKey(projectId, threadId)
+  }
+
   /**
    * Whether a thread's transcript is frozen: held in a slot, not on screen.
    *

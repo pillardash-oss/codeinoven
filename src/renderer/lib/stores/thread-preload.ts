@@ -86,6 +86,16 @@ export function prefetchThreadTrace(thread: Thread): void {
 /** Warm a thread's whole conversation before it is opened. */
 export function preloadThreadConversation(thread: Thread): void {
   prefetchThreadTrace(thread)
+  // A transcript that is not on screen is not read any more.
+  //
+  // The preload existed to make an open feel instant, and it did that by reading
+  // and publishing a reactive transcript for every thread the pointer crossed —
+  // each read reconciling, publishing and deep-proxying a message graph that then
+  // had to be rendered or thrown away. Two things have made that a cost with no
+  // benefit: the parked-screen cache already paints at the moment of the switch,
+  // and the thread being opened loads its own page when it mounts. Reading it here
+  // only put UI-thread work in front of a click.
+  if (!threadMessages.isActive(thread.projectId, thread.id)) return
   if (threadMessages.loaded(thread.projectId, thread.id)) return
   void threadMessages.preload(thread.projectId, thread.id)
 }
