@@ -560,6 +560,21 @@ class ThreadMessagesStore {
     await this.load(projectId, threadId, THREAD_MESSAGE_PRELOAD_WINDOW)
   }
 
+  /**
+   * Point the store at the transcript on screen, freezing the other slots.
+   *
+   * Called by the workspace when a thread is opened, and with `null` when the
+   * app falls back to an empty state, where nothing on screen may keep working.
+   */
+  setActive(projectId: string | null, threadId: string | null): void {
+    this.cache.setActive(projectId, threadId)
+  }
+
+  /** Whether a thread's transcript is held frozen: in a slot, not on screen. */
+  isFrozen(projectId: string, threadId: string): boolean {
+    return this.cache.isFrozen(projectId, threadId)
+  }
+
   /** Non-destructively merge server messages with the local cache. */
   reconcile(projectId: string, threadId: string, serverMessages: AgentMessage[]): void {
     this.cache.reconcile(

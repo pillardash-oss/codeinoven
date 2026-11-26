@@ -192,3 +192,41 @@ describe('ThreadMessagesCache bounds', () => {
     expect(cache.messages(PROJECT, 't-1')).toHaveLength(0)
   })
 })
+
+describe('ThreadMessagesCache frozen slots', () => {
+  let cache: ThreadMessagesCache
+
+  beforeEach(() => {
+    cache = new ThreadMessagesCache()
+  })
+
+  it('treats only the thread on screen as live', () => {
+    cache.setActive(PROJECT, 'live')
+    expect(cache.isFrozen(PROJECT, 'live')).toBe(false)
+    // A thread with no slot is absent, not frozen: the event path creates it.
+    expect(cache.isFrozen(PROJECT, 'never-opened')).toBe(false)
+    cache.reconcile(PROJECT, 'kept', [message('m1')], null)
+    expect(cache.isFrozen(PROJECT, 'kept')).toBe(true)
+  })
+
+  it('freezes everything while the empty state is showing', () => {
+    cache.setActive(PROJECT, 'live')
+    cache.reconcile(PROJECT, 'kept', [message('m1')], null)
+    cache.setActive(null, null)
+    // Nothing is on screen, so no slot may be fed.
+    expect(cache.isFrozen(PROJECT, 'live')).toBe(false)
+    expect(cache.isFrozen(PROJECT, 'kept')).toBe(false)
+    expect(cache.activeKey).toBeNull()
+  })
+
+  it('keeps three slots and never evicts the live one', () => {
+    cache.reconcile(PROJECT, 'a', [message('a1')], null)
+    cache.reconcile(PROJECT, 'b', [message('b1')], null)
+    cache.setActive(PROJECT, 'a')
+    for (let index = 0; index < 5; index += 1) {
+      cache.reconcile(PROJECT, `extra-${index}`, [message(`m-${index}`)], null)
+    }
+    // The live transcript survives the pressure from everything opened after it.
+    expect(cache.messages(PROJECT, 'a').map((entry) => entry.id)).toEqual(['a1'])
+  })
+})

@@ -294,6 +294,9 @@ class WorkspaceState {
     // is measured against this moment instead of the last shared tick.
     relativeTimeClock.refresh()
     this.selectedThread = thread
+    // Exactly one transcript is live at a time; the other slots are frozen
+    // snapshots that must not be fed events while they are off screen.
+    threadMessages.setActive(thread.projectId, thread.id)
     // A thread attached to an Oven opens that Oven's session now, before the
     // user touches anything: the file tree, Git status and composer all read
     // through it on mount.

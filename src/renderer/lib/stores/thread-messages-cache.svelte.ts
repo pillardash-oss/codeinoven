@@ -120,7 +120,47 @@ export class ThreadMessagesCache {
    * entries are evicted past this, never one with a mounted reader: a thread on
    * screen is never the one that gets dropped, so the conversation cannot blank.
    */
-  static readonly MAX_CACHED_THREADS = 8
+  static readonly MAX_CACHED_THREADS = 3
+
+  /** The transcript the user is looking at. Everything else is frozen. */
+  #activeKey: string | null = null
+
+  /**
+   * Point the store at the transcript on screen.
+   *
+   * One thread is live; the other two slots are snapshots that must not be fed.
+   * `null` is the empty state, where nothing is on screen and no transcript may
+   * keep working in the background.
+   */
+  setActive(projectId: string | null, threadId: string | null): void {
+    if (projectId === null || threadId === null) {
+      this.#activeKey = null
+      return
+    }
+    this.#activeKey = threadKey(projectId, threadId)
+    // Touching the active entry keeps it at the young end of the eviction order.
+    this.entry(projectId, threadId)
+  }
+
+  /** The active transcript's key, or null when the app is showing an empty state. */
+  get activeKey(): string | null {
+    return this.#activeKey
+  }
+
+  /**
+   * Whether a thread's transcript is frozen: held in a slot, not on screen.
+   *
+   * A thread with no slot at all is not frozen — it is simply absent, and the
+   * event path is what creates its slot. Only a transcript we are deliberately
+   * keeping but not showing is frozen, because that is the one that would
+   * otherwise spend a whole run updating pixels nobody can see.
+   */
+  isFrozen(projectId: string, threadId: string): boolean {
+    if (this.#activeKey === null) return false
+    const key = threadKey(projectId, threadId)
+    if (key === this.#activeKey) return false
+    return this.#threads.has(key)
+  }
 
   /** Return or create a cache entry for the given thread. */
   entry(projectId: string, threadId: string): ThreadMessagesEntry {
@@ -164,6 +204,7 @@ export class ThreadMessagesCache {
     if (this.#threads.size <= ThreadMessagesCache.MAX_CACHED_THREADS) return
     for (const key of [...this.#threads.keys()]) {
       if (this.#threads.size <= ThreadMessagesCache.MAX_CACHED_THREADS) return
+      if (key === this.#activeKey) continue
       if (this.#observedKeys.has(key) || this.#revealPending.has(key)) continue
       const entry = this.#threads.get(key)
       if (!entry || entry.loading) continue

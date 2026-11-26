@@ -383,6 +383,20 @@ export class ThreadMessagesEvents {
   }
 
   handle(event: AgentEvent): void {
+    // A frozen transcript is not fed. The thread's row still arrives through
+    // `thread:updated`, so its badge and place in the sidebar stay true, and its
+    // transcript is re-read the moment it is opened again. Streaming into a
+    // snapshot would buy nothing a person can see and would pay for every delta
+    // of a run — which is exactly the background work the slot exists to stop.
+    if (
+      'projectId' in event &&
+      'threadId' in event &&
+      typeof event.projectId === 'string' &&
+      typeof event.threadId === 'string' &&
+      this.cache.isFrozen(event.projectId, event.threadId)
+    ) {
+      return
+    }
     if (event.type === 'artifact.rendered') {
       this.cache.mergePage(event.projectId, event.threadId, [event.message])
       return
