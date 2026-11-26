@@ -451,6 +451,19 @@ export function unmanagedBrowserShellReason(
   const refused =
     'Not executed: launching your own browser is refused while this thread has its in-app browser, which is the only browser that shows the page the app is serving, in the tab the user can watch. It is already installed, so do not search for it: call cio_util_init with utility_id "cio:browser" and drive the page with its operations   open, navigate, reload, run (a whole flow in one call), snapshot, query, screenshot, console, click, type, press, select, check, mouse, drag, scroll, viewport, upload, evaluate, wait. Only when that browser genuinely cannot serve this thread may you fall back to a headless browser, and the app allows the fallback itself (an Oven thread, where the browser tab belongs to this machine, is already allowed). When you are refused here, the app has not marked this thread unavailable: use the in-app browser, or say what it could not do and report the check you could not run. A binary that happens to be on disk is not permission to use it.'
 
+  /**
+   * A refusal for the step before the launch: looking for a browser on the
+   * machine.
+   *
+   * This is the message an agent reads when it tries to answer "is there a
+   * browser here?" with `ls /Applications` or `which chrome`. It leads with the
+   * rule the agent skipped, because the claim that follows such a lookup ("no
+   * browser automation") is the expensive mistake: it costs a whole feature its
+   * verification while the browser was one gateway call away.
+   */
+  const refusedLookup =
+    'Not executed: this command looks for a browser on this machine, and that is not where the answer is. This app hosts the in-app browser itself, so it is already installed: call cio_util_find whenever you are unsure whether a capability exists, then cio_util_init with utility_id "cio:browser" and drive the page in the tab the user can watch (open, navigate, reload, run, snapshot, query, screenshot, console, click, type, press, select, check, scroll, viewport, upload, evaluate, wait). An empty directory listing is not evidence that there is no browser, only that you looked in the wrong place, and it is never a reason to report that the session cannot test a page. Before you reach outside the app for any tool, package or binary, search the utility gateway first: only a cio_util_find result whose notFound is true says a capability does not exist here.'
+
   /** Programs that are a browser, or a launcher that drives one. */
   const browserPrograms = new Set([
     'playwright',
@@ -541,6 +554,40 @@ export function unmanagedBrowserShellReason(
    * reached the script check below as `C:workboot.mjs`, found no file, and the
    * launch the check exists to catch went through.
    */
+  /**
+   * A lookup for a browser on this machine, which is the step that produces a
+   * false "there is no browser" before any launch is ever attempted.
+   *
+   * The launch block above answers an agent that already holds a browser. It
+   * cannot answer the failure this rule exists for: an agent lists
+   * /Applications and node_modules, finds nothing, and reports that the session
+   * has no browser while the app hosts one. So a browser named in the same
+   * command as a lookup over somewhere browsers get installed is refused, and
+   * nothing else is: `ls src/lib/browser` and `find . -name playwright.config.ts`
+   * read a project, not the machine, and still run.
+   */
+  const lookupProgram = /(?:^|[\s;&|(])(?:which|whereis|type|mdfind|locate)\s/iu
+  const listingProgram = /(?:^|[\s;&|(])(?:ls|dir|find|stat|test|\[)\s/iu
+  const installedPlaces =
+    /(?:\/Applications|Program Files(?: \(x86\))?|\/usr\/(?:local\/)?bin|\/opt\b|\/snap\/|node_modules|ms-playwright|\.cache\/|(?:^|[\s;&|'"])~(?=\/|[\s;&|'"]|$)|(?:^|[\s;&|'"=])\$HOME\b)/iu
+  const registryLookup =
+    /(?:^|[\s;&|])(?:brew\s+(?:list|ls|info|search)|npm\s+(?:ls|list)|bun\s+pm\s+ls|pnpm\s+(?:ls|list)|yarn\s+list|pip3?\s+(?:show|list)|dpkg\s+-l)\b/iu
+  const capabilityAcquisition =
+    /(?:^|[\s;&|])(?:brew\s+(?:install|reinstall)|apt(?:-get)?\s+install|yum\s+install|dnf\s+install|pacman\s+-S|snap\s+install|winget\s+install|choco\s+install|cargo\s+install|pip3?\s+install)\s/iu
+  /** A browser as a program or a package, never as a file inside a project. */
+  const browserToken =
+    /\b(?:google[- ]?chrome|chrome|chromium|chrome-headless-shell|headless[-_]shell|microsoft[- ]?edge|msedge|playwright(?:-core)?|@playwright\/test|puppeteer(?:-core)?|webkit|firefox|chromedriver|geckodriver|safaridriver)\b/iu
+  /** A file named after a browser is a project artifact, not the browser. */
+  const withoutFileNames = command.replace(/[^\s"'`|;&()<>]*\.[\w-]{1,5}\b/gu, ' ')
+  const namesBrowser = browserPath.test(command) || browserToken.test(withoutFileNames)
+  if (namesBrowser) {
+    const namesProgram = browserToken.test(withoutFileNames)
+    if (lookupProgram.test(command) && namesProgram) return refusedLookup
+    if (listingProgram.test(command) && installedPlaces.test(command)) return refusedLookup
+    if (registryLookup.test(command)) return refusedLookup
+    if (namesProgram && capabilityAcquisition.test(command)) return refusedLookup
+  }
+
   const escapedByBackslash = /^["'`\s;&|()<>]$/u
 
   /** Split a command into words, remembering whether a word was quoted. */

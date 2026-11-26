@@ -16,6 +16,19 @@ const TOOL_CAPABILITY =
 const UNAVAILABLE_TOOL_FAILURE =
   /(?:not found|unavailable|not available|does(?:n['’]?t| not) exist|not installed|cannot be found|could not be found|unknown (?:mcp|skill|utility|plugin|extension|tool))/iu
 
+/**
+ * A refusal this app wrote is not an availability claim.
+ *
+ * Every policy block (browser ownership, process lifecycle, the cua-driver
+ * session, the lookup rule) opens with "Not executed:" and most of them name
+ * the utility or tool to call instead, so their own wording matched the
+ * failure and capability markers below: a refused `ls /Applications` nudged a
+ * utility search about "utility" on the very next step, and a refused process
+ * kill did the same. The block already told the agent what to do; a second,
+ * generic nudge only buries it.
+ */
+const POLICY_REFUSAL = /^\s*Not executed:/iu
+
 export interface CapabilityUnavailableClaim {
   /** The exact availability failure wording reported by the tool call. */
   phrase: string
@@ -37,6 +50,7 @@ export function detectUnavailableToolCall(
   const name = toolName.trim()
   const error = toolError.trim()
   if (!name || !error) return null
+  if (POLICY_REFUSAL.test(error)) return null
   const failure = error.match(UNAVAILABLE_TOOL_FAILURE)
   if (!failure) return null
   const capability = `${name} ${error}`.match(TOOL_CAPABILITY)
@@ -103,6 +117,26 @@ const REQUIREMENT_QUALIFIER =
 /** Maximum characters between the denial phrase and the capability noun. */
 const MAX_NOUN_DISTANCE = 80
 
+/**
+ * Capabilities this app hosts itself, so they cannot be absent from a session.
+ *
+ * The session-scope qualifier is what keeps the generic nouns out of ordinary
+ * prose, but it also kept them out of the claim that matters: an agent that
+ * probed the machine and gave up wrote "No browser automation." and the nudge
+ * stayed silent because the sentence never said "in this session". These nouns
+ * need no qualifier, because there is no context in which this app has no
+ * browser, no computer use and no capabilities.
+ */
+const HOSTED_CAPABILITY_NOUN = /^(?:browsers?|capabilit(?:y|ies)|computer[\s_-]?use)$/iu
+
+/**
+ * The denial must be the whole claim, not a phrase inside a longer noun: "no
+ * browser storage" describes a page, while "no browser automation" is a verdict
+ * about the session.
+ */
+const HOSTED_CLAIM_TAIL =
+  /^\s*(?:$|[.,;:!?)]|(?:automation|available|installed|usable|present|here|in\s+this|at\s+all|whatsoever|tool|tools|driver|drivers|support|access|testing|verification|test)\b)/iu
+
 function splitSentences(text: string): string[] {
   return text.split(/(?<=[.!?])\s+|\n+/)
 }
@@ -129,6 +163,19 @@ function artifactIsCloser(sentence: string, index: number, nounDistance: number)
   return false
 }
 
+/**
+ * An unqualified "no <hosted capability>" claim, which needs no session scope.
+ * Bounded to the hosted nouns and to a denial that ends the claim, so ordinary
+ * prose about a page keeps its meaning: "no browser storage" is not a verdict,
+ * "no browser automation" is.
+ */
+function hostedAbsence(sentence: string, index: number, denial: string): boolean {
+  const noun = nearestNounDistance(sentence, index)
+  if (!noun || !HOSTED_CAPABILITY_NOUN.test(noun.target)) return false
+  if (artifactIsCloser(sentence, index, noun.distance)) return false
+  return HOSTED_CLAIM_TAIL.test(sentence.slice(index + denial.length))
+}
+
 interface SentenceClaim {
   phrase: string
   target: string
@@ -150,7 +197,7 @@ function detectInSentence(sentence: string): SentenceClaim | null {
   for (const { match, kind } of denials) {
     const index = match.index ?? 0
     if (kind === 'availability' && !sessionScoped) continue
-    if (kind === 'absence' && !sessionScoped) continue
+    if (kind === 'absence' && !sessionScoped && !hostedAbsence(sentence, index, match[0])) continue
     const noun = nearestNounDistance(sentence, index)
     if (!noun) continue
     if (artifactIsCloser(sentence, index, noun.distance)) continue

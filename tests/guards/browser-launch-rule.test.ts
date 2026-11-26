@@ -69,6 +69,51 @@ describe('browser launch rule', () => {
     }
   })
 
+  it('refuses the lookup that produces a false "there is no browser"', () => {
+    // Copied from a real run: an agent listed where a browser would be
+    // installed, found nothing, and reported that the session had no browser
+    // while the app hosted one the whole time.
+    for (const command of [
+      'ls /Applications | grep -i -E "chrome|chromium|edge"',
+      'ls node_modules | grep -i -E "playwright|puppeteer|vitest|jsdom"',
+      'ls "/Applications/Google Chrome.app/Contents/MacOS/"',
+      'test -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"',
+      'which chrome',
+      'whereis chromium',
+      'which playwright',
+      'ls /opt | grep chrome',
+      'ls /usr/local/bin | grep -i playwright',
+      'ls ~/Library/Caches/ms-playwright',
+      'find ~ -iname "*chromium*"',
+      'brew list | grep chromium',
+      'npm ls playwright',
+      'brew install chromium'
+    ]) {
+      expect(shell(command), command).not.toBeNull()
+    }
+  })
+
+  it('lets a project lookup that names a browser stay a project lookup', () => {
+    for (const command of [
+      'find . -name "playwright.config.ts"',
+      'ls -la src/lib/browser',
+      'ls dist/webkit',
+      'ls src/chromium',
+      'ls /Applications',
+      'ls node_modules | head -20'
+    ]) {
+      expect(shell(command), command).toBeNull()
+    }
+  })
+
+  it('makes a refused lookup demand the gateway search, not a different tool', () => {
+    const reason = shell('ls /Applications | grep -i chrome') ?? ''
+    expect(reason).toContain('cio_util_find')
+    expect(reason).toContain('notFound')
+    expect(reason).toContain('cio:browser')
+    expect(reason).toContain('in-app browser')
+  })
+
   it('points a refused agent at the in-app browser instead of leaving it stuck', () => {
     const reason = shell('chromium --headless http://localhost:3000') ?? ''
     expect(reason).toContain('cio:browser')
