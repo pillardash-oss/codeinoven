@@ -86,9 +86,11 @@
   /**
    * Progress the user has to act on, not a result.
    *
-   * An ACP agent without credentials opens its own browser and answers only when
-   * the user is done. That instruction belongs beside the busy state, in neutral
-   * text: painted green it read as "signed in" a minute before anything was.
+   * An ACP agent runs the sign-in method it declared and answers only when the
+   * user is done with it, so the panel says the sign-in is waiting on them while
+   * it runs. Painted green it read as "signed in" a minute before anything was,
+   * and the wording names no transport: browser, code or terminal belongs to the
+   * method, not to this panel.
    */
   let info = $state('')
   let actionWarning = $state('')
@@ -547,11 +549,11 @@
         return
       }
       // The agent runs the method it declared; there is no command to hand to a
-      // terminal and no key for the app to store. An agent without credentials
-      // opens the browser itself and answers only when the user is done, so the
-      // panel says where the sign-in went instead of spinning silently.
+      // terminal and no key for the app to store. A method that needs the user
+      // runs its own flow and answers only when they finish it, so the panel
+      // says the sign-in is waiting on them instead of spinning silently.
       storingKey = true
-      info = `${provider.name} opens your browser when it needs credentials. Finish the sign-in there and this panel follows the result.`
+      info = `${provider.name} is handling the sign-in now. Finish it wherever it asks, and this panel follows the result.`
       try {
         const status = await invoke('acpAgents:authenticate', harness.id, provider.id)
         info = ''
