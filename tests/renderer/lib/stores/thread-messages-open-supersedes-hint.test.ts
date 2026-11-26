@@ -38,7 +38,8 @@ function page(count: number): AgentMessage[] {
   )
 }
 
-let releaseHint: (() => void) | undefined
+/** Releases the suspended hint read once the open has asked for its window. */
+const hintGates: Array<() => void> = []
 
 const invoke = vi.fn(async (channel: string, ..._args: unknown[]) => {
   if (channel !== 'thread:loadMessages') return null
@@ -46,7 +47,7 @@ const invoke = vi.fn(async (channel: string, ..._args: unknown[]) => {
   if (limit === HINT_WINDOW) {
     // The hint stays in flight until the open has asked, which is the race.
     await new Promise<void>((resolve) => {
-      releaseHint = resolve
+      hintGates.push(resolve)
     })
     return { messages: page(HINT_WINDOW), hasOlder: false, kind: 'window' }
   }
@@ -71,14 +72,14 @@ describe('opening a thread while its hover hint is in flight', () => {
   it('reads the open window instead of accepting the hint page', async () => {
     const projectId = 'project-1'
     const threadId = 'thread-1'
-    releaseHint = undefined
+    hintGates.length = 0
 
     const hint = threadMessages.preload(projectId, threadId)
     // The open lands while the hint is still in flight.
     const open = threadMessages.load(projectId, threadId, OPEN_WINDOW)
 
-    await vi.waitFor(() => expect(releaseHint).toBeDefined())
-    releaseHint?.()
+    await vi.waitFor(() => expect(hintGates.length).toBeGreaterThan(0))
+    hintGates[0]?.()
     await Promise.all([hint, open])
 
     expect(threadMessages.messages(projectId, threadId)).toHaveLength(OPEN_WINDOW)

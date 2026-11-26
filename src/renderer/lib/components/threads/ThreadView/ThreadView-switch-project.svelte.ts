@@ -56,6 +56,33 @@ function draftSignature(draft: { knowledge: string; plan: AssistantPlanDraft | n
   return `${draft.knowledge.length}:${JSON.stringify(draft.plan)}`
 }
 
+/**
+ * How long a discovered command list is trusted.
+ *
+ * `agent:listCommands` makes the harness enumerate its commands and skills,
+ * which costs the main process between one and four seconds, and it was asked
+ * again on every thread mount. Switching threads therefore paid that probe each
+ * time, and the conversation's own reads queued behind it, which is what made a
+ * click feel like it hammered the machine. The list changes only when a skill is
+ * installed or the project's configuration edited, so it is kept per project and
+ * harness for a minute: long enough that a switch is free, short enough that a
+ * skill installed in a terminal shows up without a restart.
+ */
+const COMMANDS_FRESH_MS = 60_000
+
+/** Discovered commands by `projectId:harnessId`, with when they were read. */
+// eslint-disable-next-line svelte/prefer-svelte-reactivity
+const commandReads = new Map<string, { at: number; commands: ScopedHarnessCommand[] }>()
+
+/** Reads in flight, so three mounts settling at once share one probe. */
+// eslint-disable-next-line svelte/prefer-svelte-reactivity
+const commandReadsInFlight = new Map<string, Promise<ScopedHarnessCommand[]>>()
+
+/** The cache key a command read belongs to. */
+function commandReadKey(projectId: string, harnessId: string | undefined): string {
+  return `${projectId}:${harnessId}`
+}
+
 /** One concern of the ThreadView board. */
 export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
@@ -155,7 +182,6 @@ export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
   }
 
   commands = $state<ScopedHarnessCommand[]>([])
-
   projectIconUrl = $state<string | null>(null)
 
   compacting = $state(false)
@@ -323,23 +349,46 @@ export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
 
   async refreshCommands(): Promise<void> {
     const scope = this.root.studioTemporaryChatContext.capabilityScope()
+    const key = commandReadKey(scope.projectId, scope.harnessId)
+    const cached = commandReads.get(key)
+    if (cached !== undefined && Date.now() - cached.at < COMMANDS_FRESH_MS) {
+      this.applyCommands(cached.commands)
+      return
+    }
+    const pending = commandReadsInFlight.get(key)
+    if (pending) {
+      try {
+        this.applyCommands(await pending)
+      } catch {
+        // The read that is already running reports its own failure.
+      }
+      return
+    }
+    const read = invoke('agent:listCommands', scope.projectId, scope.threadId, scope.harnessId)
+    commandReadsInFlight.set(key, read)
     try {
-      const discovered = await invoke(
-        'agent:listCommands',
-        scope.projectId,
-        scope.threadId,
-        scope.harnessId
-      )
-      // A side chat is read-only and owns no thread row, so its harness session
-      // commands (config, settings, usage-credits) cannot run there. Only its
-      // skills stay on the menu; they ride the read-only prompt path below.
-      this.commands = this.root.loadOlderMessages.hasController
-        ? discovered.filter((command) => command.source === 'skill')
-        : discovered
+      const discovered = await read
+      commandReads.set(key, { at: Date.now(), commands: discovered })
+      this.applyCommands(discovered)
     } catch {
       // Command discovery is supplementary; messaging remains available.
-      this.commands = []
+      this.applyCommands([])
+    } finally {
+      commandReadsInFlight.delete(key)
     }
+  }
+
+  /**
+   * Put a command list on the menu, minus the ones this conversation cannot run.
+   *
+   * A side chat is read-only and owns no thread row, so its harness session
+   * commands (config, settings, usage-credits) cannot run there. Only its skills
+   * stay on the menu; they ride the read-only prompt path below.
+   */
+  private applyCommands(discovered: ScopedHarnessCommand[]): void {
+    this.commands = this.root.loadOlderMessages.hasController
+      ? discovered.filter((command) => command.source === 'skill')
+      : discovered
   }
 
   /**
