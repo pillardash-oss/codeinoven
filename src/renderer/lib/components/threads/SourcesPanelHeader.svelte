@@ -18,6 +18,9 @@
     originFilter: OriginFilter
     sourceFilter: SourceFilter
     searchQuery: string
+    /** The running-process search, kept apart from the capability search so a
+     *  query typed on one tab never narrows the other. */
+    processSearchQuery: string
     /** Every collected source, before the active kind filter. */
     sourceCount: number
     /** Sources matching the active kind filter. */
@@ -49,6 +52,7 @@
     originFilter = $bindable(),
     sourceFilter = $bindable(),
     searchQuery = $bindable(),
+    processSearchQuery = $bindable(),
     sourceCount,
     visibleSourceCount,
     attachmentCount,
@@ -382,6 +386,21 @@
   {/if}
 
   {#if section === 'processes'}
+    {#if processCount > 0}
+      <label class="relative mt-3 block">
+        <CioSearch
+          size={13}
+          class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
+        />
+        <span class="sr-only">Search running processes</span>
+        <input
+          class="h-8 w-full border bg-elevated pl-8 pr-3 text-xs outline-none placeholder:text-dimmed focus:border-primary"
+          type="search"
+          placeholder="Search by name, pid, port, or path"
+          bind:value={processSearchQuery}
+        />
+      </label>
+    {/if}
     <div class="mt-3 flex items-center gap-2">
       <button
         type="button"
