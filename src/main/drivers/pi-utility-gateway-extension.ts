@@ -142,7 +142,9 @@ async function loadHandoff(): Promise<GatewayHandoff> {
     // broken transport, and costs a turn of pointless retries.
     const reason = error instanceof Error ? error.message : String(error)
     throw fail(
-      'The CodeInOven utility gateway is not active for this turn: its handoff file is unavailable (' + reason + '). The application must refresh the utility transport before continuing utility work; retrying this tool will not help.',
+      'The app’s own tool transport is not armed for this turn (its handoff file is unavailable: ' +
+        reason +
+        '). This is not a network or connection problem, nothing you can fix by retrying, and the app is not offline: it arms a fresh transport on the next turn. Carry on with the work your own tools can do. If the app tool was essential, stop and say what you could not do because this turn had no transport, and that a new turn is needed.',
       'gatewayInactive'
     )
   }
@@ -152,7 +154,7 @@ async function loadHandoff(): Promise<GatewayHandoff> {
   // the "gateway not active this turn" case, never an opaque crash.
   if (!handoff.url || !handoff.token) {
     throw fail(
-      'The CodeInOven utility gateway is not active for this turn: no gateway credentials were published (this happens on queued or steer turns, or before the first utility turn). The application must refresh the utility transport before continuing utility work.',
+      'The app’s own tool transport is not armed for this turn: no credentials were published for it (this happens on queued or steer turns, and before the first turn that carries app tools). This is not a network or connection problem and the app is not offline: it arms a fresh transport on the next turn, so retrying inside this one will not help. Carry on with the work your own tools can do, and if the app tool was essential, stop and say what you could not do and that a new turn is needed.',
       'gatewayInactive'
     )
   }
@@ -193,7 +195,7 @@ function postJson(base: string, token: string, route: string, body: Record<strin
               // help: the credentials are gone, only a fresh turn re-arms them.
               reject(
                 fail(
-                  'The CodeInOven utility gateway is not active for this turn: the turn credentials were already cleaned up (this happens on queued or steer turns). The application must refresh the utility transport before continuing utility work.',
+                  'The app’s own tool transport is not armed for this turn: the credentials of the turn that is running this tool were already cleaned up (this happens on queued or steer turns). This is not a network or connection problem and the app is not offline: the next turn arms a fresh transport, so retrying inside this one will not help. Carry on with the work your own tools can do, and if the app tool was essential, stop and say what you could not do and that a new turn is needed.',
                   'gatewayInactive'
                 )
               )

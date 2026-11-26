@@ -22,6 +22,7 @@ import {
   buildOrchestrationReportPrompt,
   type PendingOrchestrationDispatch
 } from '../chat-engine-orchestration'
+import { awaitDelegationOutcome } from '../delegation/delegation-report-grace'
 import { legacyHarnessAccountId } from '../../providers/harness-account-registry'
 import type { ResolvedImageEntry } from '../../providers/image-descriptor-provider'
 import type {
@@ -29,7 +30,8 @@ import type {
   AuditReport,
   HeartbeatConfig,
   PromptAttachment,
-  ThreadSettings
+  ThreadSettings,
+  ThreadStatus
 } from '../../../lib/types'
 import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '../../../lib/types'
 import {
@@ -656,11 +658,37 @@ export class ChatEngineTurnsDispatch {
     }
   }
 
+  /**
+   * Report a dispatched run's outcome into the thread that asked for it.
+   *
+   * A run that did not come back `completed` is not reported the moment it
+   * settles. Rate limits, dropped sockets and 5xx responses are usually over in
+   * seconds, and the app parks the run on `working-paused` and resumes it; a
+   * report filed at the first failure told a parent its workers had all died
+   * while they were already running again. So the outcome waits out
+   * {@link DELEGATION_REPORT_GRACE_MS}, then re-reads the run thread once:
+   *
+   * - still working, or waiting to retry: nothing is reported and the dispatch
+   *   stays in the book, so the retry's own settle reports for it;
+   * - done meanwhile: that status is what gets reported;
+   * - still failed (or gone): the failure is reported, and only now is the
+   *   dispatch taken out of the book.
+   */
   async reportOrchestrationDispatch(
     dispatch: PendingOrchestrationDispatch,
-    status: string
+    status: ThreadStatus
   ): Promise<void> {
     try {
+      const verdict = await awaitDelegationOutcome(status, async () => {
+        const runThread = await this.host.threadManager
+          .getThreadById(dispatch.runThreadId)
+          .catch(() => null)
+        return runThread?.status ?? null
+      })
+      // A retry owns the run thread now. The dispatch stays pending, so whichever
+      // turn finally settles it reports then instead of this transient failure.
+      if (!verdict.report) return
+      this.host.orchestration?.dispatches.settle(dispatch.runThreadId)
       const thread = await this.host.threadManager.getThread(
         dispatch.requestingProjectId,
         dispatch.requestingThreadId
@@ -670,7 +698,7 @@ export class ChatEngineTurnsDispatch {
         dispatch.requestingProjectId,
         dispatch.requestingThreadId,
         thread.settings,
-        buildOrchestrationReportPrompt(dispatch, status),
+        buildOrchestrationReportPrompt(dispatch, verdict.status),
         [],
         undefined,
         undefined,
