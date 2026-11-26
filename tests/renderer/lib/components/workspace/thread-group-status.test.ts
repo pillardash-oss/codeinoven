@@ -38,7 +38,7 @@ function makeThread(id: string, status: ThreadStatus): Thread {
 }
 
 /** The group labels the list draws, in order, with their rows. */
-function sections(threads: Thread[], statuses?: ReadonlyMap<string, ThreadStatus>) {
+function sections(threads: Thread[], statuses?: ReadonlyMap<string, ThreadStatus> | null) {
   return groupThreadsByStatus(threads, null, null, statuses).map((group) => ({
     label: group.label,
     ids: group.threads.map((thread) => thread.id)
