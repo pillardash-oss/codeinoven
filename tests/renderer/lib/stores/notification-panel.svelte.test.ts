@@ -125,6 +125,51 @@ describe('dismissing a notification', () => {
     panel.add(payload('a'))
     expect(panel.totalCount).toBe(0)
   })
+
+  it('clears the failed status an error notice reported', async () => {
+    invoke.mockImplementation((channel: string) => {
+      if (channel === 'thread:get') return Promise.resolve(thread({ sessionId: 'session-1' }))
+      return Promise.resolve(undefined)
+    })
+    panel.add(payload(FAILED_ENTRY_ID, { kind: 'error' }))
+
+    panel.dismiss(FAILED_ENTRY_ID)
+
+    expect(panel.totalCount).toBe(0)
+    await vi.waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        'agent:dismissSessionError',
+        'project-1',
+        'thread-1',
+        'session-1'
+      )
+    )
+  })
+
+  it('leaves a side chat error out of its parent thread', () => {
+    panel.add(
+      payload('side-error', {
+        kind: 'error',
+        source: 'temporary-chat',
+        temporaryChatId: 'temp-1'
+      })
+    )
+
+    panel.dismiss('side-error')
+
+    expect(panel.totalCount).toBe(0)
+    expect(invoke).not.toHaveBeenCalledWith('agent:dismissSessionError', expect.anything())
+    expect(invoke).not.toHaveBeenCalledWith('thread:get', expect.anything(), expect.anything())
+  })
+
+  it('does not clear a failure just because its thread was opened', () => {
+    panel.add(payload(FAILED_ENTRY_ID, { kind: 'error' }))
+
+    panel.acknowledgeOpenThread(thread())
+
+    expect(panel.totalCount).toBe(0)
+    expect(invoke).not.toHaveBeenCalledWith('agent:dismissSessionError', expect.anything())
+  })
 })
 
 describe('bulk dismissal', () => {
