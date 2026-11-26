@@ -597,3 +597,48 @@ describe('ThreadRow, the detailed spine row', () => {
     scopeState.allScopeThreads = []
   })
 })
+
+/**
+ * The thread the user has open, when it is also wearing a state that wants them.
+ *
+ * A failed row tints its own ground, and that tint is an inline style, which beats
+ * any class a row carries. Mixed over nothing, it erased the selection fill: the
+ * pawn board's open thread read exactly like every other failed pawn, and the
+ * reader could not tell which row the conversation was in.
+ */
+describe('ThreadRow, the open thread with a state of its own', () => {
+  function rowButton(target: HTMLElement): HTMLElement {
+    const button = target.querySelector<HTMLElement>('[data-thread-row="t1"] > button')
+    expect(button).not.toBeNull()
+    return button as HTMLElement
+  }
+
+  it('keeps the selection ground under the danger tint', async () => {
+    const { target, app } = render(thread({ status: 'failed' }), { selected: true })
+    await tick()
+
+    // The tint mixes over the ground the row already has, so both facts survive.
+    expect(rowButton(target).getAttribute('style')).toContain('var(--color-selected)')
+    unmount(app)
+  })
+
+  it('draws the selection with its own mark, never only with a fill', async () => {
+    const { target, app } = render(thread({ status: 'failed' }), { selected: true })
+    await tick()
+
+    // A ring is the cue that survives whatever colour the state paints, and it is
+    // drawn inset so it cannot change the row's size in a column of rows.
+    expect(rowButton(target).className).toContain('ring-inset')
+    unmount(app)
+  })
+
+  it('tints a row that is not the open one over nothing', async () => {
+    const { target, app } = render(thread({ status: 'failed' }))
+    await tick()
+
+    const style = rowButton(target).getAttribute('style') ?? ''
+    expect(style).toContain('transparent')
+    expect(style).not.toContain('var(--color-selected)')
+    unmount(app)
+  })
+})

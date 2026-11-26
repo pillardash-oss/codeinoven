@@ -812,14 +812,24 @@
    *  sidebar. It is written as an inline style, the same way the scope chip draws
    *  its mixed border, rather than as an arbitrary utility class: this keeps the
    *  colour honest against the theme tokens and adds no class the build has to
-   *  discover. It never pulses. */
-  let rowTintStyle = $derived(
-    threadState === 'approval'
-      ? 'background: color-mix(in srgb, var(--color-warning) 8%, transparent);'
-      : threadState === 'error'
-        ? 'background: color-mix(in srgb, var(--color-danger) 8%, transparent);'
-        : ''
-  )
+   *  discover. It never pulses.
+   *
+   *  The tint mixes over the ground the row already has, never over nothing: an
+   *  inline background beats the `bg-selected` class, so a failed row that is the
+   *  thread the user has open used to lose its selection fill to the danger cast
+   *  and read like every other failed row. Mixed over the selected ground, the
+   *  row carries both facts: the state keeps its hue and the selection keeps its
+   *  fill. */
+  let rowTintStyle = $derived.by(() => {
+    const ground = selected ? 'var(--color-selected)' : 'transparent'
+    if (threadState === 'approval') {
+      return `background: color-mix(in srgb, var(--color-warning) 8%, ${ground});`
+    }
+    if (threadState === 'error') {
+      return `background: color-mix(in srgb, var(--color-danger) 8%, ${ground});`
+    }
+    return ''
+  })
 
   /** Title colour, shared by every row layout. */
   /** The origin badge an orchestrated dispatch wears, above its title. */
@@ -1332,7 +1342,7 @@
   ></div>
   <button
     class="relative flex w-full flex-col text-left transition-colors {rowLayoutClass} {selected
-      ? 'bg-selected'
+      ? 'bg-selected ring-1 ring-border-strong ring-inset'
       : 'hover:bg-elevated'}"
     style={rowTintStyle}
     title={displayTitle}
