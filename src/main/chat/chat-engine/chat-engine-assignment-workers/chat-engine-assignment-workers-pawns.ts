@@ -449,8 +449,13 @@ export class ChatEnginePawnAgents {
    * thinking level is exactly what the person watching the pawn has to fix, and
    * they fix it here without a conversation. The run is internal, so the pawn's
    * lock still refuses user prompts; its report still steers the spawner.
+   *
+   * `picked` is the model the reader chose in the card beside the retry. The
+   * picker saves the thread asynchronously, so a retry that read the row back
+   * could race that write and run the model the reader just moved away from. The
+   * pick is persisted here, before the run starts, and the run uses it.
    */
-  async retryPawnRun(projectId: string, threadId: string): Promise<void> {
+  async retryPawnRun(projectId: string, threadId: string, picked?: ThreadSettings): Promise<void> {
     this.host.units['messages'].touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Pawn thread ID')
@@ -462,7 +467,8 @@ export class ChatEnginePawnAgents {
     if (pawn.status === 'completed' || pawn.lastOutcome === 'completed') {
       throw new Error('That pawn agent already finished its run. There is nothing to retry.')
     }
-    const settings = validateThreadSettings(pawn.settings)
+    const settings = validateThreadSettings(picked ?? pawn.settings)
+    if (picked) await this.host.threadManager.updateSettings(projectId, pawn.id, settings)
     const spawner = await this.host.threadManager
       .getThread(projectId, pawn.coordinatorThreadId)
       .catch(() => null)

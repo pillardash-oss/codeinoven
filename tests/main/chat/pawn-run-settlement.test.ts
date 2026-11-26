@@ -84,6 +84,9 @@ function stubHost(options: StubOptions = {}) {
   const sendPrompt = vi.fn(async () => ({ id: 'msg-sent' }))
   const setStatus = vi.fn(async () => thread)
   const clearStoppedByUser = vi.fn(async () => undefined)
+  const updateSettings = vi.fn(
+    async (_projectId: string, _threadId: string, _next: ThreadSettings) => thread
+  )
   const clearRetry = vi.fn()
   const clearRateLimitCooldown = vi.fn()
   const loadMessages = vi.fn(async () => options.transcript ?? [])
@@ -104,7 +107,8 @@ function stubHost(options: StubOptions = {}) {
       listThreads: vi.fn(async () => [thread]),
       upsertMessages: vi.fn(async () => undefined),
       setStatus,
-      clearStoppedByUser
+      clearStoppedByUser,
+      updateSettings
     },
     resolve: vi.fn(async () => ({ driver, projectPath: '/w/project-1' })),
     checkpointManager: { activeTurnOwnerPid: vi.fn(async () => null) },
@@ -143,7 +147,8 @@ function stubHost(options: StubOptions = {}) {
     setStatus,
     clearRetry,
     clearRateLimitCooldown,
-    clearStoppedByUser
+    clearStoppedByUser,
+    updateSettings
   }
 }
 
@@ -363,6 +368,28 @@ describe('a pawn run can be retried without a conversation', () => {
     expect(origin).toBe('internal')
     expect(text).toContain('Own app/mount.ts and app/stream.ts')
     expect(text).toContain('This is a retry of this task')
+  })
+
+  it('runs the model picked in the card, and saves it on the pawn', async () => {
+    const { host, sendPrompt, updateSettings } = stubHost({ spawnerMessages: [spawnerCard] })
+    const pawns = new ChatEnginePawnAgents(host)
+    const picked: ThreadSettings = {
+      ...settings,
+      modelId: 'deepseek-v4.1-pro',
+      thinkingLevel: 'high'
+    }
+
+    // The picker's own save is asynchronous, so the retry carries the pick: a
+    // retry that read the row back could run the model the reader just left.
+    await pawns.retryPawnRun(PROJECT_ID, PAWN_THREAD_ID, picked)
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      PROJECT_ID,
+      PAWN_THREAD_ID,
+      expect.objectContaining({ modelId: 'deepseek-v4.1-pro', thinkingLevel: 'high' })
+    )
+    const usedSettings = (sendPrompt.mock.calls[0] as unknown as unknown[] | undefined)?.[2]
+    expect(usedSettings).toMatchObject({ modelId: 'deepseek-v4.1-pro', thinkingLevel: 'high' })
   })
 
   it('refuses to retry a run that already finished', async () => {

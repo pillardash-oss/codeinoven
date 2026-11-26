@@ -4,8 +4,10 @@
   import CioLock from '@pdslng/cio-icon/CioLock.svelte'
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { slide } from 'svelte/transition'
+  import type { ProviderCatalog, ThreadSettings } from '$shared/types'
   import { presentProviderError } from '$shared/provider-issue'
   import { invoke } from '$lib/ipc.svelte'
+  import EngineeringModelSwitch from '../shared/EngineeringModelSwitch.svelte'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
   import CardFrame from '../shared/CardFrame.svelte'
@@ -25,6 +27,27 @@
     /** Changes while the pawn's live state may have moved, so the card re-reads
      *  its run instead of showing what it knew when it mounted. */
     refreshKey?: string
+    /**
+     * The pawn's own thread settings, which the retry runs on.
+     *
+     * A rate limit, a paused provider or a task spawned on the wrong model is
+     * fixed by the person watching the pawn, and the retry is where that fix
+     * lands: the picker writes the thread's settings, and the retry reads them
+     * back. Without it the only fix on offer is "run the same failing model
+     * again".
+     */
+    settings?: ThreadSettings
+    providers?: ProviderCatalog[]
+    favoriteModels?: string[]
+    recentModels?: string[]
+    onModelChange?: (settings: ThreadSettings) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    onRemoveRecent?: (modelKey: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
   }
 
   interface Props {
@@ -116,12 +139,14 @@
     return { text: 'Locked', tone: 'paused' as const }
   })
 
-  /** Run the same task again on the pawn's thread, on the model it carries now. */
+  /** Run the same task again on the pawn's thread, on the model picked in this
+   *  card. The pick rides with the click: the picker's own save is asynchronous,
+   *  and a retry that read the row back could run the model the reader just left. */
   function retryPawnRun(): void {
     if (!pawn || retrying) return
     retrying = true
     actionError = ''
-    void invoke('agent:retryPawnRun', pawn.projectId, threadId)
+    void invoke('agent:retryPawnRun', pawn.projectId, threadId, pawn.settings)
       .then(() => {
         pawnRunning = true
         pawnFailure = null
@@ -167,6 +192,10 @@ slot becomes: the reason, and the one control that actually moves the work on. -
           <CardNotice icon={CioAttention} tone="danger">
             <span class="select-text break-words">{failureText}</span>
           </CardNotice>
+          <p>
+            Retry runs this pawn again on the model picked below, so a rate limit or a wrong pick is
+            fixed here.
+          </p>
         {:else if !retryable}
           <p>
             This thread is a {subject} its parent agent spawns and steers. It reports to that agent, and
@@ -192,12 +221,25 @@ slot becomes: the reason, and the one control that actually moves the work on. -
   {/if}
 
   {#if !foldState.folded}
-    <CardFoot>
+    <!-- The picker and the retry are one decision: the model is what the retry
+         runs on, so it sits beside the button that carries it out. -->
+    <CardFoot yields={retryable ? 'right' : 'left'}>
       {#snippet right()}
-        {#if retryable}
+        {#if retryable && pawn}
+          <EngineeringModelSwitch
+            settings={pawn.settings}
+            providers={pawn.providers ?? []}
+            projectId={pawn.projectId}
+            favoriteModels={pawn.favoriteModels ?? []}
+            recentModels={pawn.recentModels ?? []}
+            onRemoveRecent={pawn.onRemoveRecent}
+            onModelChange={pawn.onModelChange}
+            onToggleFavorite={pawn.onToggleFavorite}
+            onReorderFavorite={pawn.onReorderFavorite}
+          />
           <CardButton
             label="Retry run"
-            title="Run this pawn agent again on the model it carries now"
+            title="Run this pawn agent again on the model and thinking level picked here"
             icon={retrying ? undefined : CioUndo}
             variant="primary"
             loading={retrying}

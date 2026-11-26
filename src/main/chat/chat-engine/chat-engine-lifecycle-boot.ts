@@ -1,6 +1,10 @@
 import { trustedIpcMain as ipcMain } from '../../ipc/trusted-ipc-main'
 import { Logger } from '../../system/logger'
-import { validateBoundedString, validateEntityId } from '../../ipc/ipc-validation'
+import {
+  validateBoundedString,
+  validateEntityId,
+  validateThreadSettings
+} from '../../ipc/ipc-validation'
 import { instanceEventBus } from '../../system/instance-event-bus'
 import { validateMcpProbeTarget } from '../../utilities/mcp-probe-input'
 import type {
@@ -279,8 +283,14 @@ export class ChatEngineLifecycleBoot {
         return this.host.retryChildSession(projectId, threadId, sessionId)
       }
     )
-    ipcMain.handle('agent:retryPawnRun', (_, projectId: string, threadId: string) =>
-      this.host.retryPawnRun(projectId, threadId)
+    ipcMain.handle(
+      'agent:retryPawnRun',
+      (_, projectId: string, threadId: string, picked?: unknown) =>
+        this.host.retryPawnRun(
+          projectId,
+          threadId,
+          picked === undefined ? undefined : validateThreadSettings(picked)
+        )
     )
     ipcMain.handle('agent:getPawnRunState', (_, projectId: string, threadId: string) =>
       this.host.pawnRunState(projectId, threadId)

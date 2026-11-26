@@ -1353,8 +1353,8 @@ export class ChatEngine {
     return this.units['assignment-workers'].runPawnTool(input, context)
   }
   /** Run a pawn agent again from its own thread, without a conversation. */
-  async retryPawnRun(projectId: string, threadId: string): Promise<void> {
-    return this.units['assignment-workers'].retryPawnRun(projectId, threadId)
+  async retryPawnRun(projectId: string, threadId: string, picked?: ThreadSettings): Promise<void> {
+    return this.units['assignment-workers'].retryPawnRun(projectId, threadId, picked)
   }
   /** Whether an open pawn thread is running, and the failure it ended on. */
   async pawnRunState(

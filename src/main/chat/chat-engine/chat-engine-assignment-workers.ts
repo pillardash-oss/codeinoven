@@ -1433,9 +1433,9 @@ export class ChatEngineAssignmentWorkers {
     return this.pawns.runPawnTool(input, context)
   }
 
-  /** Run a pawn again from its own thread, on the model it carries now. */
-  retryPawnRun(projectId: string, threadId: string): Promise<void> {
-    return this.pawns.retryPawnRun(projectId, threadId)
+  /** Run a pawn again from its own thread, on the model picked in its card. */
+  retryPawnRun(projectId: string, threadId: string, picked?: ThreadSettings): Promise<void> {
+    return this.pawns.retryPawnRun(projectId, threadId, picked)
   }
 
   /** Whether the open pawn is running, and the failure it ended on when not. */

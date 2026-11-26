@@ -99,7 +99,20 @@
       // the run instead of trusting what it saw when it mounted.
       refreshKey: `${thread.status}:${thread.updatedAt}:${thread.lastErrorAt ?? ''}:${
         board.handleAgentEvent.providerStatus?.state ?? ''
-      }`
+      }`,
+      // The retry runs on the pawn's own thread settings, and the card's picker
+      // writes them: a pawn that died on a rate limit, a paused provider or the
+      // wrong model is retried on the model and thinking level chosen here.
+      settings: board.loadOlderMessages.settings,
+      providers: board.currentWorkingTraceAttribution.providers,
+      favoriteModels: rendererRecovery.favoriteModels,
+      recentModels: rendererRecovery.recentModels,
+      onModelChange: board.currentWorkingTraceAttribution.changeThreadModel,
+      onRemoveRecent: (key: string) => rendererRecovery.removeRecentModel(key),
+      onToggleFavorite: (providerId: string, modelId: string, harnessId: string) =>
+        rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId)),
+      onReorderFavorite: (draggedKey: string, targetKey: string, position: 'before' | 'after') =>
+        rendererRecovery.reorderFavorite(draggedKey, targetKey, position)
     }
   })
 </script>

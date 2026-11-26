@@ -178,7 +178,14 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
       // state above is the only status the row has until the run reports.
       const lockedThread = this.root.handleAgentEvent.thread
       if (lockedThread.userInputLocked === true) {
-        await invoke('agent:retryPawnRun', lockedThread.projectId, lockedThread.id)
+        // The card's picker holds the model this retry must run, so the thread's
+        // live settings ride along instead of being read back in the main process.
+        await invoke(
+          'agent:retryPawnRun',
+          lockedThread.projectId,
+          lockedThread.id,
+          this.root.loadOlderMessages.settings
+        )
         this.root.handleAgentEvent.providerStatus = null
         return
       }

@@ -136,14 +136,21 @@ export const invokeAgentContract = {
     void
   >,
   /**
-   * Run a pawn agent again from its own thread, on the model the thread carries
-   * now.
+   * Run a pawn agent again from its own thread, on the model the caller picked.
    *
    * A pawn takes no user prompt, so its retry is the one action the person
    * watching it must still be able to take without a conversation: a rate limit,
    * a paused provider, or a task spawned on the wrong model or thinking level.
+   *
+   * The pick rides along with the click instead of being read back from the
+   * thread row: the picker saves asynchronously, and a retry that read the row
+   * could race that write and run the model the reader just moved away from. It
+   * is persisted here first, so the run and the thread agree afterwards.
    */
-  'agent:retryPawnRun': {} as Contract<[projectId: string, threadId: string], void>,
+  'agent:retryPawnRun': {} as Contract<
+    [projectId: string, threadId: string, settings?: ThreadSettings],
+    void
+  >,
   /**
    * Whether an open pawn thread is running, and the failure it ended on when it is
    * not. A pawn takes no user prompt, so this is what its locked card reads to
