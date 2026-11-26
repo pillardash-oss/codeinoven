@@ -266,7 +266,9 @@
             sourceLabel={item.task.workerName ?? item.worker.title}
             sourceDetail={item.task.title}
             retryLabel="Retry worker"
-            retrying={board.submitBrainstormDecision.assignmentWorkerRetryingId === item.worker.id}
+            retrying={board.submitBrainstormDecision.assignmentWorkerRetryingIds.has(
+              item.worker.id
+            )}
             stackedAbove={index > 0}
             joinsBelow
             threadId={board.handleAgentEvent.thread.id}

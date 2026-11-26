@@ -15,6 +15,7 @@
  * beside the store rather than inside it: nothing on screen derives from them.
  */
 import { invoke } from '$lib/ipc.svelte'
+import { DEADLINE_EXCEEDED, withDeadline } from '$shared/with-deadline'
 import type { ThreadResourceGateAnswer } from '$shared/resource-admission'
 
 /**
@@ -26,6 +27,19 @@ import type { ThreadResourceGateAnswer } from '$shared/resource-admission'
  * the answer to.
  */
 const HOLD_READING_TTL_MS = 8_000
+
+/**
+ * How long a gate read may take before the send goes ahead without it.
+ *
+ * The gate protects the machine, so a slow gate is a reason to skip the gate,
+ * never a reason to hold the user's message. This deadline is what makes that
+ * true: the read is answered by a database worker or by an SSH probe of another
+ * machine, and either can stall indefinitely on a struggling device. Without a
+ * bound, one stalled read stayed in `reads` for the life of the window and every
+ * later send on that thread awaited the same promise, so the composer accepted
+ * clicks and delivered nothing at all while the rest of the UI kept working.
+ */
+export const HOLD_READING_TIMEOUT_MS = 3_000
 
 /** One finished gate read: the answer, where null inside means "may send". */
 interface GateReading {
@@ -81,7 +95,14 @@ async function askThreadHold(
   const key = gateKey(projectId, threadId)
   const pending = (async (): Promise<GateReading | null> => {
     try {
-      const answer = await invoke('system:threadResourceGate', projectId, threadId)
+      const answer = await withDeadline(
+        invoke('system:threadResourceGate', projectId, threadId),
+        HOLD_READING_TIMEOUT_MS
+      )
+      // A read that ran out of time is not an answer: the send goes ahead, and
+      // nothing about it is remembered. Caching a timeout would turn one slow
+      // instant into a permanently believed hold.
+      if (answer === DEADLINE_EXCEEDED) return null
       // Null means "may send". The gate answers for every thread, so returning
       // the answer itself would read as a hold for a perfectly idle machine, and
       // every send would park instead of leaving: a message that slides up the
