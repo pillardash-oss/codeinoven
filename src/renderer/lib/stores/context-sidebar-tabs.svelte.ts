@@ -918,8 +918,28 @@ export class SidebarTabContexts {
    * duplicated when a thread switches modes.
    */
   openCoordinator(projectId: string, threadId: string, title: string): void {
-    const context = this.ensureContext(projectId, threadId)
-    const id = `coordinator:${projectId}:${threadId}`
+    this.openCoordinatorRow(projectId, threadId, projectId, threadId, title)
+  }
+
+  /**
+   * Dock a row's coordinator board in the context of the thread on screen.
+   *
+   * A coordinator board belongs to the row that coordinates, and a reader who
+   * steps into a thread that row created (a pawn, a run dispatched into another
+   * project) must keep the board: it is the only list those threads appear in, and
+   * it is how the reader moves between siblings. So the tab is docked where the
+   * reader is and keeps pointing at the row, which is what makes the row's ids,
+   * not the on-screen project, the tab's identity.
+   */
+  openCoordinatorRow(
+    anchorProjectId: string,
+    anchorThreadId: string,
+    rowProjectId: string,
+    rowThreadId: string,
+    title: string
+  ): void {
+    const context = this.ensureContext(anchorProjectId, anchorThreadId)
+    const id = `coordinator:${rowProjectId}:${rowThreadId}`
     const existing = context.tabs.find((tab) => tab.id === id)
     if (existing) {
       existing.title = title
@@ -930,8 +950,8 @@ export class SidebarTabContexts {
       id,
       kind: 'coordinator',
       title,
-      projectId,
-      threadId
+      projectId: rowProjectId,
+      threadId: rowThreadId
     })
   }
 

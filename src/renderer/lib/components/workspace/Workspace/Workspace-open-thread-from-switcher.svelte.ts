@@ -19,6 +19,7 @@ import type { AgentPart, Thread } from '$shared/types'
 import {
   activeThreadRowId,
   coordinatorHasActiveDelegates,
+  delegationSpawnerRow,
   INBOX_PROJECT_ID,
   isThreadBusy,
   threadTracksReadStatus,
@@ -246,15 +247,22 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
     )
   }
 
-  /** The coordinator published by the thread on screen, if it coordinates work.
+  /** The coordinator published for the thread on screen, if one coordinates work.
    *  A worker/auditor child publishes under its coordinator's id, so the panel
-   *  stays docked as the user moves between its children. */
-  coordinator = $derived(
-    coordinatorDockState.forThread(
-      this.selectedThread?.projectId,
-      activeThreadRowId(this.selectedThread)
-    )
-  )
+   *  stays docked as the user moves between its children. A thread that was itself
+   *  created by another one (a pawn, a dispatched run) shows the board of the row
+   *  that created it, because that board is the only list it appears in. */
+  coordinator = $derived.by(() => {
+    const thread = this.selectedThread
+    if (!thread) return null
+    const rowId = activeThreadRowId(thread)
+    const own = coordinatorDockState.forThread(thread.projectId, rowId)
+    if (own) return own
+    const spawner = delegationSpawnerRow(thread)
+    return spawner === null
+      ? null
+      : coordinatorDockState.forThread(spawner.projectId, spawner.threadId)
+  })
 
   /** The auditor thread of the on-screen coordinator, if one exists. Orchestration
    *  children stay out of the visible thread list but land in the scope store
@@ -382,12 +390,18 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
   })
 
   openCoordinatorTab(): void {
-    if (!this.coordinator) return
-    coordinatorDockState.restore(this.coordinator.projectId, this.coordinator.threadId)
-    contextSidebarState.openCoordinator(
-      this.coordinator.projectId,
-      this.coordinator.threadId,
-      this.coordinator.label
+    const registration = this.coordinator
+    const thread = this.selectedThread
+    if (!registration || !thread) return
+    coordinatorDockState.restore(registration.projectId, registration.threadId)
+    // The tab is docked where the reader is; it points at the row that owns the
+    // board, which may be another project's thread (a dispatched run's spawner).
+    contextSidebarState.openCoordinatorRow(
+      thread.projectId,
+      activeThreadRowId(thread) ?? thread.id,
+      registration.projectId,
+      registration.threadId,
+      registration.label
     )
   }
 

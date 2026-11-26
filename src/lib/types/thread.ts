@@ -593,6 +593,28 @@ export function activeThreadRowId(thread: Thread | null | undefined): string | n
   return thread.id
 }
 
+/**
+ * The thread that created this one, as the row a delegation board belongs to.
+ *
+ * A pawn names its spawner in `coordinatorThreadId` and lives in the spawner's
+ * own project. A dispatched run records the thread that asked for it in
+ * `dispatchOrigin`, and that thread is usually in another project. A thread the
+ * user started was created by nobody, so it answers null.
+ *
+ * This is the row, not the view: a spawned thread's board lists its siblings, and
+ * the board must stay that row's board wherever the reader opened it from.
+ */
+export function delegationSpawnerRow(
+  thread: Thread | null | undefined
+): { projectId: string; threadId: string } | null {
+  if (!thread) return null
+  const spawner = thread.coordinatorThreadId
+  if (spawner !== undefined) return { projectId: thread.projectId, threadId: spawner }
+  const origin = thread.dispatchOrigin
+  if (!origin?.initiatorProjectId || !origin.initiatorThreadId) return null
+  return { projectId: origin.initiatorProjectId, threadId: origin.initiatorThreadId }
+}
+
 export interface CreateThreadInput {
   id?: string
   projectId: string

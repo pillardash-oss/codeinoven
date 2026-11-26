@@ -10,6 +10,7 @@
   import { groupThreadsByStatus } from '$lib/components/workspace/workspace-thread-helpers'
   import { isThreadLiveWorking } from '$lib/thread-status-badge'
   import { openThreadById } from '$lib/threads/open-thread-by-id'
+  import { invoke } from '$lib/ipc.svelte'
   import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
   import { pawnAgentsState } from '$lib/stores/pawn-agents.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
@@ -71,6 +72,30 @@
   function openThread(thread: Thread): void {
     void openThreadById(thread.projectId, thread.id)
   }
+
+  /**
+   * Delete one of the threads this board lists.
+   *
+   * A pawn appears in no thread list, and a run dispatched into another project
+   * sits far from the reader in its own list, so this board is the only place the
+   * row can be removed. That is why the row carries the same Delete action every
+   * thread row does, instead of the board being read-only.
+   *
+   * The board's own thread is the place to land when the deleted thread is the one
+   * on screen: its transcript is gone, and its spawner is the list the reader came
+   * from.
+   */
+  async function deleteThread(thread: Thread): Promise<void> {
+    const wasOpen = workspaceState.selectedThread?.id === thread.id
+    await invoke('thread:delete', thread.projectId, thread.id)
+    scopeState.removeThread(thread.id)
+    // A dispatched row leaves the board only once the ledger is read again: the
+    // store keeps the last answer for the row it published.
+    void orchestrationCoordinatorState.refresh(projectId, threadId)
+    if (!wasOpen) return
+    const opened = await openThreadById(projectId, threadId)
+    if (!opened) workspaceState.clearThread()
+  }
 </script>
 
 {#snippet groupList(groups: ReturnType<typeof visibleGroups>)}
@@ -102,6 +127,7 @@
                 selected={selectedThreadId === thread.id}
                 showChangeScope={false}
                 onOpen={openThread}
+                onDelete={deleteThread}
               />
             {/each}
           </div>
