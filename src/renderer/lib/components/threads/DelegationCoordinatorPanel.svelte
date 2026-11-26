@@ -35,6 +35,19 @@
    */
   let { projectId, threadId }: DelegationCoordinatorPanelProps = $props()
 
+  // A crashed run leaves its pawn's card mid-flight and its row interrupted, so
+  // the board reads them as finished work. Settle them from their own transcripts
+  // when the board opens; the thread updates that follow regroup the list.
+  function settleStrandedPawnRuns(spawnerId: string): void {
+    void invoke('agent:repairPawnRuns', projectId, spawnerId).catch(() => {
+      /* A read that failed is not a verdict on any of these runs. */
+    })
+  }
+
+  $effect(() => {
+    settleStrandedPawnRuns(threadId)
+  })
+
   let pawns = $derived(pawnAgentsState.workersOf(threadId))
   let runs = $derived(orchestrationCoordinatorState.rowsFor(projectId, threadId))
   let selectedThreadId = $derived(workspaceState.selectedThread?.id ?? null)

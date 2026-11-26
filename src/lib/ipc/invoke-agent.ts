@@ -153,6 +153,13 @@ export const invokeAgentContract = {
     [projectId: string, threadId: string],
     { pawn: boolean; running: boolean; failure: string | null }
   >,
+  /**
+   * Settle the pawn runs a crash left behind.
+   *
+   * Opening the board is the moment their truth matters, and it is cheap: one
+   * mirror read per pawn that still claims to be running.
+   */
+  'agent:repairPawnRuns': {} as Contract<[projectId: string, spawnerThreadId: string], void>,
   'agent:retryAssignmentWorker': {} as Contract<
     [projectId: string, coordinatorThreadId: string, workerThreadId: string],
     AssignmentPlan

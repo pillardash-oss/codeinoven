@@ -99,11 +99,15 @@ function stubHost(options: StubOptions = {}) {
         threadId === thread.id ? thread : null
       ),
       loadMessages: vi.fn(async () => options.spawnerMessages ?? []),
+      loadMessageRecords: vi.fn(async () => options.spawnerMessages ?? []),
+      loadSubagentMessages: vi.fn(async () => options.transcript ?? []),
+      listThreads: vi.fn(async () => [thread]),
       upsertMessages: vi.fn(async () => undefined),
       setStatus,
       clearStoppedByUser
     },
-    resolve: vi.fn(async () => ({ driver, projectPath: '/tmp/project-1' })),
+    resolve: vi.fn(async () => ({ driver, projectPath: '/w/project-1' })),
+    checkpointManager: { activeTurnOwnerPid: vi.fn(async () => null) },
     ensureSession: vi.fn(async () => SESSION_ID),
     sendPrompt,
     broadcast,
@@ -197,6 +201,103 @@ describe('a pawn run reports what actually happened', () => {
       running: false,
       failure: null
     })
+  })
+})
+
+describe('a pawn run the app died inside is settled from its own transcript', () => {
+  function pawnCard(status: 'running' | 'completed', sessionId = SESSION_ID): AgentMessage {
+    return {
+      id: `pawn:${PROJECT_ID}:${sessionId}`,
+      role: 'assistant',
+      createdAt: 1,
+      parts: [
+        {
+          type: 'subagent',
+          id: 'part-1',
+          messageID: 'pawn',
+          callID: 'pawn',
+          activity: {
+            status,
+            agent: 'refactor',
+            description: 'refactor the blog',
+            prompt: 'Retire the hand-written redraw in the blog.',
+            childSessionId: sessionId,
+            background: true,
+            pawn: true,
+            time: { start: 5, ...(status === 'completed' ? { end: 6 } : {}) }
+          }
+        }
+      ]
+    } as unknown as AgentMessage
+  }
+
+  it('turns a card stuck at running into the failure its transcript recorded', async () => {
+    const { host, setStatus } = stubHost({
+      transcript: [assistantError('429: rate limit exceeded')],
+      spawnerMessages: [pawnCard('running')]
+    })
+    const pawns = new ChatEnginePawnAgents(host)
+
+    await pawns.repairStrandedPawnRuns(PROJECT_ID, SPAWNER_THREAD_ID)
+
+    expect(setStatus).toHaveBeenCalledWith(
+      PROJECT_ID,
+      PAWN_THREAD_ID,
+      'failed',
+      expect.objectContaining({ error: '429: rate limit exceeded' })
+    )
+  })
+
+  it('refuses to call a run done when it never produced an answer', async () => {
+    const reasoningOnly: AgentMessage = {
+      id: 'pi-1',
+      role: 'assistant',
+      createdAt: 10,
+      completedAt: 11,
+      parts: [
+        {
+          type: 'reasoning',
+          id: 'pi-1:reasoning:0',
+          messageID: 'pi-1',
+          text: 'Let me write the report.'
+        }
+      ]
+    } as unknown as AgentMessage
+    const { host, setStatus } = stubHost({
+      thread: pawnThread({ status: 'completed', lastOutcome: 'completed' }),
+      transcript: [reasoningOnly],
+      spawnerMessages: [pawnCard('completed')]
+    })
+    const pawns = new ChatEnginePawnAgents(host)
+
+    await pawns.repairStrandedPawnRuns(PROJECT_ID, SPAWNER_THREAD_ID)
+
+    expect(setStatus).toHaveBeenCalledWith(
+      PROJECT_ID,
+      PAWN_THREAD_ID,
+      'failed',
+      expect.objectContaining({ error: expect.stringContaining('stopped before it finished') })
+    )
+  })
+
+  it('leaves a finished run alone when the answer is there', async () => {
+    const answered: AgentMessage = {
+      id: 'pi-2',
+      role: 'assistant',
+      createdAt: 10,
+      completedAt: 11,
+      parts: [{ type: 'text', id: 'pi-2:text:0', messageID: 'pi-2', text: '## Outcome. Done.' }]
+    } as unknown as AgentMessage
+    const { host, setStatus } = stubHost({
+      thread: pawnThread({ status: 'completed', lastOutcome: 'completed' }),
+      transcript: [answered],
+      spawnerMessages: [pawnCard('completed')]
+    })
+    const pawns = new ChatEnginePawnAgents(host)
+
+    await pawns.repairStrandedPawnRuns(PROJECT_ID, SPAWNER_THREAD_ID)
+
+    expect(setStatus).not.toHaveBeenCalled()
   })
 })
 

@@ -1446,6 +1446,18 @@ export class ChatEngineAssignmentWorkers {
     return this.pawns.pawnRunState(projectId, threadId)
   }
 
+  /**
+   * Write the true end of every pawn run a crash left hanging.
+   *
+   * A process that died mid-run never published its pawns' outcomes, so their
+   * cards still claim they are working while the app revives them as interrupted
+   * (which the board groups as done). This settles each one from its own
+   * transcript.
+   */
+  repairStrandedPawnRuns(projectId: string, spawnerThreadId: string): Promise<void> {
+    return this.pawns.repairStrandedPawnRuns(projectId, spawnerThreadId)
+  }
+
   runningPawnThreads(projectId: string, spawnerThreadId: string): Promise<Thread[]> {
     return this.pawns.runningPawnThreads(projectId, spawnerThreadId)
   }

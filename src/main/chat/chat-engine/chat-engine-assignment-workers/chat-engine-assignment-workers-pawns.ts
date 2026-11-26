@@ -50,6 +50,17 @@ interface PawnRunRefs {
   startedAt: number
 }
 
+/**
+ * What a run that produced no answer says.
+ *
+ * A pawn task is a deliverable, so a run that settled without one did not finish,
+ * whatever the harness reported: the app may have closed mid-run, or the harness
+ * may have ended its stream. Calling it finished is what made an interrupted pawn
+ * read as done.
+ */
+const PAWN_UNFINISHED_MESSAGE =
+  'The pawn agent stopped before it finished its task. The app closed during its run.'
+
 /** What a followed pawn run came back with. */
 interface PawnRunOutcome {
   ok: boolean
@@ -702,8 +713,8 @@ export class ChatEnginePawnAgents {
    * row left as `interrupted` tells them nothing about the rate limit that stopped
    * the run. A stop with no provider error is left exactly as it is.
    */
-  private async markPawnThreadFailed(run: PawnRunRefs): Promise<void> {
-    const failure = await this.pawnRecordedProviderError(run)
+  private async markPawnThreadFailed(run: PawnRunRefs, reason?: string): Promise<void> {
+    const failure = (await this.pawnRecordedProviderError(run)) ?? reason?.trim() ?? ''
     if (!failure) return
     const thread = await this.host.threadManager
       .getThread(run.projectId, run.pawn.id)
@@ -724,6 +735,121 @@ export class ChatEnginePawnAgents {
   }
 
   /**
+   * Settle a pawn run the app died in the middle of.
+   *
+   * A crash kills the follow that would have published the pawn's outcome, so its
+   * card stays `running` with no end time and its row keeps whatever it had    a
+   * task the board shows as done while nothing about it finished. This reads what
+   * the run itself recorded and writes that truth back, once, for the pawns of one
+   * spawner or for a single pawn.
+   */
+  async repairStrandedPawnRuns(
+    projectId: string,
+    spawnerThreadId: string,
+    onlyPawnId?: string
+  ): Promise<void> {
+    const cards = await this.pawnCardsOf(projectId, spawnerThreadId)
+    if (cards.size === 0) return
+    for (const pawn of await this.pawnThreadsOf(projectId, spawnerThreadId)) {
+      if (onlyPawnId !== undefined && pawn.id !== onlyPawnId) continue
+      const sessionId = pawn.sessionId
+      if (!sessionId) continue
+      const card = cards.get(sessionId)
+      if (!card) continue
+      const claimedDone = card.status === 'completed'
+      if (!claimedDone && card.status !== 'running' && card.status !== 'pending') continue
+      // A turn live in this process is the run itself: never settle over it.
+      if (this.host.sessionStatuses.get(sessionId)?.state === 'working') continue
+      const ownerPid = await this.host.checkpointManager
+        .activeTurnOwnerPid(projectId, pawn.id)
+        .catch(() => null)
+      if (ownerPid !== null) continue
+      const messages = await this.host.threadManager
+        .loadSubagentMessages(projectId, pawn.id, sessionId)
+        .catch(() => [])
+      const last = [...messages].reverse().find((message) => message.role === 'assistant')
+      const finalText = last
+        ? last.parts
+            .filter((part) => part.type === 'text')
+            .map((part) => part.text)
+            .join('\n')
+            .trim()
+        : ''
+      // A card that already names a finish with an answer behind it is truthful.
+      if (claimedDone && finalText.length > 0) continue
+      const activity: AgentSubagentActivity = {
+        ...card,
+        time: { start: card.time?.start ?? pawn.createdAt, end: last?.completedAt ?? Date.now() }
+      }
+      const settings = pawn.settings ? validateThreadSettings(pawn.settings) : null
+      const run: PawnRunRefs | null = settings
+        ? {
+            projectId,
+            spawnerThreadId,
+            spawnerSessionId: '',
+            pawn,
+            settings,
+            driverId: settings.harnessId || DEFAULT_HARNESS,
+            accountId: settings.accountId,
+            sessionId,
+            purpose: card.description ?? '',
+            instructions: card.prompt ?? '',
+            background: false,
+            startedAt: card.time?.start ?? pawn.createdAt
+          }
+        : null
+      const providerError = last?.error?.trim()
+      if (providerError) {
+        this.host.state.childSessionActivityStatuses.set(sessionId, 'error')
+        await this.publishPawnActivity(projectId, spawnerThreadId, '', {
+          ...activity,
+          status: 'error',
+          error: `The pawn agent failed: ${providerError}`
+        })
+        if (run) await this.markPawnThreadFailed(run, `The pawn agent failed: ${providerError}`)
+        continue
+      }
+      if (finalText.length > 0) {
+        this.host.state.childSessionActivityStatuses.set(sessionId, 'completed')
+        await this.publishPawnActivity(projectId, spawnerThreadId, '', {
+          ...activity,
+          status: 'completed',
+          output: finalText
+        })
+        continue
+      }
+      // No provider error and no answer: the run never delivered its task, which
+      // is a failure the spawner has to answer for, not a finished one.
+      this.host.state.childSessionActivityStatuses.set(sessionId, 'error')
+      await this.publishPawnActivity(projectId, spawnerThreadId, '', {
+        ...activity,
+        status: 'error',
+        error: PAWN_UNFINISHED_MESSAGE
+      })
+      if (run) await this.markPawnThreadFailed(run, PAWN_UNFINISHED_MESSAGE)
+    }
+  }
+
+  /** The pawn cards a spawner holds, keyed by the child session they describe. */
+  private async pawnCardsOf(
+    projectId: string,
+    spawnerThreadId: string
+  ): Promise<Map<string, AgentSubagentActivity>> {
+    const cards = new Map<string, AgentSubagentActivity>()
+    const records = await this.host.threadManager
+      .loadMessageRecords(projectId, spawnerThreadId)
+      .catch(() => [])
+    for (const message of records) {
+      for (const part of message.parts) {
+        if (part.type !== 'subagent' || part.activity.pawn !== true) continue
+        const sessionId = part.activity.childSessionId
+        if (sessionId) cards.set(sessionId, part.activity)
+      }
+    }
+    return cards
+  }
+
+  /**
    * What the open pawn thread needs to show: whether its run is live, and the
    * failure it ended on when it is not.
    *
@@ -738,10 +864,20 @@ export class ChatEnginePawnAgents {
   ): Promise<{ pawn: boolean; running: boolean; failure: string | null }> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Pawn thread ID')
-    const pawn = await this.host.threadManager.getThread(projectId, threadId).catch(() => null)
-    if (!pawn || pawn.coordinatorThreadId === undefined || pawn.auditorThreadId !== undefined) {
+    const opening = await this.host.threadManager.getThread(projectId, threadId).catch(() => null)
+    if (
+      !opening ||
+      opening.coordinatorThreadId === undefined ||
+      opening.auditorThreadId !== undefined
+    ) {
       return { pawn: false, running: false, failure: null }
     }
+    // A run the app died inside left its card claiming it still works. Settle it
+    // from its own transcript before answering, so the view reports the failure
+    // that actually happened instead of a run that never ends.
+    await this.repairStrandedPawnRuns(projectId, opening.coordinatorThreadId, opening.id)
+    const pawn =
+      (await this.host.threadManager.getThread(projectId, threadId).catch(() => null)) ?? opening
     const running =
       this.host.sessionStatuses.get(pawn.sessionId ?? '')?.state === 'working' ||
       pawn.status === 'executing' ||
@@ -753,7 +889,7 @@ export class ChatEnginePawnAgents {
         : pawn.settings
           ? await this.pawnRunFailure({
               projectId,
-              spawnerThreadId: pawn.coordinatorThreadId,
+              spawnerThreadId: opening.coordinatorThreadId,
               spawnerSessionId: '',
               pawn,
               settings: validateThreadSettings(pawn.settings),
@@ -850,19 +986,33 @@ export class ChatEnginePawnAgents {
       run.pawn.id,
       run.accountId
     )
-    const output = outcome.ok
-      ? await this.pawnFinalMessage(driver, projectPath, run.sessionId)
-      : outcome.message
-    const report = output || 'The pawn agent returned no message.'
+    const aborted = this.host.state.userAbortedSessions.has(run.sessionId)
+    // A turn that settled without an answer never delivered its task: a crash, a
+    // harness that closed, a process that went away. Reporting that as completed
+    // is what made unfinished pawns read as done.
+    let settled = outcome
+    if (outcome.ok) {
+      const finalText = (await this.pawnFinalMessage(driver, projectPath, run.sessionId)).trim()
+      settled =
+        finalText.length > 0
+          ? { ok: true, message: finalText }
+          : {
+              ok: false,
+              message: aborted
+                ? 'The pawn agent was stopped before it finished its task.'
+                : PAWN_UNFINISHED_MESSAGE
+            }
+    }
+    const report = settled.message || 'The pawn agent returned no message.'
     this.host.state.childSessionActivityStatuses.set(
       run.sessionId,
-      outcome.ok ? 'completed' : 'error'
+      settled.ok ? 'completed' : aborted ? 'aborted' : 'error'
     )
-    if (!outcome.ok) await this.markPawnThreadFailed(run)
+    if (!settled.ok && !aborted) await this.markPawnThreadFailed(run, settled.message)
     await this.publishPawnRun(
       run,
-      outcome.ok ? 'completed' : 'error',
-      outcome.ok ? { output: report } : { error: report }
+      settled.ok ? 'completed' : aborted ? 'aborted' : 'error',
+      settled.ok ? { output: report } : { error: report }
     )
     await this.reportPawnCompletion(run.projectId, run.pawn, run.purpose, report, {
       spawnerThreadId: run.spawnerThreadId,

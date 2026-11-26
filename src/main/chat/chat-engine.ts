@@ -1363,6 +1363,10 @@ export class ChatEngine {
   ): Promise<{ pawn: boolean; running: boolean; failure: string | null }> {
     return this.units['assignment-workers'].pawnRunState(projectId, threadId)
   }
+  /** Settle the pawn runs a crash left with a card that still says running. */
+  async repairStrandedPawnRuns(projectId: string, spawnerThreadId: string): Promise<void> {
+    return this.units['assignment-workers'].repairStrandedPawnRuns(projectId, spawnerThreadId)
+  }
   async runEngineeringTool(
     operation: EngineeringToolOperation,
     input: Record<string, unknown>,
