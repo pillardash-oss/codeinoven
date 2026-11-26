@@ -1014,6 +1014,9 @@ export class ChatEngineTurnsSendPrompt {
       this.host.state.mermaidRepairAttempts.delete(sessionId)
       this.host.state.incompleteTurnRecoveryAttempts.delete(sessionId)
       this.host.state.searchNudgeAttempts.delete(sessionId)
+      // A user's own prompt is a deliberate new try, so it starts a fresh
+      // rate-limit cooldown budget instead of continuing a spent streak.
+      this.host.state.retryScheduler?.clearRateLimitCooldown(threadId)
       // A user's own prompt supersedes any capacity continuation the app owed
       // and starts a fresh budget: the next refusal is a new situation.
       this.host.units['capacity-continue'].clear(sessionId)

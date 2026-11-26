@@ -3,6 +3,8 @@ import { instanceRegistry } from './instance-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { AgentProviderIssueKind } from '../../lib/types'
 import {
+  RATE_LIMIT_COOLDOWN_MAX_ATTEMPTS,
+  rateLimitCooldownMs,
   TRANSIENT_PROVIDER_RETRY_MAX_MS,
   TRANSIENT_PROVIDER_RETRY_MS
 } from '../../lib/provider-issue'
@@ -21,6 +23,13 @@ export interface PendingRetryRecord {
   resetAt?: number
   /** Provider-reported retry attempt when the reset was surfaced. */
   attempt?: number
+  /**
+   * The app's own consecutive retry number for a rate limit the provider gave
+   * no retry time for (1-based). Absent on provider-scheduled waits.
+   */
+  cooldownAttempt?: number
+  /** True when `retryAt` is the app's rate-limit cooldown, not a provider reset. */
+  retryCooldown?: boolean
   /** Provider-neutral failure kind   drives how the restored card renders. */
   issueKind: AgentProviderIssueKind
   /** Human-readable failure message persisted for the restored warning card. */
@@ -42,6 +51,32 @@ const ISSUE_KINDS = new Set<AgentProviderIssueKind>([
 
 /** How often the ticker checks whether any pending reset window has passed. */
 const RETRY_TICK_MS = 15_000
+/**
+ * Faster tick while a cooldown wait is due within the normal tick. A rate-limit
+ * cooldown is seconds long, so the 15s sweep would fire every one of them late
+ * (a 1s wait could turn into 15s).
+ */
+const RETRY_COOLDOWN_TICK_MS = 1_000
+
+/**
+ * How long after a cooldown wait ends a later rate limit still counts as the
+ * same streak. If the retry succeeded, a new rate limit minutes later is a new
+ * situation with a fresh budget instead of attempt seven on a dead streak.
+ */
+const RATE_LIMIT_COOLDOWN_STREAK_MS = 5 * 60 * 1_000
+
+/** One thread's consecutive rate-limit cooldown streak. */
+interface RateLimitCooldown {
+  attempt: number
+  /** When the reserved retry is due. */
+  retryAt: number
+}
+
+/** A reserved cooldown retry: which attempt it is, and when it fires. */
+export interface RateLimitCooldownReservation {
+  attempt: number
+  retryAt: number
+}
 /** Bound expensive session/context preparation when many windows reset together. */
 const MAX_CONCURRENT_RESUMES = 2
 /** Transport/admission failures must retain automatic recovery without a hot loop. */
@@ -73,8 +108,15 @@ export class RetrySchedulerService {
   private readonly pending = new Map<string, PendingRetryRecord>()
   private readonly resuming = new Map<string, PendingRetryRecord>()
   private timer: ReturnType<typeof setInterval> | null = null
+  private timerIntervalMs: number | null = null
   private timerStopped = false
   private enabled = false
+  /**
+   * Consecutive rate-limit cooldowns per thread. Kept in memory (plus the
+   * pending records that persist an in-flight attempt) because the streak only
+   * matters while the app is retrying; a restart starts a fresh budget.
+   */
+  private readonly rateLimitCooldowns = new Map<string, RateLimitCooldown>()
   private isOnline: (() => boolean) | null = null
   private continueThread: ((record: PendingRetryRecord) => Promise<void>) | null = null
   /** Fired whenever the pending set changes (track/clear/fire/restore). */
@@ -198,6 +240,48 @@ export class RetrySchedulerService {
   }
 
   /**
+   * Reserve the next automatic retry for a rate limit the provider gave no
+   * retry time for. The first failure waits 1s, the next 3s, then 5s, 10s, 30s,
+   * and 60s. A re-report of the same failure does not advance or push out the
+   * wait. `undefined` means the six-step schedule is exhausted and the caller
+   * must stop retrying.
+   */
+  reserveRateLimitCooldown(
+    threadId: string,
+    now = Date.now()
+  ): RateLimitCooldownReservation | undefined {
+    const previous = this.rateLimitCooldowns.get(threadId)
+    if (previous && now < previous.retryAt) {
+      // The same failure under another session of this thread: keep the attempt
+      // and its deadline instead of charging the thread twice or delaying it.
+      return { attempt: previous.attempt, retryAt: previous.retryAt }
+    }
+    const continuing =
+      previous !== undefined && now - previous.retryAt <= RATE_LIMIT_COOLDOWN_STREAK_MS
+    const attempt = continuing ? previous.attempt + 1 : 1
+    const delayMs = rateLimitCooldownMs(attempt)
+    if (delayMs === undefined) {
+      // Remember the exhausted streak so a still-failing thread stays stopped
+      // instead of rolling back to attempt one on the next report.
+      this.rateLimitCooldowns.set(threadId, { attempt, retryAt: now })
+      Logger.info('Rate-limit cooldown schedule exhausted', {
+        threadId,
+        attempts: RATE_LIMIT_COOLDOWN_MAX_ATTEMPTS
+      })
+      return undefined
+    }
+    const retryAt = now + delayMs
+    this.rateLimitCooldowns.set(threadId, { attempt, retryAt })
+    Logger.info('Rate-limit cooldown reserved', { threadId, attempt, delayMs })
+    return { attempt, retryAt }
+  }
+
+  /** A completed turn or a manual retry starts a fresh cooldown budget. */
+  clearRateLimitCooldown(threadId: string): void {
+    this.rateLimitCooldowns.delete(threadId)
+  }
+
+  /**
    * The waits this instance is currently holding, one per session.
    *
    * Read by the attention mirror, which reports a parked dispatched thread into
@@ -296,10 +380,7 @@ export class RetrySchedulerService {
 
   stop(): void {
     this.timerStopped = true
-    if (this.timer !== null) {
-      clearInterval(this.timer)
-      this.timer = null
-    }
+    this.clearTimer()
   }
 
   dispose(): void {
@@ -307,6 +388,7 @@ export class RetrySchedulerService {
     // In-memory state is dropped on shutdown, but the persisted file is kept so
     // the next launch can restore the pending resets and their warning cards.
     this.pending.clear()
+    this.rateLimitCooldowns.clear()
     this.continueThread = null
   }
 
@@ -322,7 +404,14 @@ export class RetrySchedulerService {
     for (const raw of saved) {
       const validated = this.validateSavedRecord(raw)
       if (!validated) continue
-      this.pending.set(validated.sessionId, this.repairTransientRecord(validated))
+      const repaired = this.repairTransientRecord(validated)
+      this.pending.set(repaired.sessionId, repaired)
+      if (repaired.retryCooldown && repaired.cooldownAttempt !== undefined) {
+        this.rateLimitCooldowns.set(repaired.threadId, {
+          attempt: repaired.cooldownAttempt,
+          retryAt: repaired.retryAt ?? Date.now()
+        })
+      }
     }
     if (this.pending.size > 0) {
       Logger.info('Auto-resume restored pending retries after restart', {
@@ -376,6 +465,10 @@ export class RetrySchedulerService {
       issueKind: issueKind as AgentProviderIssueKind,
       issueMessage,
       ...(typeof attempt === 'number' && Number.isFinite(attempt) ? { attempt } : {}),
+      ...(typeof record.cooldownAttempt === 'number' && Number.isFinite(record.cooldownAttempt)
+        ? { cooldownAttempt: record.cooldownAttempt }
+        : {}),
+      ...(record.retryCooldown === true ? { retryCooldown: true } : {}),
       ...(typeof rawError === 'string' ? { rawError } : {})
     }
   }
@@ -417,18 +510,37 @@ export class RetrySchedulerService {
     return this.persistChain
   }
 
+  private clearTimer(): void {
+    if (this.timer !== null) clearInterval(this.timer)
+    this.timer = null
+    this.timerIntervalMs = null
+  }
+
   private refreshTimer(): void {
-    const shouldRun =
-      !this.timerStopped &&
-      [...this.pending.values()].some(
-        (record) => (this.enabled || record.issueKind === 'network') && record.retryAt !== undefined
-      )
-    if (shouldRun && this.timer === null) {
-      this.timer = setInterval(() => this.tick(), RETRY_TICK_MS)
-    } else if (!shouldRun && this.timer !== null) {
-      clearInterval(this.timer)
-      this.timer = null
+    if (this.timerStopped) {
+      this.clearTimer()
+      return
     }
+    const eligible = [...this.pending.values()].filter(
+      (record) => this.enabled || record.issueKind === 'network'
+    )
+    const dueTimes = eligible.flatMap((record) =>
+      record.retryAt === undefined ? [] : [record.retryAt]
+    )
+    if (dueTimes.length === 0) {
+      this.clearTimer()
+      return
+    }
+    // A rate-limit cooldown is seconds long, so the 15s sweep would fire it
+    // late (a 1s wait could turn into 15s). Sweep at one second while one is on
+    // the ledger; every other wait keeps the normal, cheaper sweep.
+    const interval = eligible.some((record) => record.retryCooldown === true)
+      ? RETRY_COOLDOWN_TICK_MS
+      : RETRY_TICK_MS
+    if (this.timer !== null && this.timerIntervalMs === interval) return
+    this.clearTimer()
+    this.timerIntervalMs = interval
+    this.timer = setInterval(() => this.tick(), interval)
   }
 
   private tick(): void {

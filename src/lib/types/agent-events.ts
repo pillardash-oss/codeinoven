@@ -41,6 +41,11 @@ export interface AgentProviderIssue {
   retryAt?: number
   /** App admission deadline, including the provider reset buffer. */
   autoResumeAt?: number
+  /**
+   * True when `retryAt` is the app's own rate-limit cooldown rather than a
+   * provider-reported reset, so the card can name it a cooldown countdown.
+   */
+  retryCooldown?: boolean
   attempt?: number
   statusCode?: number
 }

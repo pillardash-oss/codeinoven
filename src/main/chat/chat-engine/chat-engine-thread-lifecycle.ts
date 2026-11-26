@@ -900,6 +900,16 @@ export class ChatEngineThreadLifecycle {
           // even when retryAt was never derived   this covers ba9a2c59... (>6h/missing retryAt).
           if (!isUsageResetWaitIssue({ kind, retryable })) continue
 
+          // A rate limit with no provider reset time is repaired onto the same
+          // short cooldown schedule an in-flight retry uses. Once the six steps
+          // are spent the thread stays stopped instead of being re-armed for an
+          // hour on a blind wait.
+          const cooldown =
+            scheduler && kind === 'rate_limit'
+              ? scheduler.reserveRateLimitCooldown(row.id)
+              : undefined
+          if (kind === 'rate_limit' && !cooldown) continue
+
           const updated = await this.host.threadManager.setStatus(
             row.project_id,
             row.id,
@@ -917,10 +927,12 @@ export class ChatEngineThreadLifecycle {
               threadId: row.id,
               harnessId: thread.sessionHarnessId ?? thread.settings?.harnessId ?? 'unknown',
               retryAt:
+                cooldown?.retryAt ??
                 Date.now() +
-                (kind === 'provider_unavailable'
-                  ? TRANSIENT_PROVIDER_RETRY_MS
-                  : USAGE_RESET_FALLBACK_RETRY_MS),
+                  (kind === 'provider_unavailable'
+                    ? TRANSIENT_PROVIDER_RETRY_MS
+                    : USAGE_RESET_FALLBACK_RETRY_MS),
+              ...(cooldown ? { retryCooldown: true, cooldownAttempt: cooldown.attempt } : {}),
               issueKind: kind,
               issueMessage: lastError
             })

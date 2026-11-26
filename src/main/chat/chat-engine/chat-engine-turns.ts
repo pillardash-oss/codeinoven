@@ -884,6 +884,12 @@ export class ChatEngineTurns {
       if (event.status.state !== 'idle' || currentStatus?.state !== 'error') {
         this.host.sessionStatuses.set(event.sessionId, event.status)
       }
+      // An idle that is not a live retry wait means the last turn finished on
+      // its own, so its rate-limit cooldown streak is over and the next rate
+      // limit starts from a fresh one-second wait.
+      if (event.status.state === 'idle' && eventOwner) {
+        this.host.state.retryScheduler?.clearRateLimitCooldown(eventOwner.threadId)
+      }
       if (
         event.status.state === 'waiting' &&
         eventOwner &&

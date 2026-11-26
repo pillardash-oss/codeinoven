@@ -51,6 +51,33 @@ export const TRANSIENT_PROVIDER_RETRY_MS = 60 * 1_000
 export const TRANSIENT_PROVIDER_RETRY_MAX_MS = 15 * 60 * 1_000
 
 /**
+ * Cooldown schedule for a rate limit the provider did not attach a retry time
+ * to. An immediate retry hammers an account that is already refusing work, so
+ * each consecutive failure waits longer: 1s, 3s, 5s, 10s, 30s, then a final
+ * minute. After the last step the app stops retrying and leaves the thread on
+ * its failure card for a deliberate manual retry.
+ *
+ * The whole streak is short by design: a real rate limit clears in seconds to a
+ * minute, and a wait the provider never scheduled must never become an hour-long
+ * blind cooldown.
+ */
+export const RATE_LIMIT_COOLDOWN_SCHEDULE_MS = [
+  1_000, 3_000, 5_000, 10_000, 30_000, 60_000
+] as const
+
+/** Number of automatic cooldown retries allowed before the app stops. */
+export const RATE_LIMIT_COOLDOWN_MAX_ATTEMPTS = RATE_LIMIT_COOLDOWN_SCHEDULE_MS.length
+
+/**
+ * Wait before the given (1-based) consecutive cooldown retry, or `undefined`
+ * once the schedule is exhausted and the app must stop retrying.
+ */
+export function rateLimitCooldownMs(attempt: number): number | undefined {
+  if (!Number.isInteger(attempt) || attempt < 1) return undefined
+  return RATE_LIMIT_COOLDOWN_SCHEDULE_MS[attempt - 1]
+}
+
+/**
  * Provider errors frequently arrive as a driver-formatted string wrapping a raw
  * JSON error body, e.g. `429: {"message":"You've reached your weekly usage
  * limit...","type":"rate_limit_error","code":"RATE_LIMITED"}`. Surfacing that

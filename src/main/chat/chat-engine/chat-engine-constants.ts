@@ -57,10 +57,12 @@ export function isIdleSignalEvent(event: SessionAgentEvent): boolean {
 }
 
 /**
- * Cooldown used to schedule an automatic retry for a quota/rate-limit wait
- * when the provider's error carries no parseable reset time (or one already
- * in the past). Without this, such a wait would show no timer and never
- * auto-resume   see scheduleAutomaticRetry.
+ * Cooldown used to schedule an automatic retry for a quota wait (and a stale
+ * repaired record) when the provider's error carries no parseable reset time
+ * (or one already in the past). A rate limit without a reset time does not use
+ * this blind hour: it follows the short `RATE_LIMIT_COOLDOWN_SCHEDULE_MS`
+ * backoff instead, so an account that is briefly refusing work is not parked
+ * for an hour.
  */
 export const USAGE_RESET_FALLBACK_RETRY_MS = 60 * 60 * 1000
 

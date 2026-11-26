@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   classifyProviderIssue,
   isUsageLimitNoticeText,
-  isUsageResetWaitIssue
+  isUsageResetWaitIssue,
+  RATE_LIMIT_COOLDOWN_MAX_ATTEMPTS,
+  rateLimitCooldownMs
 } from '../../src/lib/provider-issue'
 import type { AgentProviderIssue } from '../../src/lib/types'
 
@@ -30,6 +32,21 @@ describe('isUsageResetWaitIssue', () => {
     expect(isUsageResetWaitIssue(issue('billing', false))).toBe(false)
     expect(isUsageResetWaitIssue(undefined)).toBe(false)
     expect(isUsageResetWaitIssue(null)).toBe(false)
+  })
+})
+
+describe('rateLimitCooldownMs', () => {
+  it('backs off 1s, 3s, 5s, 10s, 30s, then 60s', () => {
+    expect([1, 2, 3, 4, 5, 6].map((attempt) => rateLimitCooldownMs(attempt))).toEqual([
+      1_000, 3_000, 5_000, 10_000, 30_000, 60_000
+    ])
+  })
+
+  it('stops after the sixth retry instead of hammering the provider forever', () => {
+    expect(RATE_LIMIT_COOLDOWN_MAX_ATTEMPTS).toBe(6)
+    expect(rateLimitCooldownMs(7)).toBeUndefined()
+    expect(rateLimitCooldownMs(0)).toBeUndefined()
+    expect(rateLimitCooldownMs(1.5)).toBeUndefined()
   })
 })
 
@@ -70,9 +87,9 @@ describe('isUsageLimitNoticeText', () => {
     const markdownAnswer =
       '**Root cause:** the usage limit was hit mid-turn.\n\n- The card rendered a countdown\n- No scheduler record was tracked'
     expect(isUsageLimitNoticeText(markdownAnswer)).toBe(false)
-    expect(isUsageLimitNoticeText('## Usage limit reached\n\nSee the [docs](https://example.com).')).toBe(
-      false
-    )
+    expect(
+      isUsageLimitNoticeText('## Usage limit reached\n\nSee the [docs](https://example.com).')
+    ).toBe(false)
   })
 
   it('rejects text whose limit phrasing only appears mid-prose', () => {
