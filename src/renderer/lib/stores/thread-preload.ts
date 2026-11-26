@@ -86,16 +86,14 @@ export function prefetchThreadTrace(thread: Thread): void {
 /** Warm a thread's whole conversation before it is opened. */
 export function preloadThreadConversation(thread: Thread): void {
   prefetchThreadTrace(thread)
-  // A transcript that is not on screen is not read any more.
-  //
-  // The preload existed to make an open feel instant, and it did that by reading
-  // and publishing a reactive transcript for every thread the pointer crossed —
-  // each read reconciling, publishing and deep-proxying a message graph that then
-  // had to be rendered or thrown away. Two things have made that a cost with no
-  // benefit: the parked-screen cache already paints at the moment of the switch,
-  // and the thread being opened loads its own page when it mounts. Reading it here
-  // only put UI-thread work in front of a click.
-  if (!threadMessages.isActive(thread.projectId, thread.id)) return
+  // Hover is intent, not a lookup: the row under the pointer is the candidate for
+  // the next slot, and the user changes their mind by moving on. So the read stays
+  // — what must not stay is its current size. The preload asks for a twelve-message
+  // window, and the loader then extends that window backwards up to four more
+  // times to reach the prompt that opens the newest turn, so a hover can read
+  // hundreds of messages, reconcile them and publish them for a slot the user may
+  // never take. The slim read (the last turn's answer, the newest trace parts) is
+  // what a hover should cost; the full window belongs to the open.
   if (threadMessages.loaded(thread.projectId, thread.id)) return
   void threadMessages.preload(thread.projectId, thread.id)
 }
