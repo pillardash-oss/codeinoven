@@ -13,6 +13,7 @@ import { threadSettings } from '$lib/stores/thread-settings.svelte'
 import { threadUnreadIntent } from '$lib/stores/thread-unread-intent'
 import {
   findEmptyNewThread,
+  isTimelinePinned,
   pinnedThreadSort,
   threadSort,
   threadStatusSort,
@@ -158,13 +159,15 @@ export class WorkspaceMarkThreadReadAndApply extends BoardUnit<Workspace> {
       }
       // Assistant tasks are Assistant View's own rows, never the timeline's.
       if (thread.projectId === ASSISTANT_SPACE_ID) continue
-      if (thread.pinned && !thread.bookmarked) {
-        pinned.push(thread)
-        continue
-      }
+      // A plain pin belongs to both pinned blocks: the Projects view's pinned
+      // section and the Threads view's, which are the same list read with
+      // different rows. Collecting it for one and not the other drops it from
+      // the Threads timeline entirely, so this pass fills both before the
+      // timeline below splits on {@link isTimelinePinned}.
+      if (isTimelinePinned(thread)) pinned.push(thread)
       timelineAll.push(thread)
       if (!threadProjectFilterState.matches(thread.projectId)) continue
-      if (thread.pinned) timelinePinned.push(thread)
+      if (isTimelinePinned(thread)) timelinePinned.push(thread)
       else timelineListed.push(thread)
     }
 

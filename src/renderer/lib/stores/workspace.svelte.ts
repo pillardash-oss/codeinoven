@@ -731,6 +731,19 @@ export function threadStatusSort(
 }
 
 /**
+ * Whether a thread draws in the Threads view's pinned block.
+ *
+ * The one place this question is answered, because two callers ask it: the
+ * split below and the workspace's single-pass list builder. They diverged once
+ * already   the builder sent a plain pin to the Projects view's pinned section
+ * and never reached the timeline's   and the Threads view lost every pin the
+ * user had made with the pin action.
+ */
+export function isTimelinePinned(thread: Thread): boolean {
+  return thread.pinned && !thread.bookmarked
+}
+
+/**
  * The Threads timeline as the two lists it draws: the pinned rows that open it,
  * and every row that carries its own status below them.
  *
@@ -748,7 +761,7 @@ export function splitTimelineThreads(
   const pinned: Thread[] = []
   const statusListed: Thread[] = []
   for (const thread of threads) {
-    if (thread.pinned && !thread.bookmarked) pinned.push(thread)
+    if (isTimelinePinned(thread)) pinned.push(thread)
     else statusListed.push(thread)
   }
   pinned.sort((a, b) => pinnedThreadSort(a, b, draftThreadKeys))
