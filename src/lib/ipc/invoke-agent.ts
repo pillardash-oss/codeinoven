@@ -135,6 +135,24 @@ export const invokeAgentContract = {
     [projectId: string, threadId: string, sessionId: string],
     void
   >,
+  /**
+   * Run a pawn agent again from its own thread, on the model the thread carries
+   * now.
+   *
+   * A pawn takes no user prompt, so its retry is the one action the person
+   * watching it must still be able to take without a conversation: a rate limit,
+   * a paused provider, or a task spawned on the wrong model or thinking level.
+   */
+  'agent:retryPawnRun': {} as Contract<[projectId: string, threadId: string], void>,
+  /**
+   * Whether an open pawn thread is running, and the failure it ended on when it is
+   * not. A pawn takes no user prompt, so this is what its locked card reads to
+   * report a rate limit and offer the retry the reader cannot reach otherwise.
+   */
+  'agent:getPawnRunState': {} as Contract<
+    [projectId: string, threadId: string],
+    { pawn: boolean; running: boolean; failure: string | null }
+  >,
   'agent:retryAssignmentWorker': {} as Contract<
     [projectId: string, coordinatorThreadId: string, workerThreadId: string],
     AssignmentPlan

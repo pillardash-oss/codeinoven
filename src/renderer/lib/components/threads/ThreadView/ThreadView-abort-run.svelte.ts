@@ -161,6 +161,15 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
     if (this.providerRetrying) return
     this.providerRetrying = true
     try {
+      // A pawn answers only to the agent that spawned it, so a user-origin
+      // retry would be refused by its lock. Its own retry restarts the same run
+      // on the model the thread carries now.
+      const lockedThread = this.root.handleAgentEvent.thread
+      if (lockedThread.userInputLocked === true) {
+        await invoke('agent:retryPawnRun', lockedThread.projectId, lockedThread.id)
+        this.root.handleAgentEvent.providerStatus = null
+        return
+      }
       const pausedTurn = this.root.handleAgentEvent.providerStatus !== null
       if (this.root.switchProject.busy || pausedTurn) {
         this.userRequestedStop = true

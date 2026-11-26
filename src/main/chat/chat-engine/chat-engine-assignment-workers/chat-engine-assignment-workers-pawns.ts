@@ -452,7 +452,7 @@ export class ChatEnginePawnAgents {
       .getThread(projectId, pawn.coordinatorThreadId)
       .catch(() => null)
     const driverId = settings.harnessId || DEFAULT_HARNESS
-    const { driver, projectPath } = await this.host.resolve(
+    const { projectPath } = await this.host.resolve(
       projectId,
       driverId,
       pawn.id,
@@ -638,8 +638,9 @@ export class ChatEnginePawnAgents {
    *
    * A completion waiter answers "the turn settled", not "the work succeeded". A
    * harness can close a turn around the rate limit that stopped it, and a turn can
-   * settle while the app has already queued its retry. Reading the thread this way
-   * is what stops a failed pawn being presented as done.
+   * settle while the app has already queued its retry. Reading the pawn's own row,
+   * its session status and its transcript is what stops a failed pawn being
+   * presented as done.
    */
   private async pawnRunFailure(run: PawnRunRefs): Promise<string | null> {
     const thread = await this.host.threadManager
@@ -650,9 +651,108 @@ export class ChatEnginePawnAgents {
       return recorded || 'The pawn agent run failed.'
     }
     if (thread !== null && thread.lastOutcome === 'failed' && recorded) return recorded
+    return this.pawnRecordedProviderError(run)
+  }
+
+  /**
+   * The provider error this run actually recorded, or null when the harness never
+   * reported one. A run the user stopped records none, so it is never rewritten
+   * as a failure.
+   */
+  private async pawnRecordedProviderError(run: PawnRunRefs): Promise<string | null> {
     const status = this.host.sessionStatuses.get(run.sessionId)
-    if (status?.state === 'error') return status.issue?.message?.trim() || 'The pawn agent run failed.'
-    return null
+    if (status?.state === 'error') {
+      return status.issue?.message?.trim() || 'The pawn agent run failed.'
+    }
+    try {
+      const { driver, projectPath } = await this.host.resolve(
+        run.projectId,
+        run.driverId,
+        run.pawn.id,
+        run.accountId
+      )
+      const messages = await driver.loadMessages(projectPath, run.sessionId)
+      // Only the newest assistant answer speaks for the run: scanning for any
+      // error ever recorded kept a long-fixed failure on screen after a later
+      // attempt succeeded.
+      const last = [...messages].reverse().find((message) => message.role === 'assistant')
+      return last?.error?.trim() || null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Record a real provider failure on the pawn's own row.
+   *
+   * The spawner's card is not the only place the failure has to land: the pawn's
+   * row is what its board groups by and what the person opens to fix it, and a
+   * row left as `interrupted` tells them nothing about the rate limit that stopped
+   * the run. A stop with no provider error is left exactly as it is.
+   */
+  private async markPawnThreadFailed(run: PawnRunRefs): Promise<void> {
+    const failure = await this.pawnRecordedProviderError(run)
+    if (!failure) return
+    const thread = await this.host.threadManager
+      .getThread(run.projectId, run.pawn.id)
+      .catch(() => null)
+    if (!thread || thread.status === 'failed') return
+    await this.host.threadManager
+      .setStatus(run.projectId, run.pawn.id, 'failed', {
+        error: failure,
+        notify: false,
+        touchActivity: false
+      })
+      .catch((error: unknown) =>
+        Logger.info('A failed pawn run could not be recorded on its thread', {
+          threadId: run.pawn.id,
+          error: pawnErrorMessage(error)
+        })
+      )
+  }
+
+  /**
+   * What the open pawn thread needs to show: whether its run is live, and the
+   * failure it ended on when it is not.
+   *
+   * A pawn takes no user prompt, so the card that replaces its composer is the
+   * only place its failure can be read and acted on. The failure is read from the
+   * records the run itself left (row, session, transcript) rather than guessed
+   * from a live event the panel may have missed.
+   */
+  async pawnRunState(
+    projectId: string,
+    threadId: string
+  ): Promise<{ pawn: boolean; running: boolean; failure: string | null }> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Pawn thread ID')
+    const pawn = await this.host.threadManager.getThread(projectId, threadId).catch(() => null)
+    if (!pawn || pawn.coordinatorThreadId === undefined || pawn.auditorThreadId !== undefined) {
+      return { pawn: false, running: false, failure: null }
+    }
+    const running =
+      this.host.sessionStatuses.get(pawn.sessionId ?? '')?.state === 'working' ||
+      pawn.status === 'executing' ||
+      pawn.status === 'planning'
+    const failure = running
+      ? null
+      : pawn.settings
+        ? await this.pawnRunFailure({
+            projectId,
+            spawnerThreadId: pawn.coordinatorThreadId,
+            spawnerSessionId: '',
+            pawn,
+            settings: validateThreadSettings(pawn.settings),
+            driverId: pawn.settings.harnessId || DEFAULT_HARNESS,
+            accountId: pawn.settings.accountId,
+            sessionId: pawn.sessionId ?? '',
+            purpose: '',
+            instructions: '',
+            background: false,
+            startedAt: pawn.createdAt
+          })
+        : (pawn.lastError?.trim() ?? null)
+    return { pawn: true, running, failure }
   }
 
   /**
@@ -680,7 +780,11 @@ export class ChatEnginePawnAgents {
           return
         }
         const outcome: PawnRunOutcome =
-          failure === null ? result : { ok: false, message: `The pawn agent failed: ${failure}` }
+          failure === null
+            ? this.host.state.userAbortedSessions.has(run.sessionId) && !result.ok
+              ? { ok: false, message: 'The pawn agent was stopped before it finished.' }
+              : result
+            : { ok: false, message: `The pawn agent failed: ${failure}` }
         const settlement = await awaitDelegationOutcome(
           'failed',
           () => this.pawnThreadStatus(run.projectId, run.pawn.id),
@@ -736,7 +840,11 @@ export class ChatEnginePawnAgents {
       ? await this.pawnFinalMessage(driver, projectPath, run.sessionId)
       : outcome.message
     const report = output || 'The pawn agent returned no message.'
-    this.host.state.childSessionActivityStatuses.set(run.sessionId, outcome.ok ? 'completed' : 'error')
+    this.host.state.childSessionActivityStatuses.set(
+      run.sessionId,
+      outcome.ok ? 'completed' : 'error'
+    )
+    if (!outcome.ok) await this.markPawnThreadFailed(run)
     await this.publishPawnRun(
       run,
       outcome.ok ? 'completed' : 'error',

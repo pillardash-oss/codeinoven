@@ -278,6 +278,9 @@ export class ChatEngineLifecycleBoot {
     ipcMain.handle('agent:retryPawnRun', (_, projectId: string, threadId: string) =>
       this.host.retryPawnRun(projectId, threadId)
     )
+    ipcMain.handle('agent:getPawnRunState', (_, projectId: string, threadId: string) =>
+      this.host.pawnRunState(projectId, threadId)
+    )
     ipcMain.handle(
       'agent:retryAssignmentWorker',
       (_, projectId: string, coordinatorThreadId: string, workerThreadId: string) =>

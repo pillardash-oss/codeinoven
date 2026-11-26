@@ -1370,6 +1370,19 @@ export class ChatEngineAssignmentWorkers {
     return this.pawns.runPawnTool(input, context)
   }
 
+  /** Run a pawn again from its own thread, on the model it carries now. */
+  retryPawnRun(projectId: string, threadId: string): Promise<void> {
+    return this.pawns.retryPawnRun(projectId, threadId)
+  }
+
+  /** Whether the open pawn is running, and the failure it ended on when not. */
+  pawnRunState(
+    projectId: string,
+    threadId: string
+  ): Promise<{ pawn: boolean; running: boolean; failure: string | null }> {
+    return this.pawns.pawnRunState(projectId, threadId)
+  }
+
   runningPawnThreads(projectId: string, spawnerThreadId: string): Promise<Thread[]> {
     return this.pawns.runningPawnThreads(projectId, spawnerThreadId)
   }

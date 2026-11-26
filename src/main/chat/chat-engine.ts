@@ -1356,6 +1356,13 @@ export class ChatEngine {
   async retryPawnRun(projectId: string, threadId: string): Promise<void> {
     return this.units['assignment-workers'].retryPawnRun(projectId, threadId)
   }
+  /** Whether an open pawn thread is running, and the failure it ended on. */
+  async pawnRunState(
+    projectId: string,
+    threadId: string
+  ): Promise<{ pawn: boolean; running: boolean; failure: string | null }> {
+    return this.units['assignment-workers'].pawnRunState(projectId, threadId)
+  }
   async runEngineeringTool(
     operation: EngineeringToolOperation,
     input: Record<string, unknown>,
