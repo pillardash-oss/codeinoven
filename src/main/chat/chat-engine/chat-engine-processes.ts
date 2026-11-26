@@ -9,10 +9,6 @@ import { OWNED_SESSION_MARKER } from '../../system/process-ownership'
 import { validateEntityId } from '../../ipc/ipc-validation'
 import type { ReapOrphansOptions, ReapOrphansResult } from '../../agents/agent-process-service'
 import type { SecretRequestContext } from '../../utilities/utility-orchestration-service'
-import {
-  projectDirectories,
-  projectIdForWorkingDirectory
-} from '../../agents/process-project-attribution'
 import { appServiceRegistry } from '../../system/app-service-registry'
 import { collectSurfaceMetrics } from '../../system/surface-metrics'
 import type { AgentRunningProcess, TaskManagerSnapshot } from '../../../lib/types'
@@ -292,23 +288,11 @@ export class ChatEngineProcesses {
     const services = appServiceRegistry.list()
     const projectNames = new Map<string, string>()
     const threadTitles = new Map<string, string>()
-    // A row with no session owner can still belong to a project: its working
-    // directory names the project whose files it is working in. That is how a
-    // re-parented daemon (the adb fork-server) and an app-wide shared runtime
-    // keep their project once their session, or their session marker, is gone,
-    // instead of listing under the app-wide node with a project path showing
-    // underneath.
-    const directories = await projectDirectories(
-      await this.host.state.projectManager.listProjects()
-    )
-    const attributedProjectIds = new Map<number, string>()
-    for (const process of processes) {
-      if (process.projectId || !process.cwd) continue
-      const projectId = await projectIdForWorkingDirectory(process.cwd, directories)
-      if (projectId) attributedProjectIds.set(process.pid, projectId)
-    }
-    const ownerProjectId = (row: { pid: number; projectId: string | null }): string | null =>
-      row.projectId ?? attributedProjectIds.get(row.pid) ?? null
+    // Ownership decides the group, and only ownership: a runtime a thread ran
+    // belongs to that thread, and everything else (the pooled Pi host, an
+    // adopted daemon, a listener) belongs to the app-wide node. Working
+    // directory is not an owner, so a shared runtime that happens to run inside
+    // a project's checkout is never dragged into that project's branch.
     // One resolution pass across both lists, so a project or thread that owns a
     // process and a service is read from the database once.
     const resolveOwner = async (projectId: string | null, threadId: string | null) => {
@@ -321,13 +305,13 @@ export class ChatEngineProcesses {
         threadTitles.set(threadId, thread?.title ?? threadId)
       }
     }
-    for (const process of processes) await resolveOwner(ownerProjectId(process), process.threadId)
+    for (const process of processes) await resolveOwner(process.projectId, process.threadId)
     for (const service of services) await resolveOwner(service.projectId, service.threadId)
     const resolvedProcesses = processes.map((process) => {
-      const projectId = ownerProjectId(process)
+      const projectId = process.projectId
       return {
         ...process,
-        ...(projectId ? { projectId, projectName: projectNames.get(projectId) ?? null } : {}),
+        ...(projectId ? { projectName: projectNames.get(projectId) ?? null } : {}),
         ...(process.threadId ? { threadTitle: threadTitles.get(process.threadId) ?? null } : {})
       }
     })

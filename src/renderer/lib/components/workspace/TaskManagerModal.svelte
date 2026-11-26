@@ -29,6 +29,7 @@
   import TaskManagerNode from './TaskManagerNode.svelte'
   import TaskManagerSortMenu from './TaskManagerSortMenu.svelte'
   import { localTaskManagerSource, type TaskManagerSource } from './task-manager-source'
+  import { collapseDuplicateRuntimes } from './task-manager-runtimes'
   import {
     compareSortRows,
     DEFAULT_TASK_SORT,
@@ -511,6 +512,16 @@
   const processTotals = $derived(aggregateResources(processes, services))
   const totalRamBytes = $derived(processTotals.memoryBytes)
   const totalCpuPercent = $derived(processTotals.cpuPercent)
+  /** Runtimes backed by an OS process, each counted once: a process row and a
+   *  service row of the same pid are one runtime, not two. */
+  const processRuntimeCount = $derived(
+    new Set([
+      ...processes.map((process) => process.pid),
+      ...services.flatMap((service) => (service.pid === null ? [] : [service.pid]))
+    ]).size
+  )
+  /** Loopback listeners with no process of their own (the utility gateway). */
+  const inProcessServiceCount = $derived(services.filter((service) => service.pid === null).length)
   /** Surfaces arrive sorted by CPU, so the visible slice is already the hot end. */
   const visibleSurfaces = $derived(surfaces.slice(0, SURFACE_ROW_LIMIT))
   const hiddenSurfaceCount = $derived(Math.max(0, surfaces.length - SURFACE_ROW_LIMIT))
@@ -521,15 +532,7 @@
     error = ''
     try {
       const snapshot = await source.list()
-      processes = snapshot.processes
-      services = snapshot.services
-      // An older main process sends no surfaces at all, which must show as
-      // "none" rather than crash the modal on a missing field.
-      surfaces = snapshot.surfaces ?? []
-      power = snapshot.power
-      sampledAt = snapshot.sampledAt
-      pruneSelection()
-      void ensureProjectIcons(snapshot.processes)
+      applySnapshot(snapshot)
     } catch (loadError) {
       error = loadError instanceof Error ? loadError.message : 'Processes could not be loaded.'
     } finally {
@@ -543,18 +546,33 @@
     polling = true
     try {
       const snapshot = await source.list()
-      processes = snapshot.processes
-      services = snapshot.services
-      surfaces = snapshot.surfaces ?? []
-      power = snapshot.power
-      sampledAt = snapshot.sampledAt
-      pruneSelection()
-      void ensureProjectIcons(snapshot.processes)
+      applySnapshot(snapshot)
     } catch {
       // Background poll failed   keep showing the last snapshot, don't spam errors.
     } finally {
       polling = false
     }
+  }
+
+  /**
+   * Adopt one snapshot, with every runtime drawn once.
+   *
+   * A pid the snapshot reports both as a service and as a tracked process is one
+   * runtime, and drawing both put the same memory and CPU under two owner nodes.
+   * The collapse happens here, before grouping, so every branch, every node total
+   * and the footer agree on the same rows.
+   */
+  function applySnapshot(snapshot: TaskManagerSnapshot): void {
+    const collapsed = collapseDuplicateRuntimes(snapshot.processes, snapshot.services)
+    processes = collapsed.processes
+    services = collapsed.services
+    // An older main process sends no surfaces at all, which must show as
+    // "none" rather than crash the modal on a missing field.
+    surfaces = snapshot.surfaces ?? []
+    power = snapshot.power
+    sampledAt = snapshot.sampledAt
+    pruneSelection()
+    void ensureProjectIcons(collapsed.processes)
   }
 
   /** Drop any selected pid or service that no longer exists after a refresh. */
@@ -1383,11 +1401,17 @@
         snapshot leaves no empty shell behind. -->
         <section class="mt-2 border-t border-border">
           <div class="flex items-center justify-between gap-3 px-5 py-1.5">
-            <p class="text-[0.625rem] font-semibold tracking-wide text-muted uppercase">Surfaces</p>
+            <p class="text-[0.625rem] font-semibold tracking-wide text-muted uppercase">
+              Renderer surfaces
+            </p>
             <p class="text-[0.625rem] text-dimmed tabular-nums">
               {surfaces.length} live
             </p>
           </div>
+          <p class="px-5 pb-1.5 text-[0.625rem] text-dimmed">
+            The windows, tabs and webviews drawn by these renderer processes. Read-only: there is
+            nothing to end here, the list above holds the processes and services.
+          </p>
           <ul class="divide-y divide-border">
             {#each visibleSurfaces as surface (surface.pid)}
               <li class="flex items-center gap-3 px-5 py-2">
@@ -1480,7 +1504,9 @@
             {#if selectionCount > 0}
               {selectionCount} of {processes.length + services.length} selected
             {:else}
-              {processes.length} processes · {services.length} services
+              {processRuntimeCount}
+              {processRuntimeCount === 1 ? 'process' : 'processes'} · {inProcessServiceCount}
+              {inProcessServiceCount === 1 ? 'service' : 'services'}
             {/if}
           </p>
           {#if pollPaused}
