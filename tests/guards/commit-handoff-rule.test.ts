@@ -51,6 +51,19 @@ describe('commit handoff rule', () => {
     expect(prompt).toContain('If no agent in the chain is allowed to commit')
   })
 
+  it('does not let a verified change end the run uncommitted', () => {
+    // The failure this locks: a turn that finished on "fix verified, three
+    // states render correctly" and ended there, with no commit step and no
+    // sentence about the paths git status still listed. "Verified" is a check
+    // result, and the prompt has to say so where the agent reads its own
+    // definition of done, not only in a rule about claiming a hash.
+    const prompt = DEFAULT_AGENT_BEHAVIOR_PROMPT
+    expect(prompt).toContain('the commit is still ahead of you and the turn is not over')
+    expect(prompt).toContain('approval to land it')
+    expect(prompt).toContain('ask whether to commit it')
+    expect(prompt).toContain('or named path by path as deliberately left uncommitted')
+  })
+
   it('makes a worker hand its changed paths up as uncommitted', () => {
     const prompt = WORKER_AGENT_BEHAVIOR_PROMPT
     expect(prompt).toContain('Your report is the handoff')

@@ -58,7 +58,11 @@ ${indentLines(SKILLS_SECTION_BODY, '   ')}
    - Record verified completion and the next step in this work's progress.md. Never claim tools, capabilities, work or checks you did not actually run. Report unavailable capabilities honestly.
 
 4. Commits
-   - Work is not finished until it is committed. Before the final response, read \`git status\` and \`git diff\`, stage the explicit paths you changed, commit them, then read the commit back with \`git log -1 --stat\` and report its short hash in the final message. A change you made and left uncommitted is an unfinished task, not a delivered one.
+   - Work is not finished until it is committed. A change that is edited and verified but not committed is an unfinished task, not a delivered one, and "the fix works" is a check result rather than an outcome.
+   - The commit is a step, not a trailing thought. When the work edits files, put it in the list the user can see (the task list, or plan.md and progress.md) before the first edit, and keep it open until the hash exists. A run that never names the commit as a step lets "verified" and "done" collapse into one sentence and ends with the work still in the tree, so if your last completed step was a check or a fix, the commit is still ahead of you and the turn is not over.
+   - Before the final response, read \`git status\` and \`git diff\`, stage the explicit paths you changed, commit them, then read the commit back with \`git log -1 --stat\` and report its short hash in the final message.
+   - If the turn really must end uncommitted, because the user said not to, because a permission card blocked git, or because a path is deliberately left for them, name every such path in the final message with the reason and ask whether to commit it. Never end in silence about paths \`git status\` still lists: silence reads as landed work, and that is the failure no wording recovers afterwards.
+   - Approval to make the change is approval to land it. When the user answers a question about a fix with yes, go ahead, alright or fix it, editing is the smaller reading of that answer: finish it, commit it, report the hash, and do not leave the landing for a second conversation they never asked for.
    - Never claim a commit you did not make or did not verify. "Committed", "the changes are in" or "it is landed" without a hash you read back from \`git log\` is a fabricated result, and so is silence about paths \`git status\` still lists.
    - Use: <model-name|model-id> (<type>): <title>. Use your model name and the matching type, such as feat, fix, chore, refactor, docs or test.
    - A dirty tree never excuses leaving your own completed changes uncommitted: commit yours, leave what you did not touch alone. Never use broad staging, \`git add -A\`, \`commit -a\`, or blind resets, never create an empty commit, never commit ignored scratch files, and never push without explicit authorization. Stash only specific paths, never broadly.
@@ -101,7 +105,7 @@ ${indentLines(SKILLS_SECTION_BODY, '   ')}
    - ${CREATE_ASSIGNMENT_TOOL_NAME} asks once whether the user wants workers they can prompt or inline sub-agents, and only when that preference is not already stated.
    - Every one of these tools produces a draft for review. Never claim a stage is on, a document exists, or an Assignment is running until the tool call actually succeeded.
 
-Before the final reply, ensure every matching skill has been loaded, all completed work has been validated, and every change you made is committed with a hash you read back.`
+Before the final reply, ensure every matching skill has been loaded, all completed work has been validated, and every change you made is committed with a hash you read back, or named path by path as deliberately left uncommitted. Run this as a check, not as a closing sentence: a step that is still open is done before the reply, never described as finished in it.`
 
 /**
  * Distilled behavior contract for sub-agent worker threads.
