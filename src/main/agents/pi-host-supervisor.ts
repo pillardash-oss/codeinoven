@@ -272,10 +272,6 @@ export class PiHostSupervisor {
           ...(parentSessionId === undefined ? {} : { parentSessionId })
         })
       )
-      // A session that landed off the primary is a loan taken against that
-      // host's own CPU, so the rejoin check starts now and stops when the loan
-      // is repaid.
-      if (host.id !== primary.id) this.#armRebalance()
       return state
     } catch (error) {
       this.#ownership.release(request.sessionId, host.id)
@@ -307,7 +303,10 @@ export class PiHostSupervisor {
    * it, so two hosts never write one transcript. The target is always a new
    * process, because a move that stays on the same process is not a move. A
    * temporary host drains the other way, into the primary, through the same
-   * release-then-claim pair (see {@link rebalance}).
+   * release-then-claim pair (see {@link rebalance}), but a move never hands a
+   * session back out of the host it was moved to: the target is that session's
+   * home, and the supervisor adopts it as the primary rather than opening yet
+   * another process beside it.
    */
   async moveToNewHost(sessionId: string): Promise<HostSessionState> {
     const known = this.#sessions.get(sessionId)
@@ -320,7 +319,13 @@ export class PiHostSupervisor {
     await this.#releaseFrom(source, sessionId)
     const target = this.#spawnHost()
     try {
-      return await this.#resumeOn(target, sessionId, record)
+      const state = await this.#resumeOn(target, sessionId, record)
+      // The move empties its source first, so the spawn above may have seen no
+      // primary at all and armed nothing. The process it just made is the app's
+      // only host in that case, and the check has to exist for it: the tick
+      // adopts it as the primary rather than leaving the app without one.
+      if (target.id !== this.#primaryId) this.#armRebalance()
+      return state
     } catch (error) {
       // This process exists only for the move, so a failed resume leaves nothing
       // worth keeping. The primary is not this move's to stop, and rebalance
@@ -352,16 +357,19 @@ export class PiHostSupervisor {
    */
   async rebalance(): Promise<void> {
     if (this.#rebalancing) return
-    const primary = this.#primary()
-    const donors = this.#secondaries()
-    if (primary === null || donors.length === 0) {
+    if (this.#secondaries().length === 0) {
       this.#disarmRebalance()
       return
     }
     this.#rebalancing = true
     try {
+      // A primary that exited took its sessions with it, and the hosts left are
+      // the app's only home: the oldest is adopted instead of a third process
+      // being opened beside it, which turns the rest of this tick into a plain
+      // drain into that host.
+      const primary = this.#ensurePrimary()
       if (!hostHasRoom(this.#hostCpu(primary))) return
-      for (const donor of donors) {
+      for (const donor of this.#secondaries()) {
         for (const sessionId of this.#sessionsOn(donor.id)) {
           if (this.#sessionsOn(primary.id).length >= this.#maxSessionsPerHost) return
           if (!this.#hosts.has(donor.id)) break
@@ -665,9 +673,25 @@ export class PiHostSupervisor {
     return sessionIds
   }
 
+  /**
+   * The primary host, adopted when one already runs and started only when none
+   * does.
+   *
+   * A process that is already up is always the cheaper home. After a move the
+   * session's new host is the only one left, and spawning a second process
+   * beside it left the app carrying two hosts for good, one of them holding a
+   * session nothing would ever drain. Adopting the oldest live host keeps the
+   * app at one process whatever order the moves arrived in.
+   */
   #ensurePrimary(): LiveHost {
     const primary = this.#primary()
     if (primary !== null) return primary
+    const oldest = this.#hosts.values().next().value
+    if (oldest !== undefined) {
+      this.#primaryId = oldest.id
+      this.#hostsChanged()
+      return oldest
+    }
     const host = this.#spawnHost()
     this.#primaryId = host.id
     return host
@@ -684,6 +708,12 @@ export class PiHostSupervisor {
     transport.onLine((line) => this.#consume(host, line))
     transport.onExit(() => this.#onExit(host))
     this.#hosts.set(host.id, host)
+    // Every host that is not the primary is a loan in one form or another, and a
+    // loan is only safe while something watches to take it back. Arming at the
+    // spawn rather than at the call sites is what keeps a host opened by a move
+    // supervised: the drain used to exist only for hosts a session had already
+    // landed on, so a move's process was never drained by anything.
+    if (this.#primaryId !== null && this.#primaryId !== host.id) this.#armRebalance()
     this.#hostsChanged()
     return host
   }

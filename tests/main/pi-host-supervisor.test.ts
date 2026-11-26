@@ -669,4 +669,73 @@ describe('PiHostSupervisor placement and rejoin', () => {
       vi.useRealTimers()
     }
   })
+
+  /**
+   * A move is a home, and a process that is already up is always the cheaper
+   * one.
+   *
+   * The move empties and stops the source host, so the session's new process is
+   * all the app has left. The next session used to be sent to a freshly spawned
+   * primary instead, which left two hosts running for good: the new primary, and
+   * the moved session's host that nothing would ever drain.
+   */
+  it('adopts the host a move left running instead of opening a second one', async () => {
+    const { supervisor, hosts } = harness(() => IDLE_HOST)
+    await create(supervisor, 'atlas')
+    await supervisor.moveToNewHost('atlas')
+    expect(hosts).toHaveLength(2)
+    expect(hosts[0].stopped).toBe(true)
+
+    await create(supervisor, 'ledger')
+
+    expect(hosts).toHaveLength(2)
+    expect(supervisor.pid()).toBe(501)
+    expect(supervisor.hostOf('atlas')).toBe(501)
+    expect(supervisor.hostOf('ledger')).toBe(501)
+    supervisor.stop()
+  })
+
+  /**
+   * The drain check belongs to the process, not to one entry that fills it.
+   *
+   * A host opened by a move never had a session land on it through the create
+   * path, so arming the check there left the moved host unsupervised until the
+   * app restarted. It is armed at the spawn now, and the host with no primary
+   * left over it takes the primary home on that tick.
+   */
+  it('watches a host a move opened, so it never arrives without a primary', async () => {
+    vi.useFakeTimers()
+    try {
+      const { supervisor } = harness(() => IDLE_HOST, { rebalanceIntervalMs: 1000 })
+      await create(supervisor, 'atlas')
+      await supervisor.moveToNewHost('atlas')
+      expect(supervisor.pid()).toBeNull()
+
+      await vi.advanceTimersByTimeAsync(1000)
+
+      expect(supervisor.pid()).toBe(501)
+      expect(supervisor.pids()).toEqual([501])
+      expect(supervisor.hostOf('atlas')).toBe(501)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('adopts the surviving host after the primary exits, never a third process', async () => {
+    let cpu = SATURATED
+    const { supervisor, hosts } = harness(() => cpu)
+    await create(supervisor, 'atlas')
+    await create(supervisor, 'ledger')
+    expect(supervisor.pid()).toBe(500)
+
+    hosts[0].exit()
+    cpu = IDLE_HOST
+    await create(supervisor, 'memo')
+
+    expect(hosts).toHaveLength(2)
+    expect(supervisor.pid()).toBe(501)
+    expect(supervisor.hostOf('memo')).toBe(501)
+    expect(supervisor.sessions().sort()).toEqual(['atlas', 'ledger', 'memo'])
+    supervisor.stop()
+  })
 })
