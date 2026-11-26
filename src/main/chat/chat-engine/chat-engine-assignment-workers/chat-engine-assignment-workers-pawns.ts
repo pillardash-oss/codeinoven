@@ -28,6 +28,7 @@ import {
   resolveDelegationTarget
 } from '../../delegation/delegation-target'
 import { awaitDelegationOutcome } from '../../delegation/delegation-report-grace'
+import { pawnAdmissionRefusal } from '../../delegation/pawn-admission'
 
 /**
  * Where one pawn run happens, so a spawn and a user-requested retry settle the
@@ -447,6 +448,9 @@ export class ChatEnginePawnAgents {
       throw new Error('That thread is not a pawn agent, so it has no run to retry.')
     }
     if (!pawn.settings) throw new Error('The pawn agent has no model settings.')
+    if (pawn.status === 'completed' || pawn.lastOutcome === 'completed') {
+      throw new Error('That pawn agent already finished its run. There is nothing to retry.')
+    }
     const settings = validateThreadSettings(pawn.settings)
     const spawner = await this.host.threadManager
       .getThread(projectId, pawn.coordinatorThreadId)
@@ -647,6 +651,13 @@ export class ChatEnginePawnAgents {
     const thread = await this.host.threadManager
       .getThread(run.projectId, run.pawn.id)
       .catch(() => null)
+    // A finished run is finished. Whatever an old session status or an older
+    // transcript still remembers about a failure belongs to an attempt that was
+    // already retried, and offering to run this again would ask the reader to
+    // redo work that landed.
+    if (thread !== null && (thread.status === 'completed' || thread.lastOutcome === 'completed')) {
+      return null
+    }
     const recorded = thread?.lastError?.trim()
     if (thread !== null && thread.status === 'failed') {
       return recorded || 'The pawn agent run failed.'
@@ -737,22 +748,24 @@ export class ChatEnginePawnAgents {
       pawn.status === 'planning'
     const failure = running
       ? null
-      : pawn.settings
-        ? await this.pawnRunFailure({
-            projectId,
-            spawnerThreadId: pawn.coordinatorThreadId,
-            spawnerSessionId: '',
-            pawn,
-            settings: validateThreadSettings(pawn.settings),
-            driverId: pawn.settings.harnessId || DEFAULT_HARNESS,
-            accountId: pawn.settings.accountId,
-            sessionId: pawn.sessionId ?? '',
-            purpose: '',
-            instructions: '',
-            background: false,
-            startedAt: pawn.createdAt
-          })
-        : (pawn.lastError?.trim() ?? null)
+      : pawn.status === 'completed' || pawn.lastOutcome === 'completed'
+        ? null
+        : pawn.settings
+          ? await this.pawnRunFailure({
+              projectId,
+              spawnerThreadId: pawn.coordinatorThreadId,
+              spawnerSessionId: '',
+              pawn,
+              settings: validateThreadSettings(pawn.settings),
+              driverId: pawn.settings.harnessId || DEFAULT_HARNESS,
+              accountId: pawn.settings.accountId,
+              sessionId: pawn.sessionId ?? '',
+              purpose: '',
+              instructions: '',
+              background: false,
+              startedAt: pawn.createdAt
+            })
+          : (pawn.lastError?.trim() ?? null)
     return { pawn: true, running, failure }
   }
 
@@ -888,6 +901,10 @@ export class ChatEnginePawnAgents {
       loopAuditor: undefined,
       reportToCoordinator: undefined
     }
+    // Refuse before a thread exists. The rate limit that stopped eleven pawns in
+    // six seconds belongs to the account, so a twelfth parallel spawn is a run
+    // that fails before its first step; the agent hears why and spreads the work.
+    await this.refuseWhenAccountSaturated(settings)
     const names = await this.host.storage.getWorkerNames()
     const name = names[randomInt(names.length)] ?? 'agent'
     const label = purpose || instructions.split('\n')[0].slice(0, 60)
@@ -908,6 +925,38 @@ export class ChatEnginePawnAgents {
       coordinatorThreadId: spawner.id,
       userInputLocked: true
     })
+  }
+
+  /**
+   * Refuse a spawn that would put another parallel run on a saturated account.
+   *
+   * The count is read from the threads the app already tracks: a pawn carries its
+   * coordinator, and a busy status means its turn is in flight. A read that fails
+   * never refuses a spawn, because a broken count must not block work; only a real
+   * count over the limit does.
+   */
+  async refuseWhenAccountSaturated(settings: ThreadSettings): Promise<void> {
+    const result = await this.host.database
+      .queryViaWorker(
+        `SELECT COUNT(*) AS running FROM threads
+          WHERE coordinator_thread_id IS NOT NULL
+            AND assignment_id IS NULL
+            AND status IN ('planning', 'executing', 'working-paused')
+            AND session_harness_id = ?
+            AND COALESCE(session_account_id, '') = ?`,
+        [settings.harnessId, settings.accountId ?? ''],
+        1
+      )
+      .catch(() => null)
+    if (!result?.ok) return
+    const row = (result.rows ?? [])[0] as { running?: number | string } | undefined
+    const running = Number(row?.running ?? 0)
+    const refusal = pawnAdmissionRefusal({
+      running: Number.isFinite(running) ? running : 0,
+      harnessId: settings.harnessId,
+      ...(settings.accountId ? { accountId: settings.accountId } : {})
+    })
+    if (refusal) throw new Error(refusal)
   }
 
   /**

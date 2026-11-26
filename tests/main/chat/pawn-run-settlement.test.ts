@@ -170,6 +170,24 @@ describe('a pawn run reports what actually happened', () => {
     expect(state).toEqual({ pawn: true, running: true, failure: null })
   })
 
+  it('treats a completed run as done even with a stale error in the session', async () => {
+    // The real case: a pawn died on a 429, was retried, and finished. The live
+    // session status still held the old error, and the card offered a retry of a
+    // finished run because of it.
+    const { host } = stubHost({
+      thread: pawnThread({ status: 'completed', lastOutcome: 'completed' }),
+      sessionState: 'error',
+      transcript: [assistantError('429: rate limit exceeded')]
+    })
+    const pawns = new ChatEnginePawnAgents(host)
+
+    expect(await pawns.pawnRunState(PROJECT_ID, PAWN_THREAD_ID)).toEqual({
+      pawn: true,
+      running: false,
+      failure: null
+    })
+  })
+
   it('answers for a thread that is not a pawn at all', async () => {
     const { host } = stubHost({ thread: pawnThread({ coordinatorThreadId: undefined }) })
     const pawns = new ChatEnginePawnAgents(host)
@@ -244,6 +262,16 @@ describe('a pawn run can be retried without a conversation', () => {
     expect(origin).toBe('internal')
     expect(text).toContain('Own app/mount.ts and app/stream.ts')
     expect(text).toContain('This is a retry of this task')
+  })
+
+  it('refuses to retry a run that already finished', async () => {
+    const { host, sendPrompt } = stubHost({
+      thread: pawnThread({ status: 'completed', lastOutcome: 'completed' })
+    })
+    const pawns = new ChatEnginePawnAgents(host)
+
+    await expect(pawns.retryPawnRun(PROJECT_ID, PAWN_THREAD_ID)).rejects.toThrow('already finished')
+    expect(sendPrompt).not.toHaveBeenCalled()
   })
 
   it('refuses a thread that is not a pawn', async () => {
