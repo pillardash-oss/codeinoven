@@ -38,6 +38,9 @@ import {
   GATEWAY_TOOLS,
   CORE_GATEWAY_TOOL_NAMES,
   gatewayToolForModel,
+  PROCESS_LIST_TOOL_NAME,
+  PROCESS_START_TOOL_NAME,
+  PROCESS_STOP_TOOL_NAME,
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME,
   UTILITY_DOCS_TOOL_NAME,
@@ -98,6 +101,18 @@ const createBrainstormTool = gatewayTool(CREATE_BRAINSTORM_TOOL_NAME)
 const createPrdTool = gatewayTool(CREATE_PRD_TOOL_NAME)
 const createSpecTool = gatewayTool(CREATE_SPEC_TOOL_NAME)
 const createAssignmentTool = gatewayTool(CREATE_ASSIGNMENT_TOOL_NAME)
+/**
+ * The process-lifecycle tools, which a pi thread reached only through a refusal.
+ *
+ * The gateway granted these three routes on every turn and the shell-kill block
+ * pointed at them by name, but this extension never registered them, so a
+ * pi-hosted thread was refused every form of process stop and had no sanctioned
+ * tool to stop what it had started: the probe instances stayed up and the user
+ * was asked to kill them by hand. Registered here, the refusal leads somewhere.
+ */
+const processListTool = gatewayTool(PROCESS_LIST_TOOL_NAME)
+const processStartTool = gatewayTool(PROCESS_START_TOOL_NAME)
+const processStopTool = gatewayTool(PROCESS_STOP_TOOL_NAME)
 
 export function piUtilityGatewayExtension(): string {
   return `import { readFile } from 'node:fs/promises'
@@ -712,6 +727,86 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
       if (params.sql !== undefined) body.sql = params.sql
       if (params.params !== undefined) body.params = params.params
       const result = await callGateway(${JSON.stringify(diagnosticsTool.route)}, body)
+      return textResult(result)
+    }
+  })
+
+  // Process lifecycle: granted on every turn that carries the gateway, because
+  // the shell kill is refused in every form and these are the only sanctioned
+  // replacement. Starting a server and stopping it must not depend on the
+  // permission tier, so no snippet and no gated route: the tools are simply
+  // there whenever an agent needs to end something it started.
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(processListTool.name)},
+    label: "List this thread's processes",
+    description: ${JSON.stringify(processListTool.description)},
+    promptSnippet:
+      "List the processes this thread owns, with pid, command, working directory and ports, before stopping anything or to check whether a server you started is still running",
+    promptGuidelines: [
+      'Stopping a process from a shell command is refused in every form (by pid, port, name, signal or pattern, and through an interpreter, a script or a nested shell), so ${JSON.stringify(processStopTool.name)} is the only way to end a process you started. Read ${JSON.stringify(processListTool.name)} first: it reports what this thread owns, and anything it does not own is left running and reported by pid and port instead of guessed at.',
+      'When a process has to outlive the tool call — a dev server, a probe instance, a watcher, a long conversion — start it with ${JSON.stringify(processStartTool.name)} instead of backgrounding it in the shell, and undo it with ${JSON.stringify(processStopTool.name)}; a probe instance or dev server you started is never left running.'
+    ],
+    parameters: Type.Object({}),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(${JSON.stringify(processListTool.route)}, {})
+      return textResult(result)
+    }
+  })
+
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(processStartTool.name)},
+    label: 'Start a long-running process',
+    description: ${JSON.stringify(processStartTool.description)},
+    parameters: Type.Object({
+      command: Type.String({
+        description:
+          'Shell command to run in the background, for example "bun run dev:probe" or "bun run dev:fast". Run through the platform shell in the working directory below.'
+      }),
+      cwd: Type.Optional(
+        Type.String({
+          description:
+            "Working directory. Defaults to this thread's project root; must stay inside the project."
+        })
+      ),
+      label: Type.Optional(
+        Type.String({
+          description: 'Short human label for the process row, for example "probe instance".'
+        })
+      )
+    }),
+    async execute(_toolCallId, params) {
+      const body = { command: params.command }
+      if (params.cwd !== undefined) body.cwd = params.cwd
+      if (params.label !== undefined) body.label = params.label
+      const result = await callGateway(${JSON.stringify(processStartTool.route)}, body)
+      return textResult(result)
+    }
+  })
+
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(processStopTool.name)},
+    label: 'Stop one process this thread owns',
+    description: ${JSON.stringify(processStopTool.description)},
+    parameters: Type.Object({
+      pid: Type.Number({
+        description:
+          'Process id to stop, as returned by ' +
+          ${JSON.stringify(processListTool.name)} +
+          ' or ' +
+          ${JSON.stringify(processStartTool.name)} +
+          '.'
+      }),
+      force: Type.Optional(
+        Type.Boolean({
+          description:
+            'Skip the graceful stop and terminate immediately. Use it only when the process ignored a normal stop.'
+        })
+      )
+    }),
+    async execute(_toolCallId, params) {
+      const body = { pid: params.pid }
+      if (params.force !== undefined) body.force = params.force
+      const result = await callGateway(${JSON.stringify(processStopTool.route)}, body)
       return textResult(result)
     }
   })
