@@ -46,6 +46,16 @@ import type {
 export { THREAD_MESSAGE_PRELOAD_WINDOW }
 
 /**
+ * How many messages a hover hints with.
+ *
+ * A pointer crossing a row is intent, not a decision: the row is the candidate
+ * for the next slot and the user changes their mind by moving on. So the hint is
+ * deliberately small — the newest turn's rows and nothing else — and the rest of
+ * the window belongs to the open.
+ */
+const THREAD_MESSAGE_HINT_WINDOW = 4
+
+/**
  * Add the annotated pictures a message's media marks need.
  *
  * A mark is stored as coordinates over a picture the agent published, which the
@@ -332,11 +342,17 @@ class ThreadMessagesStore {
   }
 
   /** Load the authoritative mirror and merge it with local optimistic state. */
-  async load(projectId: string, threadId: string, recentLimit?: number): Promise<void> {
+  async load(
+    projectId: string,
+    threadId: string,
+    recentLimit?: number,
+    /** A hint read: one small page, never extended back to a turn boundary. */
+    hint = false
+  ): Promise<void> {
     const key = threadKey(projectId, threadId)
     const existing = this.#loadPromises.get(key)
     if (existing) return existing
-    const loadPromise = this.#load(projectId, threadId, recentLimit)
+    const loadPromise = this.#load(projectId, threadId, recentLimit, hint)
     this.#loadPromises.set(key, loadPromise)
     try {
       await loadPromise
@@ -402,7 +418,12 @@ class ThreadMessagesStore {
     this.cache.seedMessage(projectId, conversationId, message)
   }
 
-  async #load(projectId: string, threadId: string, recentLimit?: number): Promise<void> {
+  async #load(
+    projectId: string,
+    threadId: string,
+    recentLimit?: number,
+    hint = false
+  ): Promise<void> {
     const entry = this.cache.entry(projectId, threadId)
     // The conversation read is the operation a user actually waits on, so it is
     // measured as a whole: the IPC call, the alignment pages, and the reconcile
@@ -440,9 +461,25 @@ class ThreadMessagesStore {
             // an unbounded provider transcript read and can freeze the renderer on
             // long sessions. Callers that explicitly need the provider transcript
             // must use load() without a limit.
-            const aligned = await this.#fetchTurnAlignedTail(projectId, threadId, recentLimit)
-            serverMessages = aligned.messages
-            entry.hasOlder = aligned.hasOlder
+            if (hint) {
+              // No alignment walk. Reaching back to the prompt that opens the
+              // newest turn can cost four more windows — hundreds of messages,
+              // reconciled and published — for a slot the pointer may leave
+              // without ever opening it. The open aligns; the hint does not.
+              const page = await invoke(
+                'thread:loadMessages',
+                projectId,
+                threadId,
+                undefined,
+                recentLimit
+              )
+              serverMessages = page.messages
+              entry.hasOlder = page.hasOlder
+            } else {
+              const aligned = await this.#fetchTurnAlignedTail(projectId, threadId, recentLimit)
+              serverMessages = aligned.messages
+              entry.hasOlder = aligned.hasOlder
+            }
           }
           this.reconcile(projectId, threadId, serverMessages)
           entry.loaded = true
@@ -557,7 +594,7 @@ class ThreadMessagesStore {
   async preload(projectId: string, threadId: string): Promise<void> {
     const entry = this.cache.entry(projectId, threadId)
     if (entry.loaded) return
-    await this.load(projectId, threadId, THREAD_MESSAGE_PRELOAD_WINDOW)
+    await this.load(projectId, threadId, THREAD_MESSAGE_HINT_WINDOW, true)
   }
 
   /**
