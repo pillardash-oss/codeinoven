@@ -25,10 +25,17 @@ export function validateGitRelativePath(value: unknown, label = 'Git file path')
   return path
 }
 
-/** Validate a list of project-relative git paths. */
+/**
+ * Validate a list of project-relative git paths.
+ *
+ * The length is deliberately unbounded: a folder-scale selection is a real
+ * operation, and the staging command takes its paths on stdin rather than in
+ * argv, so neither the IPC boundary nor the platform's argument limit sets a
+ * ceiling. Every entry is still validated on its own.
+ */
 export function validateGitPathArray(value: unknown, label = 'Git file paths'): string[] {
-  if (!Array.isArray(value) || value.length > 2000) {
-    throw new TypeError(`${label} must be an array of at most 2000 paths`)
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${label} must be an array`)
   }
   return value.map((entry, index) => validateGitRelativePath(entry, `${label}[${index}]`))
 }

@@ -65,6 +65,26 @@ export function createGitClient(
 }
 
 /**
+ * A client whose one git process reads its path list from standard input.
+ *
+ * A path list on the command line is bounded by the platform's argv limit
+ * (32 KiB on Windows, far more on macOS and Linux), which a folder-scale write
+ * can reach, and quoting a path list into a shell is a correctness hazard. The
+ * plumbing commands that accept `--stdin` take the same paths NUL-separated
+ * instead, so the list never touches argv and its length has no ceiling.
+ *
+ * `input` is installed on this client alone: simple-git writes it to the stdin
+ * of every command that client runs, so callers use the instance for exactly
+ * one command and never for a follow-up read.
+ */
+export function createGitClientWithInput(directory: string, content: string): SimpleGit {
+  return simpleGit(directory, {
+    maxConcurrentProcesses: 1,
+    input: () => content
+  })
+}
+
+/**
  * A client with git's editor replaced by a no-op, for the commands that commit
  * on the user's behalf.
  *
