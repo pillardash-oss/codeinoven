@@ -51,6 +51,62 @@ interface ChromiumPerformanceMemory {
   totalJSHeapSize: number
 }
 
+/**
+ * A frame long enough to be felt, as the browser itself accounts for it.
+ *
+ * `long-animation-frame` is the one measurement that names the work instead of
+ * the symptom: it reports the frame's duration, how much of it was script, how
+ * much was style and layout, and for each script the invoker, the function and
+ * the file. A freeze recorded by the heartbeat says the renderer stopped; this
+ * says what was running while it did, which is the difference between a guess
+ * and an answer. Not in every Chromium build and not in TS's DOM library yet,
+ * so both are declared here and the observer is only installed when the runtime
+ * advertises the entry type.
+ */
+interface LongAnimationFrameScript {
+  invoker?: string
+  sourceURL?: string
+  sourceFunctionName?: string
+  duration?: number
+}
+
+interface LongAnimationFrameTiming {
+  startTime: number
+  duration: number
+  blockingDuration?: number
+  renderStart?: number
+  styleAndLayoutStart?: number
+  scripts?: LongAnimationFrameScript[]
+}
+
+/** Frames shorter than this are normal work; only the ones a hand feels are kept. */
+const LONG_FRAME_REPORT_MS = 200
+
+/** How many scripts of one long frame are named in the trace. */
+const LONG_FRAME_SCRIPT_NAMES = 3
+
+/** The last path segment of a script URL, which is all a trace needs to place it. */
+function scriptFile(sourceURL: string | undefined): string {
+  if (!sourceURL) return ''
+  const withoutQuery = sourceURL.split(/[?#]/, 1)[0] ?? ''
+  const segments = withoutQuery.split('/')
+  return segments[segments.length - 1] || withoutQuery
+}
+
+/**
+ * One script's share of a long frame, as `name @ file (n ms)`.
+ *
+ * Flattened to a string because the trace's context holds primitives only, and
+ * because a reader looking at `perf.jsonl` should not have to walk a tree to
+ * see that `render` in `MarkdownView.svelte` took most of the frame.
+ */
+function describeLongFrameScript(script: LongAnimationFrameScript): string {
+  const name = script.sourceFunctionName || script.invoker || 'anonymous'
+  const file = scriptFile(script.sourceURL)
+  const ms = Math.round(script.duration ?? 0)
+  return file ? `${name} @ ${file} (${ms} ms)` : `${name} (${ms} ms)`
+}
+
 /** The renderer runtime's heap numbers, when this Chromium build reports them. */
 function rendererHeapContext(): PerfContext | undefined {
   const runtime = performance as Performance & { memory?: ChromiumPerformanceMemory }
@@ -99,10 +155,25 @@ class PerfTracer {
   private currentSpanName: string | undefined
   /** How often the heartbeat checks whether the renderer stopped running. */
   private heartbeat: ReturnType<typeof setInterval> | null = null
+  /** The long-frame observer, which names the scripts inside a stall. */
+  private longFrames: PerformanceObserver | null = null
   /** The memory sampler: the JS heap *and* what the window holds outside it. */
   private memoryTimer: ReturnType<typeof setInterval> | null = null
   private lastBeatAt = 0
   private installed = false
+
+  /**
+   * Start measuring as soon as this module is loaded.
+   *
+   * Installation used to hang off the first record, which meant the trace was
+   * blind until something else happened to be measured — including on a fresh
+   * renderer, where the first stall of the session is exactly the one worth
+   * seeing. `install` is idempotent and a no-op without a window, so eager is
+   * safe in a test or a server render too.
+   */
+  constructor() {
+    this.install()
+  }
 
   /**
    * Queue one record.
@@ -320,6 +391,70 @@ class PerfTracer {
   }
 
   /**
+   * Record a long frame with the work that filled it.
+   *
+   * The heartbeat can only say the renderer stopped, and after a stall the span
+   * that happens to be open is whichever one the click resumed into, which is
+   * why `interrupted` reads `thread.open` for a freeze that had nothing to do
+   * with opening a thread. This observer runs off the frame timeline instead, so
+   * it survives the stall it reports and can attribute it: the frame's script,
+   * style and layout split, and the three scripts that took the most time. A
+   * frame whose script share is small and layout share is large is a DOM
+   * problem; one dominated by a single named function is that function.
+   */
+  private startLongFrameObserver(): void {
+    if (this.longFrames !== null) return
+    if (typeof PerformanceObserver === 'undefined') return
+    const supported = PerformanceObserver.supportedEntryTypes ?? []
+    if (!supported.includes('long-animation-frame')) return
+    try {
+      const observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (entry.duration < LONG_FRAME_REPORT_MS) continue
+          this.recordLongFrame(entry as unknown as LongAnimationFrameTiming)
+        }
+      })
+      observer.observe({ type: 'long-animation-frame', buffered: false })
+      this.longFrames = observer
+    } catch {
+      // A runtime that will not observe must cost this measurement, never the app.
+    }
+  }
+
+  /** Write one long frame, flattened to the fields a reader can act on. */
+  private recordLongFrame(frame: LongAnimationFrameTiming): void {
+    const scripts = [...(frame.scripts ?? [])].sort(
+      (left, right) => (right.duration ?? 0) - (left.duration ?? 0)
+    )
+    const scriptMs = scripts.reduce((total, script) => total + (script.duration ?? 0), 0)
+    const renderMs = frame.renderStart ? frame.duration - (frame.renderStart - frame.startTime) : 0
+    const layoutMs = frame.styleAndLayoutStart
+      ? frame.duration - (frame.styleAndLayoutStart - frame.startTime)
+      : 0
+    const context: PerfContext = {
+      blockingMs: Math.round(frame.blockingDuration ?? 0),
+      scriptMs: Math.round(scriptMs),
+      renderMs: Math.round(Math.max(0, renderMs)),
+      layoutMs: Math.round(Math.max(0, layoutMs)),
+      scriptCount: scripts.length
+    }
+    scripts.slice(0, LONG_FRAME_SCRIPT_NAMES).forEach((script, index) => {
+      context[`script${index + 1}`] = describeLongFrameScript(script)
+    })
+    // `startTime` is measured from the time origin; the trace's timeline is wall
+    // clock, so the frame is placed on it before it is written.
+    this.pushAt(
+      'mark',
+      'renderer.longframe',
+      Math.round(performance.timeOrigin + frame.startTime),
+      frame.duration,
+      'ok',
+      undefined,
+      context
+    )
+  }
+
+  /**
    * Record what this window costs, split by where it is held.
    *
    * A working set alone cannot say whether a renderer is fat in JavaScript or in
@@ -375,6 +510,7 @@ class PerfTracer {
     if (this.installed || typeof window === 'undefined') return
     this.installed = true
     this.startHeartbeat()
+    this.startLongFrameObserver()
     this.startMemorySampling()
     window.addEventListener('pagehide', () => this.flush())
     document.addEventListener('visibilitychange', () => {

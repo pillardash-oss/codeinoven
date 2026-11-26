@@ -171,7 +171,16 @@ const TURN_ALIGNMENT_PAGE_SIZE = 24
 const MAX_TURN_ALIGNMENT_PAGES = 2
 
 class ThreadMessagesStore {
-  #loadPromises = new Map<string, Promise<void>>()
+  /**
+   * Loads in flight, with what each one was asked for.
+   *
+   * The hint flag is part of the key's value rather than an afterthought: a
+   * hover reads four messages, an open reads its aligned window, and they share
+   * one map. Without the flag an open that arrived while a hint was still
+   * flying joined the hint's promise and was satisfied by four messages, so the
+   * open read nothing and the conversation painted a tail it had not chosen.
+   */
+  #loadPromises = new Map<string, { promise: Promise<void>; hint: boolean }>()
   /** Rows an edit rewrote, waiting for the send that owns them. A send under one
    *  of these ids brings the row up to date in place instead of reusing it
    *  untouched, and never appends a second copy of the same prompt. */
@@ -287,7 +296,7 @@ class ThreadMessagesStore {
   }
 
   async waitForLoad(projectId: string, threadId: string): Promise<void> {
-    await this.#loadPromises.get(threadKey(projectId, threadId))
+    await this.#loadPromises.get(threadKey(projectId, threadId))?.promise
   }
 
   /** Last load error for the thread, if any. */
@@ -361,13 +370,21 @@ class ThreadMessagesStore {
   ): Promise<void> {
     const key = threadKey(projectId, threadId)
     const existing = this.#loadPromises.get(key)
-    if (existing) return existing
+    if (existing) {
+      // A hint is intent; an open is a decision. Only the open may be answered
+      // by the hint's page, and it never is: it waits for the hint to land and
+      // then takes its own aligned window. Two opens still share one read.
+      if (hint || !existing.hint) return existing.promise
+      await existing.promise.catch(() => {})
+      const startedMeanwhile = this.#loadPromises.get(key)
+      if (startedMeanwhile) return startedMeanwhile.promise
+    }
     const loadPromise = this.#load(projectId, threadId, recentLimit, hint)
-    this.#loadPromises.set(key, loadPromise)
+    this.#loadPromises.set(key, { promise: loadPromise, hint })
     try {
       await loadPromise
     } finally {
-      if (this.#loadPromises.get(key) === loadPromise) this.#loadPromises.delete(key)
+      if (this.#loadPromises.get(key)?.promise === loadPromise) this.#loadPromises.delete(key)
     }
   }
 
@@ -382,7 +399,7 @@ class ThreadMessagesStore {
   async loadTemporary(projectId: string, conversationId: string): Promise<void> {
     const key = threadKey(projectId, conversationId)
     const existing = this.#loadPromises.get(key)
-    if (existing) return existing
+    if (existing) return existing.promise
     const loadPromise = (async (): Promise<void> => {
       const entry = this.cache.entry(projectId, conversationId)
       entry.loading = true
@@ -410,11 +427,11 @@ class ThreadMessagesStore {
         this.cache.notify(projectId, conversationId)
       }
     })()
-    this.#loadPromises.set(key, loadPromise)
+    this.#loadPromises.set(key, { promise: loadPromise, hint: false })
     try {
       await loadPromise
     } finally {
-      if (this.#loadPromises.get(key) === loadPromise) this.#loadPromises.delete(key)
+      if (this.#loadPromises.get(key)?.promise === loadPromise) this.#loadPromises.delete(key)
     }
   }
 
