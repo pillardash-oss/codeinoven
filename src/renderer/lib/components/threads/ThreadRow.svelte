@@ -482,26 +482,38 @@
     coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
   )
 
-  /** Whether the agent is producing work right now. The one live-working rule
-   *  (`isThreadLiveWorking`) keeps a thread parked on the user out of this, so a
-   *  permission, question, or secret card never reads as work in progress   its
-   *  status is the authority until the user answers. */
-  let isWorking = $derived(isThreadLiveWorking(thread) || delegatedWorkActive)
+  /** Whether this thread's own turn is producing work right now. The one
+   *  live-working rule (`isThreadLiveWorking`) keeps a thread parked on the user
+   *  out of this, so a permission, question, or secret card never reads as work in
+   *  progress   its status is the authority until the user answers. */
+  let ownWorking = $derived(isThreadLiveWorking(thread))
+
+  /** Whether the row is live at all: its own turn, or the workers it dispatched.
+   *  A Sr. Engineer row stays live while its workers run, even with its own turn
+   *  parked between dispatches. */
+  let isWorking = $derived(ownWorking || delegatedWorkActive)
   let isRetryPaused = $derived(thread.status === 'working-paused')
   /** Another CodeInOven instance owns this thread's in-flight turn, so its live
    *  output and its stop control are there rather than here. */
   let isForeignRun = $derived(foreignRuns.isForeign(thread.projectId, thread.id))
 
-  /** Whether this turn is standing still on delegated work: an inline spawn, or a
-   *  status/output read called with `wait: true`, is still in flight. The row keeps
-   *  saying the thread is live, but with a held spine and the robot above it, so a
-   *  parent waiting on a worker never reads as a parent thinking.
+  /** Whether this thread is standing still on delegated work: an inline spawn, or
+   *  a status/output read called with `wait: true`, is still in flight, or the
+   *  thread's own turn is not running while the workers it dispatched still are.
+   *  The row keeps saying the thread is live, but with a held spine and the robot
+   *  above it, so a parent waiting on a worker never reads as a parent thinking.
    *
-   *  Only the turn's own transcript answers this, so a run owned by another
-   *  instance keeps its window mark: this window streams no parts for it and could
-   *  only guess. */
+   *  The first half is answered by the turn's own transcript, so a run owned by
+   *  another instance keeps its window mark: this window streams no parts for it
+   *  and could only guess. The second half is answered by the workers themselves,
+   *  which are threads of this window, so a Sr. Engineer parked between dispatches
+   *  wears the wait rather than the climbing spine of work it is not doing. */
   let waitsOnSubagents = $derived(
-    isWorking && !isForeignRun && threadMessages.waitsOnSubagents(thread.projectId, thread.id)
+    isWorking &&
+      !isForeignRun &&
+      (ownWorking
+        ? threadMessages.waitsOnSubagents(thread.projectId, thread.id)
+        : delegatedWorkActive)
   )
   /** Whether the row wears the working mark on its own account.
    *
@@ -644,7 +656,7 @@
       if (!effectiveRead && primarySettledAt > temporaryChatUnreadAt) return 'unread'
       return 'temporary-unread'
     }
-    if (isWorking && waitsOnSubagents) return 'waiting-subagents'
+    if (waitsOnSubagents) return 'waiting-subagents'
     if (isWorking) return 'working'
     // The confirmed terminal state wins over the busy flag so a finished turn
     // flips straight to done/unread instead of lingering on the spinner.
@@ -1816,6 +1828,7 @@
         <ThreadHoverPopover
           {thread}
           {isWorking}
+          {waitsOnSubagents}
           {isRetryPaused}
           {stageLabel}
           threadState={secondaryStatus === 'scheduled' ? 'scheduled' : threadState}
