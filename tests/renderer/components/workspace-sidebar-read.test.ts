@@ -139,7 +139,6 @@ function props(): SidebarProps {
     onTogglePin: vi.fn(),
     onDelete: vi.fn(async () => {}),
     onFork: vi.fn(),
-    onThreadMove: vi.fn(),
     onThreadDrop: vi.fn(async () => {}),
     onPinnedThreadMove: vi.fn(),
     onTimelinePinnedMove: vi.fn(),
