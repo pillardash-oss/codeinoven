@@ -421,6 +421,23 @@
   }
 
   async function loadOffered(): Promise<void> {
+    // An ACP agent's providers are the sign-in methods it declares, never the
+    // harness provider catalog: those ids are model providers, and handing one
+    // to `authenticate` is the "Invalid params" the agent answers with.
+    if (isAcpHarness) {
+      offeredLoading = true
+      offeredError = ''
+      try {
+        await loadAcpAuth()
+      } catch (offerError) {
+        offeredError =
+          offerError instanceof Error ? offerError.message : 'Providers could not be loaded.'
+        offered = []
+      } finally {
+        offeredLoading = false
+      }
+      return
+    }
     offeredLoading = true
     offeredError = ''
     try {
@@ -517,11 +534,15 @@
         return
       }
       // The agent runs the method it declared; there is no command to hand to a
-      // terminal and no key for the app to store.
+      // terminal and no key for the app to store. An agent without credentials
+      // opens the browser itself and answers only when the user is done, so the
+      // panel says where the sign-in went instead of spinning silently.
       storingKey = true
+      notice = `${provider.name} opens your browser when it needs credentials. Finish the sign-in there and this panel follows the result.`
       try {
         const status = await invoke('acpAgents:authenticate', harness.id, provider.id)
         await loadAcpAuth()
+        notice = ''
         // A successful sign-in changes the models the agent reports, so the
         // picker's cached (refused) catalog has to be dropped and re-probed now.
         providerCatalog.invalidateAll()
@@ -661,7 +682,10 @@
     // the connect screen itself. Jumping straight to the filtered list hid the
     // sign-in status and the already-connected providers, which is exactly what
     // a user who has accounts needs to see first.
-    void Promise.all([checkAuth(), loadOffered()]).then(() => {
+    // One read per harness: an ACP agent's provider list IS its auth status, so
+    // asking both would probe the agent twice for the same answer.
+    const ready = isAcpHarness ? checkAuth() : Promise.all([checkAuth(), loadOffered()])
+    void ready.then(() => {
       const query = initialSearch.trim()
       search = offered.some((provider) => providerMatchesSearch(provider, query)) ? query : ''
     })

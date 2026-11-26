@@ -22,6 +22,21 @@ export class AcpError extends Error {
   }
 }
 
+/**
+ * The sentence the agent put inside its error `data`.
+ *
+ * A JSON-RPC peer may report `-32602 Invalid params` for a request it understood
+ * and failed for its own reasons (Cursor's `cursor_login` answers exactly that
+ * when its login times out), so the generic protocol message alone hides the one
+ * line the user can act on. Anything that is not a `{ message }` string is
+ * ignored rather than stringified into the error card.
+ */
+function errorDetail(data: unknown): string | undefined {
+  if (typeof data === 'string') return data.trim() || undefined
+  const record = acpRecord(data)
+  return acpString(record?.['message'])?.trim() || undefined
+}
+
 export interface AcpClientOptions {
   command: string
   args: readonly string[]
@@ -219,11 +234,13 @@ export class AcpClient {
     clearTimeout(entry.timer)
     const error = acpRecord(record['error'])
     if (error) {
+      const protocolMessage = acpString(error['message']) ?? 'ACP request failed'
+      const detail = errorDetail(error['data'])
       entry.reject(
         new AcpError(
           entry.method,
           typeof error['code'] === 'number' ? error['code'] : -32000,
-          acpString(error['message']) ?? 'ACP request failed',
+          detail ? `${protocolMessage}: ${detail}` : protocolMessage,
           error['data']
         )
       )

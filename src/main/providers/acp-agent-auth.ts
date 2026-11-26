@@ -19,6 +19,16 @@ import { Logger } from '../system/logger'
  */
 
 const PROBE_TIMEOUT_MS = 30_000
+/**
+ * How long one sign-in may run.
+ *
+ * `authenticate` is not a capability probe: an agent that needs the browser
+ * (Cursor's `cursor_login`) opens it and answers only once the user is done, so
+ * the request has to outlive a human's trip to the browser. The client's own
+ * 15-minute default is the wrong ceiling for a dialog the user may walk away
+ * from, and the probe's 30 seconds is far too short to finish any login.
+ */
+const SIGN_IN_TIMEOUT_MS = 10 * 60_000
 /** A probe spawns a process, so a burst of status reads shares one answer. */
 const CACHE_TTL_MS = 30_000
 /**
@@ -191,7 +201,7 @@ export async function authenticateAcpAgent(
   const cwd = projectPath ?? homedir()
   const probe = await openProbe(agent, cwd)
   try {
-    await probe.client.request('authenticate', { methodId }, PROBE_TIMEOUT_MS)
+    await probe.client.request('authenticate', { methodId }, SIGN_IN_TIMEOUT_MS)
   } finally {
     probe.client.stop()
   }
