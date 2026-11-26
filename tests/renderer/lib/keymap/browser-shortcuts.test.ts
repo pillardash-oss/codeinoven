@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { appShortcutChords, browserShortcutBindings, browserSwitcherChords } from '$lib/keymap/browser-shortcuts'
+import {
+  appShortcutChords,
+  browserShortcutBindings,
+  browserSwitcherChords
+} from '$lib/keymap/browser-shortcuts'
 import { keymapKeys } from '$lib/keymap/keymap'
 
 /** The registry's effective keys, which is what the live keymap store answers
@@ -66,13 +70,27 @@ describe('browserShortcutBindings', () => {
     }
   })
 
-  it('never claims an app shortcut from a page', () => {
-    // The spotlight, a new thread, a view switch and the sidebar toggles are the
-    // app's own. While a page holds the keyboard the page wins, so none of them
-    // is claimed there; they still work from the app chrome.
+  it('claims the new-tab chords a page cannot answer, every platform', () => {
+    // A browser reserves both chords: Cmd/Ctrl+T opens a tab in a browser, and
+    // Cmd/Ctrl+N is the new-thread chord everywhere else in the app. Claiming it
+    // here is what makes a press inside a page or the browser chrome open a tab
+    // instead of starting a thread, the way the browser's own chrome does.
     for (const platform of ['darwin', 'linux', 'win32']) {
       const primary = platform === 'darwin' ? { meta: true } : { control: true }
-      for (const key of ['k', 'n', '1', '2', '3', '4', ',']) {
+      for (const key of ['t', 'n']) {
+        expect(hasChord(platform, { key, ...primary })).toBe(true)
+      }
+    }
+  })
+
+  it('never claims an app shortcut from a page', () => {
+    // The spotlight, a view switch and the sidebar toggles are the app's own.
+    // While a page holds the keyboard the page wins, so none of them is claimed
+    // there; they still work from the app chrome. `mod+n` is deliberately absent:
+    // it is the browser's new-tab chord (see above), so the browser keeps it.
+    for (const platform of ['darwin', 'linux', 'win32']) {
+      const primary = platform === 'darwin' ? { meta: true } : { control: true }
+      for (const key of ['k', '1', '2', '3', '4', ',']) {
         expect(hasChord(platform, { key, ...primary })).toBe(false)
       }
     }
@@ -92,10 +110,13 @@ function appChords(platform: string): ReturnType<typeof appShortcutChords> {
   return appShortcutChords(source)
 }
 
-function carriesAppChord(platform: string, wanted: { key: string }): boolean {
+function carriesAppChord(platform: string, wanted: { key: string; shift?: boolean }): boolean {
   const wantsMac = platform === 'darwin'
   return appChords(platform).some(
-    (chord) => chord.key === wanted.key && (wantsMac ? chord.meta : chord.control)
+    (chord) =>
+      chord.key === wanted.key &&
+      (wantsMac ? chord.meta : chord.control) &&
+      chord.shift === Boolean(wanted.shift)
   )
 }
 
@@ -103,20 +124,23 @@ describe('appShortcutChords', () => {
   it('reports the app shortcuts a page did not handle, every platform', () => {
     // These are the chords a page can only leave to the app, because the app's own
     // handler is the one that opens the surface: with none of them in this table a
-    // page would silently kill the spotlight, a new thread and every view switch.
+    // page would silently kill the spotlight and every view switch. `mod+n` is not
+    // here: the browser claims it for a new tab, so it never travels back.
     for (const platform of ['darwin', 'linux', 'win32']) {
-      for (const key of ['k', 'n', '1', '2', '3', '4', ',']) {
+      for (const key of ['k', '1', '2', '3', '4', ',']) {
         expect(carriesAppChord(platform, { key })).toBe(true)
       }
     }
   })
 
   it('never carries a reserved browser chord, so a page cannot override chrome', () => {
-    // Reload, address focus and tab close are the browser's, claimed in
-    // `before-input-event` before a page ever sees them; carrying them here would
-    // let a page that reported them unhandled re-run them from the wrong side.
+    // Reload, address focus, tab close and both new-tab chords are the browser's,
+    // claimed in `before-input-event` before a page ever sees them; carrying them
+    // here would let a page that reported them unhandled re-run them from the
+    // wrong side. The new-tab chords are the exception the app's own new-thread
+    // binding gave up: inside a browser the browser means a new tab by them.
     for (const platform of ['darwin', 'linux', 'win32']) {
-      for (const key of ['r', 'w', 'l']) {
+      for (const key of ['r', 'w', 'l', 't', 'n']) {
         expect(carriesAppChord(platform, { key })).toBe(false)
       }
     }

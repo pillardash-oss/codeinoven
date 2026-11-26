@@ -151,7 +151,7 @@
           "id": "nav-new-thread",
           "keys": ["mod", "n"],
           "label": "New thread / chat / file",
-          "description": "Creates a new thread, chat, or scoped thread depending on the current view; creates a file when the file tree is focused.",
+          "description": "Creates a new thread, chat, or scoped thread depending on the current view; creates a file when the file tree is focused, and opens a browser tab while a browser holds the keyboard.",
           "scenario": "Projects (including the scoped threads sidebar), Chats, Threads, or Scope view.",
           "context": "app-views"
         },
@@ -768,9 +768,9 @@
         },
         {
           "id": "browser-new-tab",
-          "keys": ["mod", "t"],
+          "keys": ["mod", "t", "mod", "n"],
           "label": "New browser tab",
-          "description": "Opens a new blank browser tab for the current thread.",
+          "description": "Opens a new blank browser tab for the current thread. Both chords are the browser's own, so the app's new-thread chord creates a tab instead of a thread while a browser holds the keyboard.",
           "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus.",
           "context": "browser"
         },
