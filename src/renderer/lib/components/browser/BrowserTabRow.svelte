@@ -10,7 +10,6 @@
   import { feature } from '$lib/feature-registry'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
-  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { browserAgentClaims } from '$lib/stores/browser-agent-claims.svelte'
   import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
@@ -164,16 +163,6 @@
   )
   /** True while a drag is over this row and would reorder here. */
   let dropTarget = $state(false)
-  /** The box a pending "reopen in box" targets: undefined while none is pending,
-   *  null for the default jar. */
-  let reopenTarget = $state<string | null | undefined>(undefined)
-  const reopenTargetLabel = $derived(
-    reopenTarget === undefined
-      ? ''
-      : reopenTarget === null
-        ? 'no box'
-        : (globalBrowser.boxById(reopenTarget)?.name ?? 'that box')
-  )
 
   function closeTab(event: MouseEvent): void {
     event.preventDefault()
@@ -188,15 +177,6 @@
     const id = globalBrowser.createGroup('New group')
     globalBrowser.moveToGroup(tab.id, id)
     onOpenGroupEditor(id)
-  }
-
-  /** Close this tab and open its page in the chosen box. Confirmed first: a tab
-   *  cannot change jars in place, so this really is a close plus an open. */
-  function confirmReopen(): void {
-    const target = reopenTarget
-    reopenTarget = undefined
-    if (target === undefined) return
-    globalBrowser.reopenInBox(tab.id, target)
   }
 
   function onDragStart(event: DragEvent): void {
@@ -325,7 +305,11 @@
               globalBrowser.moveToGroup(tab.id, choice.groupId)
               return
             case 'reopenInBox':
-              reopenTarget = choice.boxId
+              // The confirmation belongs to the strip, not to this row: the row
+              // lives inside the collapsible panel, which unmounts the moment the
+              // pointer leaves a hover-revealed sidebar for the dialog, and a
+              // dialog rendered here would go with it.
+              onReopenTabsInBox([tab.id], choice.boxId)
               return
             case 'moveToSidePanel':
               void globalBrowser.moveTabToSidePanel(tab.id)
@@ -532,20 +516,3 @@
     </button>
   </div>
 </div>
-
-{#if reopenTarget !== undefined}
-  <ConfirmDialog
-    open
-    variant="danger"
-    title="Reopen in another box?"
-    confirmLabel="Close and reopen"
-    onCancel={() => (reopenTarget = undefined)}
-    onConfirm={confirmReopen}
-  >
-    <p>
-      This tab closes and its address opens again in {reopenTargetLabel}. Cookies stay in their own
-      boxes, so the page opens signed out unless that box is already signed in, no matter which
-      browser signed it in. The tab's back and forward history is not carried over.
-    </p>
-  </ConfirmDialog>
-{/if}
