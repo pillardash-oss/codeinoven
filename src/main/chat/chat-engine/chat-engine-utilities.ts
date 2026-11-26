@@ -697,7 +697,11 @@ export class ChatEngineUtilities {
    * tools are registered at process spawn and work from the handoff file
    * alone   so a steer that lands after the previous turn's cleanup only
    * needs a fresh utility turn + endpoint publish to keep the tools alive.
-   * MCP runtime harnesses keep their live overlay until turn completion.
+   * An MCP-runtime harness has no endpoint to publish: its gateway is a launch
+   * overlay, so re-arming it means materializing and applying that overlay
+   * again. A steer that only rebuilt the gateway used to tear the overlay down
+   * and return, leaving those sessions with no app tools for the rest of the
+   * turn.
    */
   async rearmSteerUtilities(
     driver: HarnessDriver,
@@ -743,7 +747,12 @@ export class ChatEngineUtilities {
       await this.cleanupTurnUtilities(sessionId)
     }
     const publishUtilityEndpoint = driver.publishUtilityGatewayEndpoint?.bind(driver)
-    if (!publishUtilityEndpoint) return
+    const applyRuntime = driver.applyPreparedUtilityRuntime?.bind(driver)
+    // A harness carries the app gateway through a direct endpoint (Pi, codex)
+    // or a runtime overlay its own launch folds in (Claude Code, Cline,
+    // OpenCode, Antigravity). Only a harness with neither can be left alone: it
+    // can never call a gateway tool, so there is nothing to re-arm for it.
+    if (!publishUtilityEndpoint && !applyRuntime) return
     const nativeCapabilities = await this.host.units['utilities-tools'].nativeCapabilitiesFor(
       driver,
       projectPath
@@ -754,6 +763,7 @@ export class ChatEngineUtilities {
       parentTurnId: sessionId
     }
     let gateway: UtilityTurnGateway | undefined
+    let runtime: PreparedUtilityRuntime | undefined
     try {
       gateway = await this.host.state.utilityOrchestration.startTurn({
         harnessId: driver.id,
@@ -830,13 +840,50 @@ export class ChatEngineUtilities {
         attributeReinjectedResult: (attribution) =>
           this.recordReinjectedUtilityResult(threadId, settings, budgetContext, attribution)
       })
-      if (gateway.directEndpoint) {
+      if (gateway.directEndpoint && publishUtilityEndpoint) {
         await publishUtilityEndpoint(projectPath, sessionId, gateway.directEndpoint)
+      } else if (applyRuntime) {
+        // The steer needed a fresh gateway, and the teardown above removed the
+        // runtime overlay this session was launched with. Rebuilding only the
+        // gateway and returning left an MCP-runtime harness with no app tools
+        // at all for the rest of its turn   every `cio_*` call then failed as if
+        // the utility transport had dropped. Materialize the overlay again and
+        // apply it, exactly as a full turn does, so the session's own config is
+        // back on disk and its next launch or reconnect finds the gateway.
+        const request = {
+          projectPath,
+          providerId: settings.providerId,
+          resolvedUtilities: gateway.resolvedUtilities,
+          ...(gateway.directEndpoint
+            ? { gatewayRequestTimeoutMs: gateway.directEndpoint.timeoutMs }
+            : {})
+        }
+        const overlay = (await driver.prepareUtilityRuntime?.(request)) ?? {}
+        if (overlay.gatewayAvailable !== false) {
+          const environment: Record<string, string> = { ...(overlay.env ?? {}) }
+          for (const { utility } of gateway.resolvedUtilities) {
+            for (const credential of utility.credentials) {
+              if (!credential.environmentVariable) continue
+              try {
+                environment[credential.environmentVariable] =
+                  await this.host.state.secretVault.resolve(credential.secretRef)
+              } catch (error) {
+                if (credential.required) throw error
+              }
+            }
+          }
+          runtime = await this.host.state.utilityRuntime.prepare(request, {
+            ...overlay,
+            env: environment
+          })
+          await applyRuntime(projectPath, runtime, sessionId)
+        }
       }
       this.host.state.utilityTurns.set(sessionId, {
         driver,
         projectId,
         projectPath,
+        ...(runtime ? { runtime } : {}),
         gateway,
         threadId
       })
@@ -846,7 +893,11 @@ export class ChatEngineUtilities {
         .materializeSecretFiles(threadId)
         .catch((error: unknown) => Logger.dev('Agent secret files could not be written:', error))
     } catch (error) {
-      await gateway?.cleanup()
+      const cleanups: Array<Promise<unknown>> = []
+      if (gateway) cleanups.push(gateway.cleanup())
+      if (runtime) cleanups.push(runtime.cleanup())
+      if (runtime && applyRuntime) cleanups.push(applyRuntime(projectPath, null, sessionId))
+      await Promise.allSettled(cleanups)
       Logger.error('Steer utility re-arm failed:', error)
       throw error
     }

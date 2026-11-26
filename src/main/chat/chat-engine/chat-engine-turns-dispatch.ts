@@ -23,6 +23,7 @@ import {
   type PendingOrchestrationDispatch
 } from '../chat-engine-orchestration'
 import { awaitDelegationOutcome } from '../delegation/delegation-report-grace'
+import { deliverDelegationReport } from '../delegation/delegation-report-delivery'
 import { legacyHarnessAccountId } from '../../providers/harness-account-registry'
 import type { ResolvedImageEntry } from '../../providers/image-descriptor-provider'
 import type {
@@ -679,12 +680,26 @@ export class ChatEngineTurnsDispatch {
     status: ThreadStatus
   ): Promise<void> {
     try {
-      const verdict = await awaitDelegationOutcome(status, async () => {
-        const runThread = await this.host.threadManager
-          .getThreadById(dispatch.runThreadId)
-          .catch(() => null)
-        return runThread?.status ?? null
-      })
+      const runThreadSessionId = await this.host.threadManager
+        .getThreadById(dispatch.runThreadId)
+        .then((thread) => thread?.sessionId)
+        .catch(() => undefined)
+      const verdict = await awaitDelegationOutcome(
+        status,
+        async () => {
+          const runThread = await this.host.threadManager
+            .getThreadById(dispatch.runThreadId)
+            .catch(() => null)
+          return runThread?.status ?? null
+        },
+        {
+          // A parked thread with a retry already scheduled is not a failure: the
+          // retry's own settle reports for it.
+          isRetryPending: () =>
+            runThreadSessionId !== undefined &&
+            this.host.state.retryScheduler?.getPendingRetry(runThreadSessionId) !== undefined
+        }
+      )
       // A retry owns the run thread now. The dispatch stays pending, so whichever
       // turn finally settles it reports then instead of this transient failure.
       if (!verdict.report) return
@@ -694,18 +709,21 @@ export class ChatEngineTurnsDispatch {
         dispatch.requestingThreadId
       )
       if (!thread?.settings) return
-      await this.host.sendPrompt(
-        dispatch.requestingProjectId,
-        dispatch.requestingThreadId,
-        thread.settings,
-        buildOrchestrationReportPrompt(dispatch, verdict.status),
-        [],
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        'internal'
+      const reportingSettings = thread.settings
+      await deliverDelegationReport(() =>
+        this.host.sendPrompt(
+          dispatch.requestingProjectId,
+          dispatch.requestingThreadId,
+          reportingSettings,
+          buildOrchestrationReportPrompt(dispatch, verdict.status),
+          [],
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          'internal'
+        )
       )
     } catch (error) {
       Logger.dev('Orchestration dispatch report skipped:', error)

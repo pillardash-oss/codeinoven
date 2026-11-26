@@ -60,4 +60,22 @@ describe('awaitDelegationOutcome', () => {
       awaitDelegationOutcome('interrupted', async () => null, { sleep: noSleep })
     ).resolves.toEqual({ report: true, status: 'interrupted' })
   })
+
+  it('stays silent while a retry for the run is still queued', async () => {
+    await expect(
+      awaitDelegationOutcome('failed', async () => 'failed', {
+        sleep: noSleep,
+        isRetryPending: () => true
+      })
+    ).resolves.toEqual({ report: false, status: 'failed' })
+  })
+
+  it('reports a failed run once its retry is no longer queued', async () => {
+    await expect(
+      awaitDelegationOutcome('failed', async () => 'failed', {
+        sleep: noSleep,
+        isRetryPending: () => false
+      })
+    ).resolves.toEqual({ report: true, status: 'failed' })
+  })
 })

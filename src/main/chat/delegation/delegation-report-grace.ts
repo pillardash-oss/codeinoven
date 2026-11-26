@@ -46,7 +46,21 @@ export function sleepWithoutHoldingProcess(ms: number): Promise<void> {
 export async function awaitDelegationOutcome(
   initialStatus: ThreadStatus,
   readStatus: () => Promise<ThreadStatus | null>,
-  options: { graceMs?: number; sleep?: (ms: number) => Promise<void> } = {}
+  options: {
+    graceMs?: number
+    sleep?: (ms: number) => Promise<void>
+    /**
+     * Whether the app still has a retry queued for this run's session.
+     *
+     * A provider failure parks a thread on `failed` and schedules its resume a
+     * little later, so the status alone can say "failed" while the run is
+     * already on its way back. Reporting then tells the parent its work died
+     * moments before the retry finishes it, and nothing is left watching the
+     * recovered turn. Read at the end of the window, because a retry that
+     * finished inside it is no longer pending.
+     */
+    isRetryPending?: () => boolean
+  } = {}
 ): Promise<DelegationReportVerdict> {
   if (initialStatus === 'completed') return { report: true, status: initialStatus }
   const graceMs = options.graceMs ?? DELEGATION_REPORT_GRACE_MS
@@ -54,5 +68,6 @@ export async function awaitDelegationOutcome(
   const status = await readStatus()
   if (status === null) return { report: true, status: initialStatus }
   if (isThreadBusyStatus(status)) return { report: false, status }
+  if (options.isRetryPending?.() === true) return { report: false, status }
   return { report: true, status }
 }

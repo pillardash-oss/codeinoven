@@ -180,6 +180,33 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
     next.emit('exit', 0, null)
   })
 
+  it('answers whether a live turn exists across the process boundary', async () => {
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const driver = new ClaudeCodeDriver(await storage())
+    const sessionId = await driver.createSession('/project', 'Claude thread')
+    expect(driver.hasActiveTurn(sessionId)).toBe(false)
+    await driver.sendPrompt('/project', {
+      sessionId,
+      text: 'Read the project',
+      attachments: [],
+      settings: {
+        harnessId: 'claude-code',
+        providerId: 'anthropic',
+        modelId: 'sonnet',
+        contextWindow: 200_000,
+        thinkingLevel: 'medium',
+        permissionLevel: 'auto_review'
+      }
+    })
+    expect(driver.hasActiveTurn(sessionId)).toBe(true)
+    // The turn's process is the only thing that makes the turn live: once it
+    // exits, a message arriving before the idle event must read as a next turn
+    // rather than a steer into a turn that is already over.
+    child.emit('exit', 0, null)
+    await vi.waitFor(() => expect(driver.hasActiveTurn(sessionId)).toBe(false))
+  })
+
   it('does not serialize unrelated Claude process startup', async () => {
     const mainChild = new FakeChild()
     const titleChild = new FakeChild()

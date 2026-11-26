@@ -28,6 +28,7 @@ import {
   resolveDelegationTarget
 } from '../../delegation/delegation-target'
 import { awaitDelegationOutcome } from '../../delegation/delegation-report-grace'
+import { deliverDelegationReport } from '../../delegation/delegation-report-delivery'
 
 /**
  * Pawn agents: the worker threads an agent spawns for itself.
@@ -347,11 +348,15 @@ export class ChatEnginePawnAgents {
         .then(async (result) => {
           let outcome = result
           if (!outcome.ok) {
-            const settlement = await awaitDelegationOutcome('failed', () =>
-              this.pawnThreadStatus(projectId, pawn.id)
+            const settlement = await awaitDelegationOutcome(
+              'failed',
+              () => this.pawnThreadStatus(projectId, pawn.id),
+              { isRetryPending: () => this.pawnRetryPending(sessionId) }
             )
             if (!settlement.report) {
-              // The retry is running. Keep the card live and follow that turn.
+              // A retry owns the run: it is working again, or its resume is
+              // queued and has not started yet. Keep the card live and follow
+              // that turn, because the retry's own finish is the report.
               this.host.state.childSessionActivityStatuses.set(sessionId, 'running')
               followPawnOutcome(
                 this.host.units['turns-sessions'].waitForSessionCompletion(
@@ -429,8 +434,10 @@ export class ChatEnginePawnAgents {
         // The retry policy may already own this thread, so the same grace applies
         // to a call that was waiting inline: report the failure only once the run
         // is still failed a minute later, and follow the retry when one started.
-        const settlement = await awaitDelegationOutcome('failed', () =>
-          this.pawnThreadStatus(projectId, pawn.id)
+        const settlement = await awaitDelegationOutcome(
+          'failed',
+          () => this.pawnThreadStatus(projectId, pawn.id),
+          { isRetryPending: () => this.pawnRetryPending(sessionId) }
         )
         if (!settlement.report) {
           followPawnOutcome(
@@ -652,9 +659,26 @@ export class ChatEnginePawnAgents {
   }
 
   /**
+   * Whether the app still has a retry queued for the pawn's session.
+   *
+   * A provider failure parks the pawn's thread on `failed` and schedules its
+   * resume, so the status alone can say the run is over while a retry is still
+   * on its way back. That is not an answer for the spawner, and following the
+   * resumed turn is what reports the pawn when it really finishes.
+   */
+  pawnRetryPending(sessionId: string): boolean {
+    return this.host.state.retryScheduler?.getPendingRetry(sessionId) !== undefined
+  }
+
+  /**
    * Steer the spawning thread with a finished pawn's report, which is the whole
    * point of a background pawn: its work lands in the agent's context as a short
    * report instead of the thousands of steps that produced it.
+   *
+   * The report is retried rather than dropped. A parent whose row still says it
+   * is working can be a turn that has just ended, and the first attempt then
+   * loses its race with that settle; the work is done either way, so a failed
+   * delivery has to be tried again instead of logged away as a lost report.
    */
   async reportPawnCompletion(
     projectId: string,
@@ -664,29 +688,34 @@ export class ChatEnginePawnAgents {
     output: string
   ): Promise<void> {
     if (!pawn.coordinatorThreadId) return
-    await this.host.sendPrompt(
-      projectId,
-      pawn.coordinatorThreadId,
-      spawnerSettings,
-      [
-        `Pawn agent ${pawn.title} finished its task.`,
-        purpose ? `Purpose: ${purpose}.` : '',
-        'Read its report, inspect the files it touched, and commit the work you accept: a pawn never commits, so the commit is yours or nobody makes it. If you leave any reported path uncommitted, name every one of those paths and say why.',
-        output || 'The pawn agent returned no message.'
-      ]
-        .filter(Boolean)
-        .join('\n\n'),
-      [],
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      'internal',
-      {
-        action: `Pawn finished · ${pawn.title}`.slice(0, 120),
-        body: output.slice(0, 20_000)
-      }
+    const spawnerThreadId = pawn.coordinatorThreadId
+    const text = [
+      `Pawn agent ${pawn.title} finished its task.`,
+      purpose ? `Purpose: ${purpose}.` : '',
+      'Read its report, inspect the files it touched, and commit the work you accept: a pawn never commits, so the commit is yours or nobody makes it. If you leave any reported path uncommitted, name every one of those paths and say why.',
+      output || 'The pawn agent returned no message.'
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+    const presentation = {
+      action: `Pawn finished · ${pawn.title}`.slice(0, 120),
+      body: output.slice(0, 20_000)
+    }
+    await deliverDelegationReport(() =>
+      this.host.sendPrompt(
+        projectId,
+        spawnerThreadId,
+        spawnerSettings,
+        text,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'internal',
+        presentation
+      )
     )
   }
 }
