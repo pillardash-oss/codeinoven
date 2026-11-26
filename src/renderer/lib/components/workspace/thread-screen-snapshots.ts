@@ -18,8 +18,17 @@
  * bounded slices, off the interaction path entirely.
  */
 
-/** How many left screens stay cached. */
-const MAX_SNAPSHOTS = 3
+import { CONVERSATION_SLOTS } from '$lib/stores/thread-conversation-slots'
+
+/**
+ * How many left screens stay cached.
+ *
+ * The same policy as the conversation slots — "the last three you opened" — so
+ * both read one constant. Tuned separately, the screen cache would park a
+ * picture for a thread whose transcript had already been evicted, and the slot
+ * stack would hold a transcript for a thread that had nothing left to show.
+ */
+const MAX_SNAPSHOTS = CONVERSATION_SLOTS
 
 /** The transcript's own scroller, whose offset the copy has to restore. */
 const SCROLLER_SELECTOR = '.conversation-scroll'
