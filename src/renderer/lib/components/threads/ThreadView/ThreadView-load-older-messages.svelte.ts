@@ -682,9 +682,9 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     if (!this.alive || this.historyFilling) return
     // Only the reader's own request loads, and only once this view has finished
     // putting them where they belong. A page mounted above the newest turn
-    // before that restore runs becomes the first message in the document, and
-    // the restore anchors on the first message   which is exactly how a thread
-    // could open in the middle of its history instead of at its tail.
+    // before that restore runs mounts a whole stretch of older work in the same
+    // frames the view is still settling, and the reader then arrives at neither
+    // their place nor the tail.
     if (!this.readerReachedUp) return
     if (!this.root.unmirroredTraceStartTime.scrollRestored) return
     this.historyFilling = true
@@ -958,12 +958,11 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
 
   scrollToLatest(): void {
     if (!this.scrollEl) return
-    // The reader has taken the viewport. Any pending open-at-prompt restore has
-    // to stand down: a thread that mounted empty (a brand-new conversation) only
-    // flips its loaded flag as the first message lands, so that restore runs
-    // AFTER this call and would pin the viewport to the prompt instead of
-    // following the answer streaming in below it. A send claims the viewport
-    // exactly like a jump does.
+    // The reader has taken the viewport. Any pending open restore has to stand
+    // down: a thread that mounted empty (a brand-new conversation) only flips
+    // its loaded flag as the first message lands, so that restore runs AFTER
+    // this call and would settle the transcript itself, a frame after the tail
+    // was already taken. A send claims the viewport exactly like a jump does.
     this.root.unmirroredTraceStartTime.scrollRestored = true
     // Snap instantly   a smooth scroll races the agent's stream: its target
     // is captured once, so while it animates the bottom keeps growing and the

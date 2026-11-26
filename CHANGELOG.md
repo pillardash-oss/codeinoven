@@ -80,6 +80,14 @@ browser-session-cookies.ts`), plus upstream ANGLE, Skia and V8 backports and
 
 ### Fixed
 
+- **A thread opens at its tail, not at the first lines of the answer.** The open
+  restore anchored the viewport on the newest prompt, so on a settled turn with a
+  long answer the screen showed the _beginning_ of the final output with the rest
+  of it below the fold, and the reader scrolled to the end of the answer every
+  time they opened a thread. The restore now settles on the live bottom and stays
+  attached, so the end of the newest answer is on screen whatever its length and
+  the run's own cards and receipt stay under it where they already were
+  (`ThreadView-effects.svelte.ts`).
 - **A tool call the reader opens mid-run keeps its place on screen.** The
   transcript follows the live tail while the reader is still at the bottom, and
   it read the resize caused by the reader's own expansion as new work arriving

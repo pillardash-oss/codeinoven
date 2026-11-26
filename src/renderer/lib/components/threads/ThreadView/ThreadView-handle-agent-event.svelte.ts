@@ -882,12 +882,12 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
         )
         // Wait for the DOM to reflect the optimistic message, then follow it.
         // A send is the reader acting on the conversation, so it always returns
-        // them to the tail: the view may have opened anchored on the previous
-        // prompt (a restore), and leaving the message they just sent below the
-        // fold would read as the send doing nothing. `scrollToLatest` also takes
-        // the viewport out of the open-at-prompt restore's hands, which is what
-        // a restore still in flight (a thread opened and answered immediately)
-        // would otherwise do right after this scroll.
+        // them to the tail, and the view may have opened anywhere above it (a
+        // restore): leaving the message they just sent below the fold would read
+        // as the send doing nothing. `scrollToLatest` also takes the viewport
+        // out of the open restore's hands, which is what a restore still in
+        // flight (a thread opened and answered immediately) would otherwise do
+        // right after this scroll.
         await tick()
         this.root.loadOlderMessages.scrollToLatest()
         await sendPromise
