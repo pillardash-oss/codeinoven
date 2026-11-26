@@ -428,6 +428,23 @@ export class ThreadMessagesEvents {
         this.cache.notify(projectId, threadId)
         break
       }
+      case 'steer.merged': {
+        // The earlier message was folded into this one: the row now says both
+        // texts. A thread's steer is confirmed by the invoke's own message, so
+        // this only matters where no confirmation comes back (a side chat).
+        const entry = this.cache.entry(projectId, threadId)
+        const message = entry.messages.find((candidate) => candidate.id === event.userMessageId)
+        if (!message) break
+        let changed = false
+        for (const part of message.parts) {
+          if (part.type !== 'text') continue
+          part.text = event.text
+          changed = true
+          break
+        }
+        if (changed) this.cache.notify(projectId, threadId)
+        break
+      }
       case 'message.part.updated':
         this.upsertPart(projectId, threadId, event.sessionId, event.part)
         break

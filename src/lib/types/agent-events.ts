@@ -381,6 +381,15 @@ export type AgentEvent =
       sessionId: string
       userMessageId: string
     }
+  | {
+      /** A second steer arrived while an earlier one was still held, so the
+       *  earlier message was folded into the newer one. `userMessageId` is the
+       *  surviving row and `text` is what it now says. */
+      type: 'steer.merged'
+      sessionId: string
+      userMessageId: string
+      text: string
+    }
 
 /**
  * Agent events that are tied to a running session. Catalog events are app-level

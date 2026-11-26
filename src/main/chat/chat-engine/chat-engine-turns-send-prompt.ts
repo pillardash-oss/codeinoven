@@ -1126,6 +1126,13 @@ export class ChatEngineTurnsSendPrompt {
           conversationId: threadId,
           userMessageId: messageId,
           kind: 'thread',
+          payload: {
+            text,
+            attachments,
+            promptReferences: validatedPromptReferences,
+            projectReferences: validatedProjectReferences,
+            taskReferences: taskReferences ?? []
+          },
           deliverMidTurn: deliverFallbackSteer,
           deliverAfterTurn: async () => {
             await this.host.sendPrompt(

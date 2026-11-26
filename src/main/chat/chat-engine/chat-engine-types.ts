@@ -38,6 +38,7 @@ import type {
   ThreadSettings
 } from '../../../lib/types'
 import type { TurnStreamEvent } from '../turn-stream'
+import type { HeldSteerPayload } from './chat-engine-held-steer-merge'
 
 export interface PersistedProviderCatalog {
   schemaVersion: 4
@@ -179,7 +180,9 @@ export interface TemporaryChatSession {
  * turn still has a tool call in flight. The harness has NOT received it yet,
  * so the user can undo it. When the last in-flight tool ends the steer is
  * delivered mid-turn; when the whole turn idles first it is flushed as a
- * regular next-turn send. One record per active steer, keyed by session.
+ * regular next-turn send. One record per active steer, keyed by session; a
+ * second steer arriving while one is held folds into it (see
+ * `chat-engine-held-steer-merge`) instead of replacing it.
  */
 export interface HeldSteer {
   projectId: string
@@ -187,6 +190,8 @@ export interface HeldSteer {
   conversationId: string
   userMessageId: string
   kind: 'thread' | 'temporary'
+  /** What the user put into this steer, so a later steer can fold into it. */
+  payload: HeldSteerPayload
   /** Deliver the steer to the live turn now (tool window closed mid-turn). */
   deliverMidTurn: () => Promise<void>
   /** The turn ended before a delivery window opened   send as the next turn. */
