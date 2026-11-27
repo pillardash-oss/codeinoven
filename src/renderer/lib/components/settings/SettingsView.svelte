@@ -34,7 +34,7 @@
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
   import { CIO_CLEANUP_CATEGORIES } from '$shared/cio-cleanup'
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
-  import { settingsUiState } from '$lib/stores/settings-ui.svelte'
+  import { settingsUiState, type HarnessesTab } from '$lib/stores/settings-ui.svelte'
   import {
     settingsRouteState,
     type UtilitiesRoute,
@@ -66,7 +66,7 @@
     type PrMergeMethod,
     type ThemePreference
   } from '$shared/types'
-  import { onMount, tick, type Component } from 'svelte'
+  import { onDestroy, onMount, tick, type Component } from 'svelte'
   import { toast } from 'svelte-sonner'
   import type { ActionDefinition, ActionSelection } from '../../actions/types'
   import VendorIcon from '../../vendor-icons/VendorIcon.svelte'
@@ -241,8 +241,11 @@
 
     navigateSection(entry.section)
     // A card inside a tab is not on screen until that tab is selected, so the
-    // tab is chosen before the reveal looks for the block.
-    if (entry.harnessesTab) settingsUiState.harnessesTab = entry.harnessesTab
+    // tab is chosen before the reveal looks for the block. A destination on
+    // Harnesses that names no tab is the Harnesses page itself.
+    if (entry.section === 'harnesses') {
+      settingsUiState.harnessesTab = entry.harnessesTab ?? 'native'
+    }
     await tick()
     // One frame so the freshly swapped section content has laid out.
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
@@ -257,16 +260,27 @@
   // Sidebar tabs come from the settings search registry   the same source the
   // spotlight searches, so a page can never be navigable but not searchable.
   interface SettingsSidebarTab {
-    id: SettingsSection
+    /** Stable entry id, because two entries can share one section page. */
+    id: string
+    /** The section page the entry opens. */
+    section: SettingsSection
+    /** Inner tab the entry selects on that page, when it names one. */
+    harnessesTab?: HarnessesTab
     label: string
     icon: Component
   }
 
-  const tabs: SettingsSidebarTab[] = SETTINGS_PAGE_ENTRIES.map((entry) => ({
-    id: entry.section,
-    label: entry.title,
-    icon: entry.icon
-  }))
+  function sidebarTab(entry: (typeof SETTINGS_PAGE_ENTRIES)[number]): SettingsSidebarTab {
+    return {
+      id: entry.id,
+      section: entry.section,
+      harnessesTab: entry.harnessesTab,
+      label: entry.title,
+      icon: entry.icon
+    }
+  }
+
+  const tabs: SettingsSidebarTab[] = SETTINGS_PAGE_ENTRIES.map(sidebarTab)
 
   // A page names its own category, so these groups are read straight out of the
   // registry: four short lists to scan instead of twenty rows at once. A group
@@ -274,29 +288,42 @@
   const tabGroups = SETTINGS_GROUPS.map((group) => ({
     id: group.id,
     label: group.label,
-    tabs: SETTINGS_PAGE_ENTRIES.filter((entry) => entry.group === group.id).map(
-      (entry): SettingsSidebarTab => ({
-        id: entry.section,
-        label: entry.title,
-        icon: entry.icon
-      })
-    )
+    tabs: SETTINGS_PAGE_ENTRIES.filter((entry) => entry.group === group.id).map(sidebarTab)
   })).filter((group) => group.tabs.length > 0)
+
+  /**
+   * Whether a sidebar entry owns the screen.
+   *
+   * Harnesses and Accounts are one page reached two ways, so the page belongs to
+   * the entry whose tab is showing; every other entry owns its whole section.
+   */
+  function sidebarTabActive(tab: SettingsSidebarTab): boolean {
+    if (tab.section !== section) return false
+    if (tab.section !== 'harnesses') return true
+    return tab.harnessesTab
+      ? settingsUiState.harnessesTab === tab.harnessesTab
+      : settingsUiState.harnessesTab !== 'accounts'
+  }
+
+  /** Opening a sidebar entry also selects the inner tab it names. */
+  function openSidebarTab(tab: SettingsSidebarTab): void {
+    if (tab.harnessesTab) settingsUiState.harnessesTab = tab.harnessesTab
+    else if (tab.section === 'harnesses') settingsUiState.harnessesTab = 'native'
+    navigateSection(tab.section)
+  }
 
   // The header mirrors the section on screen   cleared when Settings closes.
   $effect(() => {
-    let activeLabel: string | null = null
-    for (const tab of tabs) {
-      if (tab.id === section) activeLabel = tab.label
-    }
+    const activeTab = tabs.find(sidebarTabActive)
     settingsUiState.activeTabLabel =
       section === 'utilities'
-        ? (utilitiesPageLabel(settingsRouteState.utilities) ?? activeLabel)
-        : activeLabel
-    return () => {
-      settingsUiState.activeTabLabel = null
-      settingsUiState.harnessesTab = 'native'
-    }
+        ? (utilitiesPageLabel(settingsRouteState.utilities) ?? activeTab?.label ?? null)
+        : (activeTab?.label ?? null)
+  })
+
+  onDestroy(() => {
+    settingsUiState.activeTabLabel = null
+    settingsUiState.harnessesTab = 'native'
   })
 
   const fontWeightOptions = FONT_WEIGHT_OPTIONS.map((option) => ({
@@ -654,14 +681,14 @@
           <div class="space-y-0.5">
             {#each group.tabs as tab (tab.id)}
               {@const Icon = tab.icon}
-              {@const isActive = section === tab.id}
+              {@const isActive = sidebarTabActive(tab)}
               <button
                 class="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm transition-colors {isActive
                   ? 'bg-elevated text-foreground'
                   : 'text-muted hover:bg-elevated hover:text-foreground'}"
                 aria-current={isActive ? 'page' : undefined}
                 title="{tab.label} settings"
-                onclick={() => navigateSection(tab.id)}
+                onclick={() => openSidebarTab(tab)}
               >
                 <Icon size={14} class={isActive ? 'text-foreground' : 'text-dimmed'} />
                 {tab.label}

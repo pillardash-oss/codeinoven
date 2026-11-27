@@ -10,6 +10,7 @@ import CioKey from '@pdslng/cio-icon/CioKey.svelte'
 import CioKeyboard from '@pdslng/cio-icon/CioKeyboard.svelte'
 import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
 import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
+import CioPerson from '@pdslng/cio-icon/CioPerson.svelte'
 import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
 import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
 import CioServer from '@pdslng/cio-icon/CioServer.svelte'
@@ -60,11 +61,17 @@ interface SettingsSearchEntryBase {
   icon: Component
 }
 
-/** A whole section page: it is a Settings sidebar tab, so it names its category. */
+/**
+ * A whole section page: it is a Settings sidebar tab, so it names its category.
+ *
+ * A page reached through a tab of another page (Accounts lives on Harnesses)
+ * names that tab here, so the sidebar entry and the search spotlight land on
+ * the same route with the same tab selected.
+ */
 export interface SettingsPageEntry extends SettingsSearchEntryBase {
   group: SettingsGroupId
   blockId?: undefined
-  harnessesTab?: undefined
+  harnessesTab?: HarnessesTab
 }
 
 /** A named block on a section page, revealed by the settings search spotlight. */
@@ -142,6 +149,16 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       'cheap model'
     ],
     icon: CioPlug
+  },
+  {
+    id: 'harness-accounts',
+    section: 'harnesses',
+    harnessesTab: 'accounts',
+    group: 'agents',
+    title: 'Accounts',
+    description: 'Every harness account, its quota, and the one new sessions start with.',
+    keywords: ['accounts', 'quota', 'usage', 'capacity', 'subscription', 'default account'],
+    icon: CioPerson
   },
   {
     id: 'memory',
