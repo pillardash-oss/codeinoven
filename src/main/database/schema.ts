@@ -37,7 +37,7 @@ const USAGE_EVENT_FEATURE_LIST_SQL = USAGE_EVENT_FEATURES.map((feature) => `'${f
  * already on disk. A data repair that has to run exactly once per install earns
  * a version the same way, with no DDL in it.
  */
-export const DATABASE_SCHEMA_VERSION = 15
+export const DATABASE_SCHEMA_VERSION = 16
 
 export const SCHEMA_SQL = `
 -- ─── Metadata ────────────────────────────────────────────────────────────

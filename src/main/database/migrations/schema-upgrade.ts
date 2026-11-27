@@ -20,6 +20,7 @@ import { versionTwelveMigration } from './v012'
 import { versionThirteenMigration } from './v013'
 import { versionFourteenMigration } from './v014'
 import { versionFifteenMigration } from './v015'
+import { versionSixteenMigration } from './v016'
 
 /**
  * Every migration this build ships, one file per schema version, ascending.
@@ -45,7 +46,8 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
   versionTwelveMigration,
   versionThirteenMigration,
   versionFourteenMigration,
-  versionFifteenMigration
+  versionFifteenMigration,
+  versionSixteenMigration
 ]
 
 /**

@@ -15,7 +15,7 @@ import type {
   Thread,
   ThreadSettings
 } from '../../../lib/types'
-import { workerReportsToCoordinator } from '../../../lib/types'
+import { threadTracksReadStatus, workerReportsToCoordinator } from '../../../lib/types'
 import { decideModelSwitchCompaction } from '../../../lib/model-switch-compaction'
 import { handoffTailTokenBudget } from '../../../lib/prompt-budget'
 import { selectHistoryTail } from './chat-engine-message-text'
@@ -1382,7 +1382,11 @@ export class ChatEngineTurnsSessions {
         info.threadId,
         retryPaused ? 'working-paused' : 'failed',
         {
-          read: false,
+          // A failed run is unread so nobody misses it, except on an
+          // orchestration child: a worker's failure is reported to the
+          // Sr. Engineer, and a dot on the coordinator row would say the user
+          // has something to read when the Assignment is already saying it.
+          read: currentThread !== null && !threadTracksReadStatus(currentThread),
           ...(error ? { error } : {}),
           ...(errorDetail ? { errorDetail } : {})
         }

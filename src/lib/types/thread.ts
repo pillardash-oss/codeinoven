@@ -2,7 +2,6 @@ import type { BoundScopeRebind, ScopeSlice } from './scope'
 import type { ScopeWorktreeHealthCategory } from './scope-worktree'
 import type { AuthoredWorkKind } from '../ipc/design'
 import type { ThreadSettings } from './agent'
-import { workerReportsToCoordinator } from './agent'
 import type { ThreadContextUsage } from './usage'
 import type { AssistantSchedule } from './schedule'
 import type { RunBaseRecord } from './receipt'
@@ -493,17 +492,17 @@ export function isThreadAwaitingUser(thread: Thread): boolean {
 }
 
 /**
- * Whether a thread participates in read/unread tracking. Every regular thread
- * does. Among orchestration children only a worker whose reporting the user
- * switched off does: a reporting worker hands its finished task back to the
- * Sr. Engineer, so the Assignment lifecycle (reported, auditing, rework) is its
- * indicator and it never carries a read state. Auditors are silent the same
- * way. The coordinator panel chip and the aggregated coordinator row read a
- * non-reporting worker's read state from here.
+ * Whether a thread participates in read/unread tracking.
+ *
+ * Every regular thread does. No orchestration child does: a worker hands its
+ * finished task back to the Sr. Engineer, an auditor answers the audit cycle, and
+ * a pawn reports into the run that spawned it. Their progress is already carried
+ * by the Assignment, appointment or run that owns them, so none of them ever
+ * holds a read state, and a finished worker can never raise an unread dot on the
+ * coordinator row or the rail.
  */
 export function threadTracksReadStatus(thread: Thread): boolean {
-  if (!isOrchestrationChildThread(thread)) return true
-  return thread.assignmentRole === 'worker' && !workerReportsToCoordinator(thread.settings)
+  return !isOrchestrationChildThread(thread)
 }
 
 /**

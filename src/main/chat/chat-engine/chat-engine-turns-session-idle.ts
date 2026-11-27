@@ -9,7 +9,12 @@ import type {
   EngineeringSpec,
   ThreadSettings
 } from '../../../lib/types'
-import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID, isAssistantThread } from '../../../lib/types'
+import {
+  ASSISTANT_SPACE_ID,
+  INBOX_PROJECT_ID,
+  isAssistantThread,
+  threadTracksReadStatus
+} from '../../../lib/types'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/ipc/browser'
 import { mermaidRepairPrompt, validateMermaidOutput } from '../mermaid-output-validator'
 import type { MermaidValidationFailure } from '../mermaid-output-validator'
@@ -1170,8 +1175,11 @@ export class ChatEngineTurnsSessionIdle {
         finalStatus
       )
       if (!assignmentDrafting) {
+        // A settled turn is unread unless the user stopped it. An orchestration
+        // child never is: a worker's finish is carried by the Assignment, so it
+        // must not raise an unread dot on the coordinator row or the rail.
         await this.host.threadManager.setStatus(info.projectId, info.threadId, finalStatus, {
-          read: userAborted,
+          read: userAborted || (thread !== null && !threadTracksReadStatus(thread)),
           notify: announcement.notify
         })
         if (announcement.record) {
