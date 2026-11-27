@@ -54,7 +54,10 @@ const SYNC_READ_ALLOWANCES: readonly SyncReadAllowance[] = [
   },
   {
     file: 'src/main/database/repositories/agent-message-repo.ts',
-    maxSites: 14,
+    // The 15th site is `inheritsHistory`: one indexed seek on
+    // `thread_checkpoints` that decides whether a read pays the fork lineage
+    // shape. It replaces a full scan of the messages table on the same path.
+    maxSites: 15,
     reason: REPOSITORY_READ
   },
   {

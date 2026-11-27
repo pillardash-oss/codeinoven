@@ -260,8 +260,12 @@ export class ThreadTranscriptStore {
 
   /** Load every parent-session record, including hidden transport-only prompts. */
   async loadMessageRecords(threadId: string): Promise<AgentMessage[]> {
+    // This runs on every turn (the mirror is merged with the driver's transcript
+    // before a send), so the fork clause is chosen here too: a thread that
+    // inherits nothing must not pay for the lineage read.
+    const inherits = await this.inheritsHistory(threadId)
     const page = await this.pagedAgentMessages(
-      (after) => buildLoadAllPageSql(threadId, after),
+      (after) => buildLoadAllPageSql(threadId, after, inherits),
       true
     )
     if (!page.ok) return this.agentMessageRepo.loadAllByThread(threadId)

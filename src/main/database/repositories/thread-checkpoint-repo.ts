@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Database } from '../database'
+import { MESSAGE_LINEAGE_CTE, MESSAGE_LINEAGE_FROM } from './agent-message-repo'
 import type { ThreadCheckpoint, ThreadCheckpointKind } from '../../../lib/types'
 
 /**
@@ -244,35 +245,21 @@ export class ThreadCheckpointRepo {
    * The last message the closing session saw, for the boundary marker.
    *
    * "Saw" is the transcript the conversation screen shows, which for a fork
-   * includes the inherited rows up to the point it was cut at.
+   * includes the inherited rows up to the point it was cut at. The shape comes
+   * from the shared lineage builder rather than being spelled out here: its
+   * `OR EXISTS` predicate form cost a scan of every message row in the database
+   * to answer one loudest-row question.
    */
   async boundaryViaWorker(
     threadId: string
   ): Promise<{ id: string; createdAt: number } | undefined> {
     const result = await this.db.queryViaWorker(
-      `WITH RECURSIVE lineage(thread_id, boundary_at) AS (
-         SELECT parent_thread_id, boundary_created_at FROM thread_checkpoints
-          WHERE thread_id = ? AND kind = 'fork' AND parent_thread_id IS NOT NULL
-         UNION
-         SELECT c.parent_thread_id,
-                CASE
-                  WHEN l.boundary_at IS NULL THEN c.boundary_created_at
-                  WHEN c.boundary_created_at IS NULL THEN l.boundary_at
-                  ELSE min(l.boundary_at, c.boundary_created_at)
-                END
-           FROM thread_checkpoints c JOIN lineage l ON c.thread_id = l.thread_id
-          WHERE c.kind = 'fork' AND c.parent_thread_id IS NOT NULL
-       )
-       SELECT id, created_at FROM agent_messages
-        WHERE session_id IS NULL
-          AND visibility IN ('conversation', 'working_trace')
-          AND (thread_id = ?
-            OR EXISTS (
-              SELECT 1 FROM lineage l
-               WHERE l.thread_id = agent_messages.thread_id
-                 AND (l.boundary_at IS NULL OR agent_messages.created_at <= l.boundary_at)
-            ))
-        ORDER BY created_at DESC, id DESC LIMIT 1`,
+      `${MESSAGE_LINEAGE_CTE}
+       SELECT agent_messages.id AS id, agent_messages.created_at AS created_at
+       ${MESSAGE_LINEAGE_FROM}
+        AND session_id IS NULL
+        AND visibility IN ('conversation', 'working_trace')
+        ORDER BY agent_messages.created_at DESC, agent_messages.id DESC LIMIT 1`,
       [threadId, threadId],
       1
     )

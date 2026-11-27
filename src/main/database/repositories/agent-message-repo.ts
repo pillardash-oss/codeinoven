@@ -1070,20 +1070,37 @@ export class AgentMessageRepo {
   ): { sql: string; params: string[] } {
     if (inheritsHistory) {
       return {
-        sql: `${MESSAGE_LINEAGE_CTE} SELECT * FROM agent_messages
-           WHERE session_id IS NULL
-             AND ${visibility}
-             AND ${MESSAGE_LINEAGE_ROWS}`,
+        sql: `${MESSAGE_LINEAGE_CTE}
+           SELECT ${MESSAGE_READ_COLUMNS_JOINED} ${MESSAGE_LINEAGE_FROM}
+             AND session_id IS NULL
+             AND ${visibility}`,
         params: [threadId, threadId]
       }
     }
     return {
-      sql: `SELECT * FROM agent_messages
+      sql: `SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages
          WHERE session_id IS NULL
            AND ${visibility}
            AND ${MESSAGE_OWN_ROWS}`,
       params: [threadId]
     }
+  }
+
+  /**
+   * Whether this thread owns a fork checkpoint, i.e. inherits history.
+   *
+   * One indexed seek on `thread_checkpoints`. Callers pass the answer into the
+   * read builders so a thread that inherits nothing never pays the lineage
+   * shape, which visits every row of the messages table.
+   */
+  inheritsHistory(threadId: string): boolean {
+    const row = this.db.get<{ one: number }>(
+      `SELECT 1 AS one FROM thread_checkpoints
+        WHERE thread_id = ? AND kind = 'fork' AND parent_thread_id IS NOT NULL
+        LIMIT 1`,
+      threadId
+    )
+    return row !== undefined
   }
 
   loadPageByThread(
@@ -1147,27 +1164,20 @@ export class AgentMessageRepo {
   loadPageAroundByThread(threadId: string, anchorId: string, limit: number): ThreadMessagePage {
     const anchor = this.db.get<{ created_at: number }>(
       `${MESSAGE_LINEAGE_CTE}
-       SELECT m.created_at FROM agent_messages m
-        WHERE m.id = ?
-          AND (m.thread_id = ?
-            OR EXISTS (
-              SELECT 1 FROM lineage l
-               WHERE l.thread_id = m.thread_id
-                 AND (l.boundary_at IS NULL OR m.created_at <= l.boundary_at)
-            ))`,
+       SELECT agent_messages.created_at ${MESSAGE_LINEAGE_FROM}
+        AND agent_messages.id = ?`,
       threadId,
-      anchorId,
-      threadId
+      threadId,
+      anchorId
     )
     if (!anchor) return { messages: [], hasOlder: false, hasNewer: false }
 
     const half = Math.max(1, Math.floor(limit / 2))
     const olderRows = this.db.all<AgentMessageRow>(
       `${MESSAGE_LINEAGE_CTE}
-       SELECT * FROM agent_messages
-        WHERE session_id IS NULL
+       SELECT ${MESSAGE_READ_COLUMNS_JOINED} ${MESSAGE_LINEAGE_FROM}
+          AND session_id IS NULL
           AND visibility IN ('conversation', 'working_trace')
-          AND ${MESSAGE_LINEAGE_ROWS}
           AND (created_at < ? OR (created_at = ? AND id < ?))
         ORDER BY created_at DESC, id DESC
         LIMIT ?`,
@@ -1180,10 +1190,9 @@ export class AgentMessageRepo {
     )
     const newerRows = this.db.all<AgentMessageRow>(
       `${MESSAGE_LINEAGE_CTE}
-       SELECT * FROM agent_messages
-        WHERE session_id IS NULL
+       SELECT ${MESSAGE_READ_COLUMNS_JOINED} ${MESSAGE_LINEAGE_FROM}
+          AND session_id IS NULL
           AND visibility IN ('conversation', 'working_trace')
-          AND ${MESSAGE_LINEAGE_ROWS}
           AND (created_at > ? OR (created_at = ? AND id > ?))
         ORDER BY created_at ASC, id ASC
         LIMIT ?`,
@@ -1445,8 +1454,21 @@ function afterCursor(after: ThreadMessageCursor | undefined): string {
  * cut at what its parent showed), so one cutoff — the leaf's — bounds every
  * ancestor.
  *
+ * `scope` is the read's driving table: the leaf itself (no cutoff) plus one row
+ * per ancestor with the cutoff that applies to it. It is deliberately a table
+ * rather than a predicate, because a predicate is what made this read cost a
+ * scan: `thread_id = ? OR EXISTS (...)` cannot be answered from
+ * `idx_agent_messages_thread_timeline`, so SQLite visited every row of a 134k-row,
+ * 850 MB messages table to return one page — measured at 4.1 s for a single
+ * fork page, against 6.7 ms once the ancestor list drives the same read.
+ *
+ * A thread reached by two paths (two fork checkpoints in one chain) appears
+ * twice in `lineage`. `scope` collapses it to one row per thread: an ancestor
+ * with any unbounded path stays unbounded, otherwise the widest cutoff wins,
+ * which is exactly the union of the prefixes those paths describe.
+ *
  * The clause takes the leaf's thread id twice: once for the anchor, once for the
- * branches below it. Non-fork threads pay one indexed probe that returns nothing.
+ * scope. Non-fork threads pay one indexed probe that returns nothing.
  */
 export const MESSAGE_LINEAGE_CTE = `WITH RECURSIVE lineage(thread_id, boundary_at) AS (
   SELECT parent_thread_id, boundary_created_at FROM thread_checkpoints
@@ -1460,36 +1482,42 @@ export const MESSAGE_LINEAGE_CTE = `WITH RECURSIVE lineage(thread_id, boundary_a
          END
     FROM thread_checkpoints c JOIN lineage l ON c.thread_id = l.thread_id
    WHERE c.kind = 'fork' AND c.parent_thread_id IS NOT NULL
+), scope(thread_id, boundary_at) AS (
+  SELECT thread_id,
+         CASE WHEN count(*) = count(boundary_at) THEN max(boundary_at) END
+    FROM (SELECT ? AS thread_id, NULL AS boundary_at
+          UNION ALL
+          SELECT thread_id, boundary_at FROM lineage)
+   GROUP BY thread_id
 )`
 
 /**
  * One thread's own rows, for a thread that inherits nothing.
  *
  * The lineage clause is the right answer for a fork and the wrong price for
- * everything else. Its `thread_id = ? OR EXISTS (...)` cannot be answered from
- * `idx_agent_messages_thread_timeline`, so SQLite scans a messages table whose
- * rows carry whole tool outputs and sorts what it finds: measured on a real
- * transcript, a tail page took 155 ms that way against 0.5 ms as a plain
- * threaded read. Thirty of those stacked behind one thread open because every
- * open reads several pages, and a page that costs a scan makes the next read
- * wait behind it.
- *
- * A thread only has inherited rows when it owns a fork checkpoint: the clause
- * anchors on the leaf's own row, so a thread without one has an empty lineage
- * no matter how many forks descend from it. `AgentMessageRepo.pageSource`
- * decides between the two shapes with one indexed probe.
+ * everything else. A thread only has inherited rows when it owns a fork
+ * checkpoint: the clause anchors on the leaf's own row, so a thread without one
+ * has an empty lineage no matter how many forks descend from it.
+ * `AgentMessageRepo.pageSource` decides between the two shapes with one indexed
+ * probe on `thread_checkpoints`.
  */
 const MESSAGE_OWN_ROWS = 'thread_id = ?'
 
-/** The predicate that keeps a thread's own rows and the inherited ones. */
-export const MESSAGE_LINEAGE_ROWS = `(
-  thread_id = ?
-  OR EXISTS (
-    SELECT 1 FROM lineage l
-     WHERE l.thread_id = agent_messages.thread_id
-       AND (l.boundary_at IS NULL OR agent_messages.created_at <= l.boundary_at)
-  )
-)`
+/**
+ * The driving side of a lineage read: the leaf and its ancestors, then their rows.
+ *
+ * `CROSS JOIN` is load-bearing, not decoration. It pins `scope` to the outer
+ * loop, so each ancestor's rows come from one range seek on
+ * `idx_agent_messages_thread_timeline`. Without it SQLite is free to drive from
+ * `agent_messages` instead, which is the full-table scan this shape exists to
+ * avoid.
+ *
+ * The messages table is left unaliased on purpose: every builder below writes its
+ * columns unqualified, and `scope` is always the left side of the join.
+ */
+export const MESSAGE_LINEAGE_FROM = `FROM scope s CROSS JOIN agent_messages
+  WHERE agent_messages.thread_id = s.thread_id
+    AND (s.boundary_at IS NULL OR agent_messages.created_at <= s.boundary_at)`
 
 const MESSAGE_READ_COLUMNS = `id, thread_id, session_id, role, origin, visibility, parts,
   content_hash, transport_parts, transport_origin, model_id, provider_id, harness_id,
@@ -1497,6 +1525,17 @@ const MESSAGE_READ_COLUMNS = `id, thread_id, session_id, role, origin, visibilit
   thinking_level, references_json, project_references_json, author, created_at, completed_at, cost,
   tokens_json, normalized_usage_json, rate_limits_json, usage_credits_json, context_window, context_used,
   context_estimated, generation_ms, error, structured_output`
+
+/**
+ * The same projection, qualified to the messages table.
+ *
+ * A lineage read joins `scope`, which carries a `thread_id` of its own, so an
+ * unqualified `thread_id` in the select list is ambiguous. Deriving the
+ * qualified list keeps one list of columns to maintain.
+ */
+const MESSAGE_READ_COLUMNS_JOINED = MESSAGE_READ_COLUMNS.split(',')
+  .map((column) => `agent_messages.${column.trim()}`)
+  .join(', ')
 
 /**
  * SQL for one bounded page of the mirrored conversation (parent-session rows),
@@ -1518,22 +1557,37 @@ export function buildLoadByThreadPageSql(
   }
 }
 
-/** SQL for one bounded page of parent-session records (incl. transport prompts). */
+/** SQL for one bounded page of parent-session records (incl. transport prompts).
+ *
+ * `inheritsHistory` is the same indexed answer `buildLoadPageSql` takes: only a
+ * thread that owns a fork checkpoint reads through the lineage clause. This
+ * builder runs on every turn (the mirror is merged with the driver's transcript
+ * before each send), so paying the lineage read for a thread that inherits
+ * nothing charged every turn in the app for a scan of the whole messages table.
+ */
 export function buildLoadAllPageSql(
   threadId: string,
-  after: ThreadMessageCursor | undefined
+  after: ThreadMessageCursor | undefined,
+  inheritsHistory: boolean
 ): { sql: string; params: unknown[] } {
-  const params: unknown[] = [threadId]
   const cursor = afterCursor(after)
-  if (after) params.push(after.createdAt, after.createdAt, after.id)
+  const cursorParams: unknown[] = after ? [after.createdAt, after.createdAt, after.id] : []
+  if (!inheritsHistory) {
+    return {
+      sql: `SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages
+       WHERE thread_id = ? AND session_id IS NULL${cursor}
+       ORDER BY created_at ASC, id ASC`,
+      params: [threadId, ...cursorParams]
+    }
+  }
   return {
     // The whole transcript of a fork is its own rows plus the inherited ones, so
     // a rebuilt session's recap reads the same conversation the user sees.
     sql: `${MESSAGE_LINEAGE_CTE}
-      SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages
-       WHERE session_id IS NULL AND ${MESSAGE_LINEAGE_ROWS}${cursor}
+      SELECT ${MESSAGE_READ_COLUMNS_JOINED} ${MESSAGE_LINEAGE_FROM}
+        AND session_id IS NULL${cursor}
        ORDER BY created_at ASC, id ASC`,
-    params: [threadId, ...params]
+    params: [threadId, threadId, ...cursorParams]
   }
 }
 
@@ -1665,10 +1719,7 @@ export function buildSaveSubagentStatements(
  * `inheritsHistory` is the caller's indexed answer to "does this thread own a
  * fork checkpoint" (see `AgentMessageRepo.inheritsHistory`). It decides between
  * the lineage shape, which is the only correct read for a fork, and the plain
- * threaded read, which is the only fast one everywhere else: the lineage
- * predicate cannot walk `idx_agent_messages_thread_timeline`, so paying it for an
- * ordinary thread means scanning and sorting the whole messages table to return
- * one page.
+ * threaded read, which is the only fast one everywhere else.
  */
 export function buildLoadPageSql(
   threadId: string,
@@ -1689,10 +1740,9 @@ export function buildLoadPageSql(
   }
   return {
     sql: `${MESSAGE_LINEAGE_CTE}
-      SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages
-       WHERE session_id IS NULL
-         AND visibility IN ('conversation', 'working_trace')
-         AND ${MESSAGE_LINEAGE_ROWS}${cursor}
+      SELECT ${MESSAGE_READ_COLUMNS_JOINED} ${MESSAGE_LINEAGE_FROM}
+         AND session_id IS NULL
+         AND visibility IN ('conversation', 'working_trace')${cursor}
        ORDER BY created_at DESC, id DESC`,
     // The clause names the leaf twice, then the cursor continues the page.
     params: [threadId, threadId, ...cursorParams]

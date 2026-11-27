@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createTestDb, destroyTestDb } from './test-helper'
 import { ProjectRepo } from '../../../src/main/database/repositories/project-repo'
 import { ThreadRepo } from '../../../src/main/database/repositories/thread-repo'
-import { AgentMessageRepo } from '../../../src/main/database/repositories/agent-message-repo'
+import {
+  AgentMessageRepo,
+  buildLoadPageSql
+} from '../../../src/main/database/repositories/agent-message-repo'
 import { ThreadCheckpointRepo } from '../../../src/main/database/repositories/thread-checkpoint-repo'
 import type { Database } from '../../../src/main/database/database'
 import type { AgentMessage } from '../../../src/lib/types'
@@ -18,7 +21,9 @@ import type { AgentMessage } from '../../../src/lib/types'
  * the seconds a reader waited for their conversation.
  *
  * These lock in both halves: an ordinary thread must not pay the clause, and a
- * fork must still see the history it inherits.
+ * fork must still see the history it inherits — served from the same timeline
+ * index, because the ancestor list drives the read instead of a predicate that
+ * no index can answer.
  */
 
 const databases: Database[] = []
@@ -56,7 +61,7 @@ async function createApp(): Promise<{
     updatedAt: 1
   })
   const threads = new ThreadRepo(db)
-  for (const id of ['thread-1', 'thread-2']) {
+  for (const id of ['thread-1', 'thread-2', 'thread-3']) {
     threads.upsert({
       id,
       projectId: 'project-1',
@@ -116,6 +121,66 @@ describe('transcript page shape', () => {
 
     const page = messages.loadPageByThread('thread-2', undefined, 10, true)
     expect(page.messages.map((row) => row.id)).toEqual(['parent-1', 'parent-2', 'fork-1'])
+  })
+
+  it('serves a fork page from the messages timeline index too', async () => {
+    const { messages, checkpoints, db } = await createApp()
+    messages.upsert(message('parent-1', 100, 'user'), 'thread-1')
+    messages.upsert(message('fork-1', 300, 'user'), 'thread-2')
+    checkpoints.create({
+      threadId: 'thread-2',
+      kind: 'fork',
+      harnessId: 'pi',
+      sessionId: 'fork-session',
+      parentThreadId: 'thread-1',
+      boundaryMessageId: 'parent-1',
+      boundaryCreatedAt: 100,
+      createdAt: 300
+    })
+
+    const built = buildLoadPageSql('thread-2', undefined, true)
+    const plan = db.all<{ detail: string }>(`EXPLAIN QUERY PLAN ${built.sql}`, ...built.params)
+    const details = plan.map((row) => row.detail).join(' ')
+    expect(details).toContain('idx_agent_messages_thread_timeline')
+    // The regression this guards: driving the same query from the messages table
+    // instead of from the ancestor list reads every row in the database.
+    expect(details).not.toContain('SCAN agent_messages')
+  })
+
+  it('reads an inherited thread once when two fork paths reach it', async () => {
+    const { messages, checkpoints } = await createApp()
+    messages.upsert(message('parent-1', 100, 'user'), 'thread-1')
+    messages.upsert(message('parent-2', 200, 'assistant'), 'thread-1')
+    messages.upsert(message('grandchild-1', 400, 'user'), 'thread-3')
+    // thread-2 forks thread-1 twice, at 150 and at 200: the two paths make
+    // thread-1 appear twice in the recursive lineage with different cutoffs.
+    for (const boundary of [150, 200]) {
+      checkpoints.create({
+        threadId: 'thread-2',
+        kind: 'fork',
+        harnessId: 'pi',
+        sessionId: `fork-session-${boundary}`,
+        parentThreadId: 'thread-1',
+        boundaryMessageId: boundary === 200 ? 'parent-2' : 'parent-1',
+        boundaryCreatedAt: boundary,
+        createdAt: boundary + 10
+      })
+    }
+    checkpoints.create({
+      threadId: 'thread-3',
+      kind: 'fork',
+      harnessId: 'pi',
+      sessionId: 'grandchild-session',
+      parentThreadId: 'thread-2',
+      boundaryMessageId: 'parent-2',
+      boundaryCreatedAt: 300,
+      createdAt: 400
+    })
+
+    const page = messages.loadPageByThread('thread-3', undefined, 10, true)
+    // The widest cutoff wins and each row appears once: a fork page that lists a
+    // message twice is the duplicate the scope collapse exists to prevent.
+    expect(page.messages.map((row) => row.id)).toEqual(['parent-1', 'parent-2', 'grandchild-1'])
   })
 
   it('orders and pages a cursor the same way with and without the fork clause', async () => {
