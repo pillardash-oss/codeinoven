@@ -318,7 +318,7 @@
         type="button"
         class="flex h-8 items-center gap-1.5 border px-2.5 text-xs hover:bg-elevated disabled:opacity-40"
         disabled={!projectId || busy}
-        title="Create a new env file in {selectedGroup || 'the project root'}"
+        title="Create an env file for this project"
         onclick={() => {
           // The dialog offers the first free name, so a second file can never be
           // created over one that is already there.
@@ -330,7 +330,7 @@
           createFileOpen = true
         }}
       >
-        <CioPlus size={13} /> New file
+        <CioPlus size={13} /> Env file
       </button>
       <button
         type="button"
@@ -421,21 +421,32 @@
               <p class="font-mono text-xs text-foreground">
                 {selectedFile.group || '.'}/{selectedFile.fileName}
               </p>
-              <button
-                type="button"
-                class="flex h-7 items-center border px-2 text-xs text-danger hover:bg-danger/10"
-                disabled={busy}
-                title="Delete this env file and its values"
-                onclick={() => (deleteFileOpen = true)}
-              >
-                Delete file
-              </button>
+              <div class="flex items-center gap-1">
+                <button
+                  type="button"
+                  class="flex h-7 items-center gap-1.5 bg-primary px-2 text-xs font-medium text-on-primary disabled:opacity-40"
+                  disabled={busy}
+                  title="Add a key to this env file"
+                  onclick={() => (keyTarget = { existing: null })}
+                >
+                  <CioPlus size={12} /> Key
+                </button>
+                <button
+                  type="button"
+                  class="flex h-7 items-center border px-2 text-xs text-danger hover:bg-danger/10"
+                  disabled={busy}
+                  title="Delete this env file and its values"
+                  onclick={() => (deleteFileOpen = true)}
+                >
+                  Delete file
+                </button>
+              </div>
             </div>
 
             {#if selectedFile.entries.length === 0}
-              <p class="px-4 py-6 text-xs text-muted">
-                No keys yet. Add one below, or import a plaintext env file to move its values here.
-              </p>
+              <div class="px-4 py-6 text-xs text-muted">
+                No keys yet. Add one, or import a plaintext env file to move its values here.
+              </div>
             {:else}
               <div class="divide-y">
                 {#each selectedFile.entries as entry (entry.name)}
@@ -499,17 +510,6 @@
                 {/each}
               </div>
             {/if}
-            <div class="border-t px-4 py-2.5">
-              <button
-                type="button"
-                class="mx-auto flex h-8 w-full max-w-64 items-center justify-center bg-primary text-xs font-medium text-on-primary disabled:opacity-40"
-                disabled={busy}
-                title="Add a key to {selectedFile.group || '.'}/{selectedFile.fileName}"
-                onclick={() => (keyTarget = { existing: null })}
-              >
-                New Key
-              </button>
-            </div>
             {#if selectedFile.importedFrom}
               <p class="border-t px-4 py-2 text-[0.6875rem] text-dimmed">
                 Imported from <span class="font-mono">{selectedFile.importedFrom}</span>; the
