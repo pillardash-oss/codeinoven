@@ -2,34 +2,6 @@ import { Logger } from '../../system/logger'
 import type { ProjectFingerprint } from '../../git/change-tracking-service'
 import type { ChatEngine } from '../chat-engine'
 
-/**
- * Raised when an audit turn changed the project it was auditing.
- *
- * An audit is a read of the delivered work. A run that edited the tree audited
- * its own patch, so its report describes code nobody delivered, and the worktree
- * the user signed off is gone. The run fails loudly instead of persisting that
- * report, and the paths it touched are named so nothing has to be guessed at.
- */
-export class AuditModifiedWorktreeError extends Error {
-  constructor(readonly paths: readonly string[]) {
-    const shown = paths.slice(0, 12)
-    const more = paths.length > shown.length ? `\n…and ${paths.length - shown.length} more` : ''
-    super(
-      [
-        'The Auditor modified the project it was auditing, so this run is discarded instead of saved.',
-        'An audit may only read the repository: a report from a run that patched the code describes work nobody delivered.',
-        'Files this run changed:',
-        ...shown.map((path) => `- ${path}`),
-        more,
-        'Review those changes, restore what the audit should not have touched, and run the audit again.'
-      ]
-        .filter(Boolean)
-        .join('\n')
-    )
-    this.name = 'AuditModifiedWorktreeError'
-  }
-}
-
 /** A project's stat fingerprint, captured before an audit turn ran. */
 export interface AuditFingerprint {
   projectId: string
@@ -37,15 +9,37 @@ export interface AuditFingerprint {
   fingerprint: ProjectFingerprint
 }
 
+/** How many changed paths an issue line names before it summarizes the rest. */
+const ISSUE_PATH_LIMIT = 12
+
 /**
- * The before/after worktree check that keeps an audit read-only.
+ * The evidence issue that marks a report written by an auditor that changed the
+ * tree it was reading.
  *
- * The prompt tells the auditor not to modify files and the harness sandboxes
- * carry that instruction where the harness supports one, but a harness that
- * ignores the sandbox flag still has a shell. This is the one check that does not
- * depend on the harness behaving: the project's stat fingerprint is taken before
- * the audit's first turn and compared after each turn, and any difference fails
- * the run.
+ * The report is kept, not discarded: the tokens are already spent, and the
+ * findings still describe the code before the auditor's own edits, which is what
+ * the user asked it to judge. What the report cannot claim is that its evidence is
+ * clean, so it is persisted the same way an unverified report is: as a partial
+ * report the studio flags, with this line saying exactly why.
+ */
+export function auditWorktreeIssues(paths: readonly string[]): string[] {
+  if (paths.length === 0) return []
+  const shown = paths.slice(0, ISSUE_PATH_LIMIT)
+  const more = paths.length > shown.length ? ` and ${paths.length - shown.length} more` : ''
+  return [
+    `The Auditor modified ${paths.length} project ${paths.length === 1 ? 'file' : 'files'} while auditing: ${shown.join(', ')}${more}. The report was written before or beside those edits, so treat its evidence as unverified.`
+  ]
+}
+
+/**
+ * The after-the-run worktree check that keeps an audit honest without throwing
+ * its work away.
+ *
+ * The prompt tells the auditor not to modify files and, where a harness supports
+ * one, the turn carries a read-only sandbox. A harness that ignores it still has a
+ * shell, so the project's stat fingerprint is taken before the run and compared
+ * after each turn; whatever changed is reported as an evidence issue on the
+ * report itself rather than killing the run.
  */
 export class ChatEngineAuditWriteGuard {
   constructor(private readonly host: ChatEngine) {}
@@ -64,26 +58,26 @@ export class ChatEngineAuditWriteGuard {
   }
 
   /**
-   * Compare the project against the fingerprint taken before the run and throw
-   * when the auditor touched it.
+   * Project-relative paths the auditor changed since the run started.
+   *
+   * Never throws: a fingerprint that cannot be compared leaves the report
+   * unmarked instead of failing an audit that already ran.
    */
-  async assertUnmodified(captured: AuditFingerprint | null): Promise<void> {
-    if (!captured) return
+  async changedPaths(captured: AuditFingerprint | null): Promise<string[]> {
+    if (!captured) return []
     try {
       const after = await this.host.checkpointManager.fingerprint(
         captured.projectId,
         captured.projectPath
       )
-      const changed = this.host.checkpointManager.diffFingerprints(
+      return this.host.checkpointManager.diffFingerprints(
         captured.projectId,
         captured.fingerprint,
         after
       )
-      if (changed.length === 0) return
-      throw new AuditModifiedWorktreeError([...new Set(changed)].sort())
     } catch (error) {
-      if (error instanceof AuditModifiedWorktreeError) throw error
       Logger.dev('Audit worktree verification failed:', error)
+      return []
     }
   }
 }

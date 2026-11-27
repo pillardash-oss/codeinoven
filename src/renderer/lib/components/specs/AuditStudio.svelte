@@ -852,8 +852,9 @@
         <p class="text-xs font-semibold text-warning">Report generated, evidence incomplete</p>
         <p class="mt-1 text-xs leading-relaxed text-muted">
           Some verification facts in this report could not be matched to executed commands in the
-          auditor transcript. Read the report with that in mind, ask the auditor to validate its
-          facts, or change the auditor model.
+          auditor transcript, or the auditor changed the project while it was auditing. Read the
+          report with that in mind, ask the auditor to validate its facts, or change the auditor
+          model.
         </p>
         {#if draft.evidenceIssues?.length}
           <ul class="mt-2 list-disc space-y-1 pl-5 text-xs leading-relaxed text-muted">

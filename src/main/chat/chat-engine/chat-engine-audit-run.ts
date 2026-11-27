@@ -28,6 +28,7 @@ import {
   INDEPENDENT_AUDIT_SYSTEM_PROMPT,
   formatOpenAnnotations
 } from './chat-engine-prompts'
+import { auditWorktreeIssues } from './chat-engine-audit-write-guard'
 import {
   assignmentAuditErrorsUnchanged,
   assignmentAuditRepairPrompt,
@@ -53,6 +54,20 @@ class AuditWithoutToolEvidenceError extends Error {}
 /** ChatEngine audit-run: one concern, moved verbatim from the composition root. */
 export class ChatEngineAuditRun {
   constructor(private readonly host: ChatEngine) {}
+
+  /**
+   * What this run changed in the project, added to the evidence issues the report
+   * already carries. A report is never discarded over it: the studio marks it
+   * unverified exactly as it marks an unmatched verification claim.
+   */
+  private async collectWorktreeIssues(
+    captured: Awaited<ReturnType<ChatEngine['units']['audit-write-guard']['capture']>>,
+    existing: string[]
+  ): Promise<string[]> {
+    const changed = await this.host.units['audit-write-guard'].changedPaths(captured)
+    if (changed.length === 0) return existing
+    return [...new Set([...existing, ...auditWorktreeIssues(changed)])]
+  }
 
   /**
    * True when the user stopped this independent audit run, consuming the
@@ -151,6 +166,9 @@ export class ChatEngineAuditRun {
       content: AuditReportContent
       issues: string[]
     } | null = null
+    /** What this run changed in the worktree, as report evidence issues. The
+     *  report is kept; it is marked unverified instead of being thrown away. */
+    let worktreeIssues: string[] = []
     // A previous failed run leaves the auditor's durable session intact, so
     // the next run continues from where it stopped instead of re-auditing
     // the whole thread from scratch.
@@ -286,11 +304,10 @@ export class ChatEngineAuditRun {
             .filter(Boolean)
             .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
-          readOnly: true,
           userMessageId: messageId
         })
         const streamed = await completion
-        await this.host.units['audit-write-guard'].assertUnmodified(worktreeBefore)
+        worktreeIssues = await this.collectWorktreeIssues(worktreeBefore, worktreeIssues)
         let content: AuditReportContent
         if (streamed !== undefined) {
           content = validateAuditReportContent(streamed, { requireVerification: true })
@@ -380,6 +397,9 @@ export class ChatEngineAuditRun {
           independent: true,
           content,
           outcome: auditRequiresRework(content) ? 'rework_required' : 'passed',
+          ...(worktreeIssues.length > 0
+            ? { evidenceValidation: 'partial' as const, evidenceIssues: worktreeIssues }
+            : {}),
           provenance: {
             source: 'agent',
             actor: 'auditor',
@@ -493,7 +513,7 @@ export class ChatEngineAuditRun {
         content: partialCandidate.content,
         outcome: auditRequiresRework(partialCandidate.content) ? 'rework_required' : 'passed',
         evidenceValidation: 'partial',
-        evidenceIssues: partialCandidate.issues,
+        evidenceIssues: [...partialCandidate.issues, ...worktreeIssues],
         provenance: {
           source: 'agent',
           actor: 'auditor',
@@ -656,6 +676,8 @@ export class ChatEngineAuditRun {
       content: AuditReportContent
       issues: string[]
     } | null = null
+    /** Worktree changes made by this run, carried as report evidence issues. */
+    let worktreeIssues: string[] = []
     const auditStartedAt =
       resumingAudit && assignment.auditCycle?.startedAt !== undefined
         ? assignment.auditCycle.startedAt
@@ -881,11 +903,10 @@ export class ChatEngineAuditRun {
           // allowlist never opens file-mutating tools, even when the gateway
           // runtime is prepared (previously this branch was unrestricted).
           allowedTools: AUDIT_ALLOWED_TOOLS,
-          readOnly: true,
           userMessageId: messageId
         })
         const streamed = await completion
-        await this.host.units['audit-write-guard'].assertUnmodified(worktreeBefore)
+        worktreeIssues = await this.collectWorktreeIssues(worktreeBefore, worktreeIssues)
         if (this.host.state.stoppedAssignmentAuditRuns.has(auditRunKey)) {
           throw new Error('Assignment audit stopped by user')
         }
@@ -996,7 +1017,10 @@ export class ChatEngineAuditRun {
           assignment,
           content,
           auditorThread,
-          auditorSettings
+          auditorSettings,
+          ...(worktreeIssues.length > 0
+            ? { evidenceValidation: 'partial' as const, evidenceIssues: worktreeIssues }
+            : {})
         })
       } catch (error) {
         terminalFailure =
@@ -1044,7 +1068,7 @@ export class ChatEngineAuditRun {
         auditorThread,
         auditorSettings,
         evidenceValidation: 'partial',
-        evidenceIssues: partialCandidate.issues
+        evidenceIssues: [...partialCandidate.issues, ...worktreeIssues]
       })
       Logger.error('Assignment audit persisted with unvalidated evidence', {
         projectId,
@@ -1127,6 +1151,8 @@ export class ChatEngineAuditRun {
       `Open annotations on the implementation contract:\n${formatOpenAnnotations(spec?.annotations ?? brainstorm?.annotations ?? [])}`
     ].join('\n\n')
     let lastError: Error | null = null
+    /** Worktree changes made by this run, carried as report evidence issues. */
+    let worktreeIssues: string[] = []
 
     await this.host.threadManager.setAuditState(projectId, coordinatorThreadId, 'running')
     await this.host.threadManager.setStatus(projectId, coordinatorThreadId, 'executing', {
@@ -1199,11 +1225,10 @@ export class ChatEngineAuditRun {
             .filter(Boolean)
             .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
-          readOnly: true,
           userMessageId: messageId
         })
         const streamed = await completion
-        await this.host.units['audit-write-guard'].assertUnmodified(worktreeBefore)
+        worktreeIssues = await this.collectWorktreeIssues(worktreeBefore, worktreeIssues)
         let content: AuditReportContent
         if (streamed !== undefined) {
           content = validateAuditReportContent(streamed)
@@ -1231,6 +1256,9 @@ export class ChatEngineAuditRun {
           brainstormVersion: brainstorm?.version,
           content,
           outcome: auditRequiresRework(content) ? 'rework_required' : 'passed',
+          ...(worktreeIssues.length > 0
+            ? { evidenceValidation: 'partial' as const, evidenceIssues: worktreeIssues }
+            : {}),
           provenance: {
             source: 'agent',
             actor: 'auditor',
@@ -1352,6 +1380,8 @@ export class ChatEngineAuditRun {
         ].join('\n')
     const auditSubject = spec?.content.resolutionSummary ?? (goal || 'the goal of this thread')
     let lastError: Error | null = null
+    /** Worktree changes made by this run, carried as report evidence issues. */
+    let worktreeIssues: string[] = []
 
     await this.host.threadManager.setAuditState(projectId, coordinatorThreadId, 'running')
     await this.host.threadManager.setStatus(projectId, coordinatorThreadId, 'executing', {
@@ -1424,11 +1454,10 @@ export class ChatEngineAuditRun {
             .filter(Boolean)
             .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
-          readOnly: true,
           userMessageId: messageId
         })
         const streamed = await completion
-        await this.host.units['audit-write-guard'].assertUnmodified(worktreeBefore)
+        worktreeIssues = await this.collectWorktreeIssues(worktreeBefore, worktreeIssues)
         let content: AuditReportContent
         if (streamed !== undefined) {
           try {
@@ -1465,6 +1494,9 @@ export class ChatEngineAuditRun {
           ...(spec ? { specId: spec.id, specVersion: spec.version } : {}),
           content,
           outcome: auditRequiresRework(content) ? 'rework_required' : 'passed',
+          ...(worktreeIssues.length > 0
+            ? { evidenceValidation: 'partial' as const, evidenceIssues: worktreeIssues }
+            : {}),
           provenance: {
             source: 'agent',
             actor: 'auditor',
