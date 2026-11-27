@@ -54,6 +54,58 @@ function executor(): ProviderDeltaSyncExecutor {
   }
 }
 
+/**
+ * Windows refuses a delete or a rename while any other process still holds the
+ * path open: an antivirus scan of the freshly written temp file, the search
+ * indexer, or a handle the kernel has not reaped yet. The restore swap runs in
+ * a synchronous worker function, so the backoff is a bounded busy wait rather
+ * than a timer, and every other error is rethrown immediately.
+ */
+const WINDOWS_LOCK_CODES = new Set(['EPERM', 'EBUSY', 'EACCES'])
+
+/** Total attempts (the first try plus four retries). */
+const LOCK_RETRY_MAX_ATTEMPTS = 5
+
+/** First backoff step; the bound is 20+40+60+80 = 200 ms of waiting. */
+const LOCK_RETRY_STEP_MS = 20
+
+function isWindowsLockError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    typeof error.code === 'string' &&
+    WINDOWS_LOCK_CODES.has(error.code)
+  )
+}
+
+function sleepSync(ms: number): void {
+  // `Atomics.wait` is the synchronous sleep available in a worker thread, so the
+  // bounded backoff costs no CPU while it waits.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+function withLockRetry(action: () => void): void {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      action()
+      return
+    } catch (error) {
+      if (!isWindowsLockError(error) || attempt >= LOCK_RETRY_MAX_ATTEMPTS) throw error
+      sleepSync(LOCK_RETRY_STEP_MS * attempt)
+    }
+  }
+}
+
+/** Delete a path with the bounded Windows-lock backoff; a missing path is fine. */
+function removeWithRetry(path: string): void {
+  withLockRetry(() => rmSync(path, { force: true }))
+}
+
+/** Rename with the bounded Windows-lock backoff. */
+function renameWithLockRetry(from: string, to: string): void {
+  withLockRetry(() => renameSync(from, to))
+}
+
 const config = (workerData ?? {}) as DatabaseWorkerConfig
 const port = parentPort
 // When this module is evaluated outside a real Worker (e.g. the test runner
@@ -229,17 +281,21 @@ function backup(
   return (async () => {
     try {
       mkdirSync(dirname(targetPath), { recursive: true })
-      rmSync(tmp, { force: true })
+      removeWithRetry(tmp)
       await connection().backup(tmp)
       const checkText = quickCheckOf(tmp)
       if (checkText !== 'ok') {
-        rmSync(tmp, { force: true })
+        removeWithRetry(tmp)
         return { kind: 'backup', ok: false, error: `backup failed quick_check: ${checkText}` }
       }
-      renameSync(tmp, targetPath)
+      renameWithLockRetry(tmp, targetPath)
       return { kind: 'backup', ok: true, path: targetPath, sizeBytes: fileSizeBytes(targetPath) }
     } catch (error) {
-      rmSync(tmp, { force: true })
+      try {
+        removeWithRetry(tmp)
+      } catch {
+        // The temp copy is disposable; a locked one must not mask the real error.
+      }
       return { kind: 'backup', ok: false, error: String(error) }
     }
   })()
@@ -271,7 +327,7 @@ function restore(
         }
       }
       // 2. Stream the source into the live path atomically via a temp file.
-      rmSync(tmp, { force: true })
+      removeWithRetry(tmp)
       const source = new DatabaseConstructor(request.sourcePath, { readonly: true })
       try {
         await source.backup(tmp)
@@ -281,7 +337,7 @@ function restore(
       // 3. Verify the restored copy before promoting it.
       const restoredText = quickCheckOf(tmp)
       if (restoredText !== 'ok') {
-        rmSync(tmp, { force: true })
+        removeWithRetry(tmp)
         return {
           kind: 'restore',
           ok: false,
@@ -301,12 +357,18 @@ function restore(
         }
         db = null
       }
-      rmSync(`${livePath}-wal`, { force: true })
-      rmSync(`${livePath}-shm`, { force: true })
-      renameSync(tmp, livePath)
+      // Windows releases those handles asynchronously, so a momentarily locked
+      // sidecar or live file retries before the swap is declared an io failure.
+      removeWithRetry(`${livePath}-wal`)
+      removeWithRetry(`${livePath}-shm`)
+      renameWithLockRetry(tmp, livePath)
       return { kind: 'restore', ok: true, integrityText: restoredText }
     } catch (error) {
-      rmSync(tmp, { force: true })
+      try {
+        removeWithRetry(tmp)
+      } catch {
+        // The temp copy is disposable; a locked one must not mask the real error.
+      }
       return { kind: 'restore', ok: false, reason: 'io', error: String(error) }
     }
   })()
@@ -403,12 +465,12 @@ function recoverTo(
 ): DatabaseWorkerResult {
   const tmp = `${request.targetPath}.tmp`
   try {
-    rmSync(tmp, { force: true })
+    removeWithRetry(tmp)
     // VACUUM INTO rebuilds a clean, compacted copy when the source is readable.
     connection().exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`)
     const checkText = quickCheckOf(tmp)
     if (checkText !== 'ok') {
-      rmSync(tmp, { force: true })
+      removeWithRetry(tmp)
       return {
         kind: 'recover-to',
         ok: false,
@@ -416,10 +478,14 @@ function recoverTo(
         error: `recovered quick_check: ${checkText}`
       }
     }
-    renameSync(tmp, request.targetPath)
+    renameWithLockRetry(tmp, request.targetPath)
     return { kind: 'recover-to', ok: true, path: request.targetPath, integrityText: checkText }
   } catch (error) {
-    rmSync(tmp, { force: true })
+    try {
+      removeWithRetry(tmp)
+    } catch {
+      // The temp copy is disposable; a locked one must not mask the real error.
+    }
     return { kind: 'recover-to', ok: false, reason: 'unrecoverable', error: String(error) }
   }
 }
@@ -677,12 +743,16 @@ function exportTranscript(
       return { kind: 'export-transcript', ok: false, error: 'no conversation to export' }
     }
     mkdirSync(dirname(request.destinationPath), { recursive: true })
-    rmSync(tmpPath, { force: true })
+    removeWithRetry(tmpPath)
     writeFileSync(tmpPath, result, { encoding: 'utf-8', mode: 0o600 })
-    renameSync(tmpPath, request.destinationPath)
+    renameWithLockRetry(tmpPath, request.destinationPath)
     return { kind: 'export-transcript', ok: true, path: request.destinationPath }
   } catch (error) {
-    rmSync(tmpPath, { force: true })
+    try {
+      removeWithRetry(tmpPath)
+    } catch {
+      // The temp copy is disposable; a locked one must not mask the real error.
+    }
     return { kind: 'export-transcript', ok: false, error: String(error) }
   }
 }

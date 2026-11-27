@@ -168,6 +168,10 @@ export class Database {
    * connection on the restored inode:
    *
    * - The primary connection is closed before the swap and reopened afterwards.
+   * - The async read lane is stopped before the swap: its read-only connections
+   *   are separate handles on the same file, and Windows refuses to unlink the
+   *   WAL/SHM sidecars while they are open. On every platform a reader that
+   *   survived the swap would keep serving the pre-restore inode.
    * - The maintenance worker is retained for the whole restore (its handle is
    *   never cleared early); the worker's `restore` op closes its own connection
    *   before the atomic swap, so no handle survives onto the pre-restore file.
@@ -183,6 +187,9 @@ export class Database {
     this.closing = true
     await this.contextCostRepair
     this.contextCostRepair = null
+    // Stop the read lane before anything touches the file. `init()` below starts
+    // it again, so the readers follow the restore onto the new inode.
+    await this.asyncReads.stop()
     // Close the primary connection so it cannot hold the pre-restore inode.
     this.connection.close()
     const result = await this.maintenance.restore(sourcePath)
@@ -193,6 +200,7 @@ export class Database {
       try {
         await this.init()
       } catch (error) {
+        // The lane stays down here: there is no database for a reader to open.
         return {
           ok: false,
           reason: 'io',
@@ -258,6 +266,15 @@ export class Database {
   /** Whether a maintenance worker is running for this connection. */
   hasMaintenanceWorker(): boolean {
     return this.maintenance.isRunning()
+  }
+
+  /**
+   * Whether the async read lane is serving reads. It is down while a restore is
+   * swapping files (its read-only connections hold the WAL/SHM sidecars, which
+   * Windows refuses to unlink) and comes back on the restored file afterwards.
+   */
+  hasReadLane(): boolean {
+    return this.asyncReads.isRunning()
   }
 
   /** Directory the worker uses for atomic backup artifacts. */
