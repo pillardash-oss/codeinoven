@@ -377,6 +377,8 @@
   $effect(() => {
     const thread = workspaceState.selectedThread
     if (!thread || !gitAvailable) {
+      // Releases the target only when no Git surface still holds it: an open Git
+      // panel or pull request sheet is showing that checkout, and it wins.
       gitState.deactivate()
       return
     }

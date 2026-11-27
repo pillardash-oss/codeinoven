@@ -199,6 +199,18 @@ export class GitState {
   activeScopeBucketId: string | null = $state(null)
 
   /**
+   * The claim behind the two fields above, kept plain on purpose.
+   *
+   * `activate` and `deactivate` are both called from effects - the Git panel
+   * claims its checkout, the header releases the target when the selected thread
+   * has no Git context. A `$state` guard would make each of those effects depend
+   * on the very state it writes, so the header's release and the panel's claim
+   * would invalidate each other forever (`effect_update_depth_exceeded`). Only
+   * the guards read this; renders read the reactive mirrors.
+   */
+  claimedTargetKey: string | null = null
+
+  /**
    * Monotonic identity for the currently activated project/scope target.
    * Project ids alone cannot distinguish a fast A -> B -> A switch, so this
    * prevents the second A activation from reusing or accepting A's old work.
@@ -565,6 +577,9 @@ export class GitState {
 
   activate(projectId: string, scopeBucketId?: string): void {
     return this.units['lifecycle'].activate(projectId, scopeBucketId)
+  }
+  holdTarget(projectId: string, scopeBucketId?: string): () => void {
+    return this.units['lifecycle'].holdTarget(projectId, scopeBucketId)
   }
   notifyScopeChanged(projectId: string, scopeBucketId: string): void {
     return this.units['runtime'].notifyScopeChanged(projectId, scopeBucketId)

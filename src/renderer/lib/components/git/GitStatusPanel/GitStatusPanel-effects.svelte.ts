@@ -52,12 +52,20 @@ export class GitStatusPanelEffects extends BoardUnit<GitStatusPanel> {
       // Runs for scope swaps too   the shared git store targets exactly one
       // worktree at a time, so switching threads must retarget it even though
       // this component stays mounted.
-      gitState.activate(this.root.props.projectId, this.root.props.scopeBucketId)
+      //
+      // The hold lasts as long as this panel does: an open Git panel is showing
+      // that checkout, so the header's release (the selected thread having no
+      // Git context of its own) must not clear the data this panel paints.
+      const releaseTarget = gitState.holdTarget(
+        this.root.props.projectId,
+        this.root.props.scopeBucketId
+      )
       // Attaching the panel to a scope is an interaction with it, so re-read the
       // checkout's live state (throttled) for the banner below.
       void scopeState
         .revalidateWorktreeHealth(this.root.props.projectId, this.root.props.scopeBucketId)
         .catch(() => undefined)
+      return releaseTarget
     })
 
     // A Git failure in a scope-backed panel usually means the checkout is gone:

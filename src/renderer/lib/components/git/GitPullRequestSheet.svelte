@@ -823,15 +823,22 @@
   }
 
   onMount(() => {
-    gitState.activate(projectId, scopeBucketId)
+    // Hold the checkout for as long as the sheet is open: it fills its branch
+    // pickers from the shared Git state, and the header releases that target
+    // whenever the selected thread stops having Git context.
+    const releaseTarget = gitState.holdTarget(projectId, scopeBucketId)
     void loadOrigin().then(() => void initializeBranchSelection())
     // Signing in is what re-arms a compare this sheet was refused, and the token
     // it replaces does not change the panel's own connected state, so nothing
     // else would retry it: the form would sit on the sign-in message after the
     // user had already done what it asked.
-    return githubSignIn.onAuthorized(() => {
+    const unsubscribe = githubSignIn.onAuthorized(() => {
       if (loginRequired) void runCompare()
     })
+    return () => {
+      unsubscribe()
+      releaseTarget()
+    }
   })
 </script>
 

@@ -5,21 +5,33 @@ import type { Project, WorkflowRunFilter } from '$shared/types'
 import { INBOX_PROJECT_ID } from '$shared/types'
 import type { GitState } from '../git.svelte'
 
+/** The identity of one Git target: the project plus the scope bucket it is read on. */
+function targetKey(projectId: string, scopeBucketId: string | null): string {
+  return `${projectId}\u0000${scopeBucketId ?? ''}`
+}
+
 /** GitState lifecycle: one concern, moved verbatim from the composition root. */
 export class GitStateLifecycle {
+  /**
+   * Mounted surfaces that hold the target they are showing (the Git panel, the
+   * pull request sheet), with one count per target so two surfaces showing the
+   * same checkout cannot release each other's hold.
+   *
+   * Plain bookkeeping no render reads, hence a Map and not a SvelteMap.
+   */
+  private readonly holds = new Map<string, number>()
+
   constructor(private readonly host: GitState) {}
 
   /** Switch the panel to a project, dropping any leftover state from the
    *  previous one so stale data is never shown. */
   activate(projectId: string, scopeBucketId?: string): void {
     const nextScopeBucketId = ovenRootKey(projectId) ?? scopeBucketId ?? null
-    if (
-      this.host.activeProjectId === projectId &&
-      this.host.activeScopeBucketId === nextScopeBucketId
-    )
-      return
+    const nextKey = targetKey(projectId, nextScopeBucketId)
+    if (this.host.claimedTargetKey === nextKey) return
     this.host.units['runtime'].rememberScopeNotices()
     this.host.activationGeneration += 1
+    this.host.claimedTargetKey = nextKey
     this.host.activeProjectId = projectId
     this.host.activeScopeBucketId = nextScopeBucketId
     this.host.units['storage'].clearProjectState()
@@ -27,11 +39,43 @@ export class GitStateLifecycle {
     this.host.units['runtime'].hydrateFromCache(nextScopeBucketId)
   }
 
-  /** Clear Git state when the active thread has no Git-capable project. */
+  /**
+   * Claim a target for as long as the caller is on screen, and hand back the
+   * release. A docked Git surface keeps the checkout it is showing even while the
+   * selected thread has no Git context of its own, so the header's release below
+   * can never clear the data out from under a panel the user is looking at.
+   */
+  holdTarget(projectId: string, scopeBucketId?: string): () => void {
+    this.activate(projectId, scopeBucketId)
+    const key = targetKey(projectId, ovenRootKey(projectId) ?? scopeBucketId ?? null)
+    this.holds.set(key, (this.holds.get(key) ?? 0) + 1)
+    return () => {
+      const count = this.holds.get(key) ?? 0
+      if (count <= 1) this.holds.delete(key)
+      else this.holds.set(key, count - 1)
+    }
+  }
+
+  /** Whether the target named here is the one currently claimed. */
+  isCurrentTarget(projectId: string, scopeBucketId?: string): boolean {
+    return (
+      this.host.claimedTargetKey ===
+      targetKey(projectId, ovenRootKey(projectId) ?? scopeBucketId ?? null)
+    )
+  }
+
+  /**
+   * Clear Git state when the active thread has no Git-capable project, unless a
+   * mounted surface still holds the claimed checkout - that surface is showing it
+   * and reads the very fields this would wipe.
+   */
   deactivate(): void {
+    const claimed = this.host.claimedTargetKey
+    if (claimed === null) return
+    if (this.holds.has(claimed)) return
     this.host.units['runtime'].rememberScopeNotices()
-    if (this.host.activeProjectId === null) return
     this.host.activationGeneration += 1
+    this.host.claimedTargetKey = null
     this.host.activeProjectId = null
     this.host.units['storage'].clearProjectState()
   }
@@ -46,7 +90,7 @@ export class GitStateLifecycle {
    * time the user opens the panel its Pull and Push counts are already right.
    */
   notifyAppStarted(project: Project | null): void {
-    if (this.host.activeProjectId) return
+    if (this.host.claimedTargetKey) return
     if (!project || project.id === INBOX_PROJECT_ID) return
     if (project.source !== 'local' || project.changeTrackingMode !== 'git') return
     if (!project.path.trim()) return
