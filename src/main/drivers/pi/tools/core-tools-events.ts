@@ -8,6 +8,7 @@
 import {
   CIO_AGENT_OUTPUT_TOOL_NAME,
   CIO_AGENT_STATUS_TOOL_NAME,
+  CIO_COMMIT_RECONCILE_MESSAGE_TYPE,
   CIO_TODO_RECONCILE_MESSAGE_TYPE,
   CIO_TODO_WRITE_TOOL_NAME
 } from '../../../../lib/core-tools'
@@ -34,10 +35,163 @@ export function piCoreToolsEventsSource(): string {
 
   pi.on('tool_execution_end', (event) => {
     if (!event || event.isError) return
+    // A write through a codemode script is the turn's own file change just as
+    // much as a direct one, so it is recorded before the parent check below.
+    if (event.toolName === 'write' || event.toolName === 'edit') {
+      recordCioWrittenPath(event.args && typeof event.args === 'object' ? event.args : {})
+    }
     // A codemode script's inner calls are already covered by the script itself.
     if (event.parentToolCallId) return
-    if (CIO_TODO_WORK_TOOLS.has(event.toolName)) todoWorkSteps += 1
+    if (CIO_TODO_WORK_TOOLS.has(event.toolName)) {
+      todoWorkSteps += 1
+      // A shell command is how many turns change files, so any work step makes
+      // the boundary worth a git read. It costs one read per turn, and the
+      // baseline decides whether the turn is actually responsible for anything.
+      cioTurnWroteFiles = true
+    }
   })
+
+  // Commit guard.
+  //
+  // The rule that work is not finished until it is committed is in the system
+  // prompt of every turn, and turns still ended on "verified" with their own
+  // files sitting in the tree: the last thing the agent did was a check, and
+  // nothing at the boundary said the commit was still ahead of it. A prompt is
+  // advice, so the boundary checks.
+  //
+  // Nothing here blames the user's own uncommitted work on the agent: the dirty
+  // set at the moment the turn began is remembered, and only paths outside it,
+  // or paths this turn wrote through a tool, are ever named. The guard asks once
+  // per turn, so a turn that decides to leave a path deliberately ends normally
+  // after saying so instead of being nudged again.
+  let cioWorkdir = ''
+  let cioTurnBaselineDirty = null
+  let cioTurnWrittenAbs = new Set()
+  let cioTurnWroteFiles = false
+  let cioCommitNudgeSpent = false
+
+  /** Remember a file this turn wrote, so a path that was already dirty is still
+   *  recognised as this turn's own work. */
+  function recordCioWrittenPath(input) {
+    const raw = firstString(input['path'], input['file_path'], input['filePath'], input['filename'])
+    if (!raw) return
+    cioTurnWroteFiles = true
+    try {
+      cioTurnWrittenAbs.add(resolve(cioWorkdir || process.cwd(), raw))
+    } catch (error) {}
+  }
+
+  /** Run one git command and collect its stdout, or null when git cannot answer
+   *  here (not a checkout, git missing, a stderr failure). */
+  function readCioGit(args, cwd) {
+    return new Promise(function (done) {
+      let output = ''
+      let child
+      try {
+        child = spawn('git', ['--no-optional-locks'].concat(args), {
+          cwd: cwd,
+          env: process.env
+        })
+      } catch (error) {
+        done(null)
+        return
+      }
+      child.stdout.on('data', function (chunk) {
+        if (output.length < 400000) output += String(chunk)
+      })
+      child.on('error', function () {
+        done(null)
+      })
+      child.on('close', function (code) {
+        done(code === 0 ? output : null)
+      })
+    })
+  }
+
+  /**
+   * The paths this turn left uncommitted, relative to the repository root.
+   *
+   * An empty list means there is nothing to resolve: the turn committed its
+   * work, wrote no files, or is not running inside a checkout. A turn whose
+   * starting dirtiness could not be read still reports the paths it wrote
+   * itself, because a wrong guess about someone else's work is worse than a
+   * narrower one about its own.
+   */
+  async function cioUncommittedTurnPaths() {
+    if (!cioTurnWroteFiles) return []
+    const workspace = cioWorkdir || Array.from(cioTurnWrittenAbs)[0]
+    if (!workspace) return []
+    const startedAt = isDirectoryPath(workspace) ? workspace : dirnamePath(workspace)
+    const topLevel = await readCioGit(['rev-parse', '--show-toplevel'], startedAt)
+    if (typeof topLevel !== 'string' || !topLevel.trim()) return []
+    const root = topLevel.trim()
+    const status = await readCioGit(['status', '--porcelain', '--untracked-files=all'], root)
+    if (typeof status !== 'string') return []
+    const own = []
+    for (const line of status.split('\\n')) {
+      if (!line.trim() || line.length < 4) continue
+      let target = line.slice(3).trim()
+      const renamed = target.indexOf(' -> ')
+      if (renamed >= 0) target = target.slice(renamed + 4)
+      if (target.length > 1 && target.charAt(0) === '"' && target.charAt(target.length - 1) === '"') {
+        target = target.slice(1, -1)
+      }
+      if (!target) continue
+      let absolute
+      try {
+        absolute = resolve(root, target)
+      } catch (error) {
+        continue
+      }
+      if (cioTurnWrittenAbs.has(absolute)) {
+        own.push(target)
+        continue
+      }
+      if (cioTurnBaselineDirty && cioTurnBaselineDirty.has(target)) continue
+      if (!cioTurnBaselineDirty && !cioTurnWrittenAbs.has(absolute)) continue
+      own.push(target)
+    }
+    return own
+  }
+
+  /**
+   * The instruction that turns an uncommitted turn back into a finished one.
+   *
+   * It names the paths instead of describing the problem, because a model that
+   * was about to settle on "verified" needs the missing step, not a lecture. It
+   * also keeps the one role that must not commit on the right side of the rule
+   * a pawn or worker that reads this is still forbidden to commit, so it names
+   * the paths and is done either way.
+   */
+  function cioCommitPrompt(paths) {
+    return (
+      'Your turn is ending with this turn\\'s own file changes still uncommitted: ' +
+      paths.join(', ') +
+      '. The work is not finished until it is committed, and the app does not commit for you. ' +
+      'Do it now, in this turn: read \`git status\` and \`git diff\` for these paths, stage exactly the paths that belong to this work, commit them with the project\\'s commit convention, then read the commit back with \`git log -1 --stat\`. ' +
+      'Leave paths you did not touch alone: a dirty tree never excuses leaving your own completed work uncommitted and never authorizes \`git add -A\`, \`commit -a\` or a reset. ' +
+      'Finish with one complete answer that stands on its own: restate the outcome, name the commit hash you read back, and list anything you deliberately left uncommitted. Your text replaces the answer you already gave, so it has to carry everything the user needs. ' +
+      'If you are a worker, sub-agent or pawn whose brief forbids committing, do not commit: name every one of these paths in that final answer as uncommitted and say why, because that list is what the agent that owns the commit works from.'
+    )
+  }
+
+  /** Whether a path is a directory, used only to pick a working directory for
+   *  git when the session cwd was never observed. */
+  function isDirectoryPath(candidate) {
+    try {
+      return statSync(candidate).isDirectory()
+    } catch (error) {
+      return false
+    }
+  }
+
+  function dirnamePath(candidate) {
+    try {
+      return dirname(candidate)
+    } catch (error) {
+      return candidate
+    }
+  }
 
   /** Labels of the tasks the list the agent last published still shows unfinished. */
   function unfinishedCioTodos() {
@@ -116,24 +270,44 @@ export function piCoreToolsEventsSource(): string {
   // the list becomes truthful again, and reset by the next user prompt. An
   // aborted turn, a stopped session, and a run still waiting on sub-agents are
   // never continued from here.
-  pi.on('agent_before_settle', (event) => {
+  pi.on('agent_before_settle', async (event) => {
     if (!event || event.outcome !== 'completed') return undefined
     if (applyStopRequest()) return undefined
     if (hasRunningCioSubAgents()) return undefined
     if (event.context && event.context.canContinue === false) return undefined
     const unfinished = unfinishedCioTodos()
-    if (unfinished.length === 0) {
-      todoReconcileSpent = false
+    if (unfinished.length > 0) {
+      if (todoReconcileSpent) return undefined
+      todoReconcileSpent = true
+      return {
+        entries: [
+          {
+            type: 'custom_message',
+            customType: '${CIO_TODO_RECONCILE_MESSAGE_TYPE}',
+            content: cioTodoReconcilePrompt(unfinished),
+            display: false
+          }
+        ],
+        continue: true
+      }
+    }
+    todoReconcileSpent = false
+    // Commit guard: the list is truthful, so the only thing that can still be
+    // open is the work itself. Checked after the list so one boundary handles
+    // one problem, and a stale list never hides an uncommitted change.
+    const ownPaths = await cioUncommittedTurnPaths()
+    if (ownPaths.length === 0) {
+      cioCommitNudgeSpent = false
       return undefined
     }
-    if (todoReconcileSpent) return undefined
-    todoReconcileSpent = true
+    if (cioCommitNudgeSpent) return undefined
+    cioCommitNudgeSpent = true
     return {
       entries: [
         {
           type: 'custom_message',
-          customType: '${CIO_TODO_RECONCILE_MESSAGE_TYPE}',
-          content: cioTodoReconcilePrompt(unfinished),
+          customType: '${CIO_COMMIT_RECONCILE_MESSAGE_TYPE}',
+          content: cioCommitPrompt(ownPaths),
           display: false
         }
       ],
@@ -187,18 +361,37 @@ export function piCoreToolsEventsSource(): string {
     // above, so a run that guard already nudged is never nudged twice, and an
     // aborted run is never defended with a fresh turn.
     if (event && event.aborted) return
-    if (unfinishedTodos.length === 0) {
-      todoReconcileSpent = false
+    if (unfinishedTodos.length > 0) {
+      if (todoReconcileSpent) return
+      if (!pi || typeof pi.sendMessage !== 'function') return
+      todoReconcileSpent = true
+      try {
+        void pi.sendMessage(
+          {
+            customType: '${CIO_TODO_RECONCILE_MESSAGE_TYPE}',
+            content: cioTodoReconcilePrompt(unfinishedTodos),
+            display: false
+          },
+          { triggerTurn: true }
+        )
+      } catch {}
       return
     }
-    if (todoReconcileSpent) return
+    todoReconcileSpent = false
+    // Commit guard (fallback): a runtime whose settle boundary could not
+    // continue must still not let the turn end on verified-but-unlanded work.
+    // Same one-nudge budget as the boundary guard, and an aborted run is never
+    // defended with a fresh turn.
+    if (cioCommitNudgeSpent) return
+    const ownPaths = await cioUncommittedTurnPaths()
+    if (ownPaths.length === 0) return
     if (!pi || typeof pi.sendMessage !== 'function') return
-    todoReconcileSpent = true
+    cioCommitNudgeSpent = true
     try {
       void pi.sendMessage(
         {
-          customType: '${CIO_TODO_RECONCILE_MESSAGE_TYPE}',
-          content: cioTodoReconcilePrompt(unfinishedTodos),
+          customType: '${CIO_COMMIT_RECONCILE_MESSAGE_TYPE}',
+          content: cioCommitPrompt(ownPaths),
           display: false
         },
         { triggerTurn: true }
@@ -212,10 +405,40 @@ export function piCoreToolsEventsSource(): string {
     stopApplied = false
   })
 
+  /**
+   * The dirty paths a turn starts from, relative to the repository root, or null
+   * when the repository cannot be read yet.
+   *
+   * Read before the turn's first tool call, when the session working directory
+   * is not known yet, so a null baseline is the normal answer on a session's
+   * first turn: the commit guard then reports only the paths the turn wrote
+   * itself, which is the narrow answer rather than a wrong one.
+   */
+  async function cioReadBaselineDirty() {
+    if (!cioWorkdir) return null
+    const topLevel = await readCioGit(['rev-parse', '--show-toplevel'], cioWorkdir)
+    if (typeof topLevel !== 'string' || !topLevel.trim()) return null
+    const root = topLevel.trim()
+    const status = await readCioGit(['status', '--porcelain', '--untracked-files=all'], root)
+    if (typeof status !== 'string') return null
+    const dirty = new Set()
+    for (const line of status.split('\\n')) {
+      if (!line.trim() || line.length < 4) continue
+      let target = line.slice(3).trim()
+      const renamed = target.indexOf(' -> ')
+      if (renamed >= 0) target = target.slice(renamed + 4)
+      if (target.length > 1 && target.charAt(0) === '"' && target.charAt(target.length - 1) === '"') {
+        target = target.slice(1, -1)
+      }
+      if (target) dirty.add(target)
+    }
+    return dirty
+  }
+
   // Deliver the CodeInOven-composed instructions as a real system-role field
   // instead of duplicating them inside every user turn's text (see
   // loadCioSystemPrompt above for why).
-  pi.on('before_agent_start', (event) => {
+  pi.on('before_agent_start', async (event) => {
     // A genuine user prompt begins a fresh task-list budget: the previous
     // turn's list is gone from the screen, and a reconciliation nudge may be
     // spent again. Pi 1.2 also fires this hook for custom-message runs; those
@@ -223,6 +446,13 @@ export function piCoreToolsEventsSource(): string {
     if (event.messageType === 'user') {
       latestTodoItems = []
       todoReconcileSpent = false
+      // A fresh turn re-reads what was already dirty before it began, so the
+      // commit guard only ever names work this turn is responsible for. A nudge
+      // is available again, and the write record starts empty.
+      cioCommitNudgeSpent = false
+      cioTurnWroteFiles = false
+      cioTurnWrittenAbs = new Set()
+      cioTurnBaselineDirty = await cioReadBaselineDirty()
     }
     // Pi reports each surface's annotations here, and an MCP server can connect
     // between turns, so the read-only set is refreshed before every turn.
@@ -273,6 +503,9 @@ export function piCoreToolsEventsSource(): string {
   // stays transparent there.
   async function gateToolCall(event, ctx, skipSensitive = false) {
     const input = recordValue(event.input) ?? {}
+    // The session working directory is what the commit guard reads git in, and
+    // every tool call carries it. Taken here because the settle events do not.
+    if (ctx && typeof ctx.cwd === 'string' && ctx.cwd) cioWorkdir = ctx.cwd
     // The OS temp directory is not a place to approve work in: the session has
     // its own scratch folder, so a temp path is refused here, before any card,
     // and no permission mode can turn it into an approved action.

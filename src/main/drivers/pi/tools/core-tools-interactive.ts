@@ -157,12 +157,32 @@ export function piCoreToolsInteractiveSource(questionCap: number): string {
         content: todo.content,
         status: todo.status
       }))
+      // The commit is a step, not a trailing thought, and a run only follows
+      // the list it can see. When this turn has written files and none of its
+      // tasks names the commit, the app adds that task itself and says so, so
+      // the omission is visible in the same place the plan lives. It is added
+      // only while git still reports work this turn left uncommitted: once the
+      // commit exists there is nothing to add, and the item the agent already
+      // has stays the record of it.
+      let addedCommitTask = false
+      if (cioTurnWroteFiles) {
+        const named = todos.some(function (todo) {
+          return /\\bcommit|\\bstage|\\bland/i.test(todo.content)
+        })
+        if (!named && (await cioUncommittedTurnPaths()).length > 0) {
+          todos.push({ id: 'cio-commit-task', content: 'Commit the work', status: 'pending' })
+          addedCommitTask = true
+        }
+      }
       latestTodoItems = todos
       todoWorkSteps = 0
       const active = todos.find((todo) => todo.status === 'in_progress')
       return textResult({
         todos,
-        summary: active ? 'Working on: ' + active.content : 'No task marked in_progress.'
+        summary: active ? 'Working on: ' + active.content : 'No task marked in_progress.',
+        addedTask: addedCommitTask
+          ? 'CodeInOven added the task "Commit the work" to this list because the files this turn changed are still uncommitted. It is the app noticing a step that is still open, not an instruction to change what you were doing: commit those paths, then mark that task completed in your next list so the card matches what you did.'
+          : undefined
       })
     }
   })

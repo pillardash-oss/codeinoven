@@ -32,6 +32,16 @@ export const CIO_SUBAGENT_DONE_MESSAGE_TYPE = 'cio-subagent-done'
  */
 export const CIO_TODO_RECONCILE_MESSAGE_TYPE = 'cio-todo-reconcile'
 /**
+ * Custom-message type of the commit nudge the core-tools extension injects
+ * before a run settles with this turn's own file changes still uncommitted.
+ *
+ * It is deliberately its own type rather than a second task-list reconcile: the
+ * task-list nudge protects the answer the user already read, while the answer to
+ * this nudge is the one that carries the commit hash, so it must reach the user
+ * instead of being dropped as a restatement.
+ */
+export const CIO_COMMIT_RECONCILE_MESSAGE_TYPE = 'cio-commit-reconcile'
+/**
  * `ctx.ui.setStatus` key the core-tools extension uses to stream a live sub-agent
  * (child pi session) event feed to the driver. The payload is a JSON envelope
  * `{ childSessionId, records: [...pi records] }`, and the driver maps each record
