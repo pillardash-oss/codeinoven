@@ -42,7 +42,7 @@
   import ThreadViewComposer from './ThreadView/ThreadViewComposer.svelte'
   import ThreadParentLink from './ThreadParentLink.svelte'
   import { permissionLevelActions } from '$lib/actions'
-  import { perfSpan } from '$lib/perf-trace'
+  import { perfMark, perfSpan } from '$lib/perf-trace'
   import { isRemoteOvenId } from '$shared/ovens'
 
   let {
@@ -128,6 +128,10 @@
   // transcript that takes three hundred read as the same slow click, and there
   // is no way to tell which half to work on.
   const threadIdForTrace = board.handleAgentEvent.thread.id
+  // An instant, so the trace can measure what happened between the click and the
+  // view that answers it: opening a thread settles in a few milliseconds, and the
+  // gap before this mark is the rest of the app reacting to the same selection.
+  perfMark('thread.view.init', { threadId: threadIdForTrace })
   const shellSpan = perfSpan('thread.shell', { threadId: threadIdForTrace })
 
   /**

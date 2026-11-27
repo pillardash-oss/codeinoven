@@ -2,6 +2,7 @@
   import type { ThreadView as ThreadViewBoard } from './ThreadView-board.svelte'
   import type { ComposerShoeData } from '../../chats/ComposerShoe.svelte'
   import type { ActionDefinition } from '$lib/actions'
+  import { perfSpan } from '$lib/perf-trace'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import { fly, slide } from 'svelte/transition'
@@ -61,6 +62,25 @@
     activeActions: ActionDefinition[]
     compactionFold: { readonly folded: boolean }
   } = $props()
+
+  /**
+   * What the composer itself costs to build.
+   *
+   * The composer is most of a thread's shell, and "creating a blank thread is
+   * slow" is about this number: a new thread's pane cannot paint until its
+   * composer exists. Timed from the component's first line to the moment its
+   * root element is in the tree, so the trace can say whether the shell's cost
+   * is the composer or the conversation it sits beside.
+   */
+  const buildSpan = perfSpan('thread.composer')
+
+  /** The composer's root is in the tree: its build is done. */
+  function composerBuilt(): void {
+    buildSpan.end('ok', {
+      threadId: board.handleAgentEvent.thread.id,
+      centered: board.composerScope.centeredComposer
+    })
+  }
 
   /**
    * The thread this conversation was forked from, shown above the composer the
@@ -165,6 +185,7 @@
   class="bottom-chrome relative z-40 {board.composerScope.centeredComposer
     ? 'flex min-h-0 flex-1 flex-col justify-center'
     : 'shrink-0'}"
+  {@attach composerBuilt}
 >
   {#if board.loadOlderMessages.userScrolledAway}
     <!-- Bottom-anchored chrome, so it exists only while the reader is away

@@ -40,6 +40,11 @@ import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { WorkspaceProjectDialogs } from '../WorkspaceProjectDialogs.svelte'
 import type { Workspace } from './Workspace-board.svelte'
 import { BoardUnit } from '$lib/components/board-unit'
+/** Resolve on the next macrotask, after this one's work has had its frame. */
+function nextTask(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 /** One concern of the Workspace board. */
 export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
   constructor(root: Workspace) {
@@ -748,7 +753,10 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
       assistant: assistantId !== undefined,
       scopeBucket: requestedBucketId !== undefined
     })
+    // Marks inside the create span, because the span alone cannot say which of
+    // its stages the click was waiting on. Every one of them runs on the click.
     const optimisticId = this.root.markThreadReadAndApply.newOptimisticThreadId()
+    createSpan.mark('id')
     const optimisticThread = {
       id: optimisticId,
       projectId: project.id,
@@ -775,9 +783,13 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
     const thread = optimisticThread as unknown as typeof optimisticThread & {
       settings: typeof inheritedSettings
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    this.upsertThreadInList(thread as any)
-    createSpan.mark('row')
+    createSpan.mark('thread')
+    // The list is not the click. A new thread reaches the sidebar as a row in a
+    // list of hundreds, and writing it here rebuilds that list's derivations in
+    // the same task that mounts the conversation, so the blank pane the user
+    // asked for waits behind the sidebar row nobody is looking at yet. The row
+    // lands in the task after the pane has had its frame; the conversation is
+    // already open and does not read this list to draw itself.
     threadMessages.seedEmpty(thread.projectId, thread.id)
     createSpan.mark('seed')
     // Sidebar folder expansion is not on the first frame: the composer and the
@@ -799,12 +811,19 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
     // the centered composer head start even if the project holds other threads.
     // Threads created from an existing thread never get the marker.
     if (!activeThread) workspaceState.markThreadFreshFromEmptyState(thread.id)
+    // The click is done when the pane exists, which is now. The span ends here so
+    // it measures the interaction; the paint mark starts here so it measures when
+    // the user could see it. Both used to include the sidebar write below, which
+    // is why neither could say which of them was slow.
     createSpan.end('ok')
-    // When the composer is actually on the glass. A create span that returns in
-    // nine milliseconds and paints two hundred later is the difference between a
-    // handler that is fast and a click that is felt, and only one of those is
-    // worth tuning.
     perfMarkNextPaint('thread.create.paint', { projectId: project.id })
+    // Yield once so the pane built above gets its own frame, then put the row in
+    // the sidebar list. One task, not one interaction: the row appears before a
+    // reader can move their eyes to it, and the click no longer pays for it.
+    await nextTask()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.upsertThreadInList(thread as any)
+    createSpan.mark('row')
     // Persist in background with the same stable id   no ID swap, branch
     // detection runs after the first thread:update broadcast, never blocking typing.
     const persistSpan = perfSpan('thread.create.persist', { projectId: project.id })
