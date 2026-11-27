@@ -21,6 +21,7 @@ import { GitRemoteUnavailableError } from '$lib/ipc-errors'
 import { agentDebug } from '$lib/stores/agent-debug.svelte'
 import { logRendererError } from '$lib/system/renderer-logger'
 import { recordPerfInvoke } from '$lib/perf-trace'
+import { settleBehindThreadOpen, waitsBehindThreadOpen } from '$lib/thread-open-window'
 
 /**
  * Channels whose own cost must never be measured.
@@ -135,6 +136,10 @@ export async function invoke<Channel extends InvokeChannel>(
   // timing only the bridge call would hide it.
   const startedAt = Date.now()
   try {
+    // A panel's read steps back for the thread that was just opened (see
+    // `thread-open-window`). The conversation's own reads never match, so what
+    // the user is waiting for is never behind this.
+    if (waitsBehindThreadOpen(channel)) await settleBehindThreadOpen()
     const result = await invokeUntraced(channel, ...args)
     recordPerfInvoke(channel, startedAt, 'ok')
     return result

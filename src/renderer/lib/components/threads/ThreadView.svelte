@@ -42,6 +42,7 @@
   import ThreadViewComposer from './ThreadView/ThreadViewComposer.svelte'
   import ThreadParentLink from './ThreadParentLink.svelte'
   import { permissionLevelActions } from '$lib/actions'
+  import { tick } from 'svelte'
   import { perfMark, perfSpan } from '$lib/perf-trace'
   import { isRemoteOvenId } from '$shared/ovens'
 
@@ -135,27 +136,38 @@
   const shellSpan = perfSpan('thread.shell', { threadId: threadIdForTrace })
 
   /**
-   * How long the shell may go unpainted before the transcript is built anyway.
+   * Mark a point in this template's own execution.
    *
-   * Two frames is the whole wait in a window the reader can see. A covered
-   * window never runs a frame callback, and its threshold is what keeps an open
-   * there from stalling on a placeholder; nothing is being painted, so there is
-   * no first frame to protect.
+   * Attachments run in the effect phase, after the whole tree is built, so a
+   * span that ends at one cannot say which part of the markup a slow mount spent
+   * its time in: the header, the conversation's placeholder and the composer all
+   * finish at the same instant. Rendered as an expression (it returns nothing),
+   * so the mark costs one call and leaves the DOM untouched.
    */
-  const HIDDEN_HYDRATE_FLOOR_MS = 150
+  function phase(name: string): void {
+    shellSpan.mark(name)
+  }
 
-  /** Mount the transcript in the first task after the shell has had its frame. */
-  function hydrateConversationAfterPaint(threadId: string): Attachment<HTMLElement> {
+  /**
+   * Mount the transcript once the shell is in the DOM.
+   *
+   * `tick()` is the shell's own statement that its state has been applied, and
+   * the task after it is the first moment the conversation can be built without
+   * being part of the flush that painted the shell. No frame callback anywhere in
+   * here: a window that is hidden or covered runs none, and a thread opened in
+   * that window must still get its conversation instead of a placeholder that
+   * waits for a paint.
+   */
+  function hydrateConversationAfterShell(threadId: string): Attachment<HTMLElement> {
     return () => {
+      // The shell's build ends here, at the point its DOM exists.
       shellSpan.end()
-      let settle: ReturnType<typeof setTimeout> | undefined
-      let floor = 0
-      let frame = 0
-      let done = false
-      const hydrate = (): void => {
-        if (done) return
-        done = true
-        clearTimeout(floor)
+      let cancelled = false
+      void (async () => {
+        await tick()
+        if (cancelled) return
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        if (cancelled) return
         const transcriptSpan = perfSpan('thread.transcript', { threadId })
         hydratedThreadId = threadId
         // The transcript is built in the flush this assignment queues, so its
@@ -164,29 +176,9 @@
           transcriptSpan.end()
           onTranscriptReady?.()
         }, 0)
-      }
-      // The shell's own frame comes first, then the build: two frame callbacks
-      // are the browser's statement that the shell has been presented, and the
-      // timer behind them runs after it. A frame callback alone would put the
-      // build into a frame that has not painted yet.
-      if (typeof requestAnimationFrame === 'function') {
-        frame = requestAnimationFrame(() => {
-          frame = requestAnimationFrame(() => {
-            settle = setTimeout(hydrate, 0)
-          })
-        })
-      }
-      // Never depend on frames for correctness. A window that is hidden or
-      // covered runs no frame callbacks at all, so a thread opened there (a
-      // restore, a notification, another window's hand-off) would sit on a
-      // placeholder for as long as it stays covered. This is the floor: whichever
-      // arrives first wins, and there is no paint to protect when it fires.
-      floor = window.setTimeout(hydrate, HIDDEN_HYDRATE_FLOOR_MS)
+      })()
       return () => {
-        done = true
-        if (frame !== 0) cancelAnimationFrame(frame)
-        clearTimeout(settle)
-        clearTimeout(floor)
+        cancelled = true
       }
     }
   }
@@ -1407,6 +1399,7 @@
       parentThreadId={board.currentWorkingTraceAttribution.coordinatorParentId ??
         board.handleAgentEvent.thread.dispatchOrigin?.initiatorThreadId}
     />
+    {phase('top')}
     {#if conversationHydrated}
       <ThreadViewConversation {board} />
     {:else}
@@ -1417,7 +1410,7 @@
           ? 'hidden'
           : ''}"
         aria-hidden="true"
-        {@attach hydrateConversationAfterPaint(board.handleAgentEvent.thread.id)}
+        {@attach hydrateConversationAfterShell(board.handleAgentEvent.thread.id)}
       >
         <div
           class="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6"
@@ -1431,7 +1424,9 @@
          the window edge lives here so the scroll-to-latest button can float at
          the top of the whole stack: straddling an error card when one is shown
          and dropping back to its normal spot above the composer otherwise. -->
+    {phase('composer')}
     <ThreadViewComposer {board} {composerShoe} {activeActions} {compactionFold} />
+    {phase('end')}
   </div>
 </div>
 

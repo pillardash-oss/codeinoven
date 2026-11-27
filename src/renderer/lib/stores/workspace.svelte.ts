@@ -21,6 +21,7 @@ import { preloadThreadConversation } from './thread-preload'
 import { threadMessages } from './thread-messages.svelte'
 import { perfMarkNextPaint, perfSpan } from '$lib/perf-trace'
 import { settleSelectedThreadRead } from './selected-thread-read'
+import { afterShellPaint, beginThreadOpenWindow } from '$lib/thread-open-window'
 import { scopeState } from './scope.svelte'
 import { invoke } from '$lib/ipc.svelte'
 import { prewarmThreadOven } from '$lib/ovens/oven-prewarm'
@@ -282,6 +283,11 @@ class WorkspaceState {
     // guard window so sidebar tools re-attaching around the switch (terminal
     // panels, action terminals) never steal focus back from the composer.
     openComposerFocusWindow()
+    // Every panel that reacts to this selection (git, checkpoints, the design
+    // coordinator, orchestration, processes, citations) now asks for its data
+    // after the conversation that was just opened has had its frame, instead of
+    // in front of it. Opening a thread is one read, not thirty.
+    beginThreadOpenWindow()
     // Start the conversation read in the same tick as the selection, before the
     // conversation view mounts. Every switch path (sidebar click, Ctrl+Tab,
     // notification, restore) then opens against an in-flight load instead of
@@ -315,14 +321,16 @@ class WorkspaceState {
     // A boot restore defers this: the context panel is a secondary surface, and
     // its reads must never share the moment the restored conversation paints.
     const rowThreadId = activeThreadRowId(thread) ?? thread.id
-    if (options.deferContextPanel) {
-      scheduleDeferredWork('workspace:contextPanel', () => {
-        contextSidebarState.activateThread(thread.projectId, thread.id, thread.title, rowThreadId)
-      })
-    } else {
+    // Never on the click. A panel is a surface beside the conversation, and the
+    // conversation is what the user asked to open: activating the dock here
+    // mounted its panel in the same flush as the transcript, so the thread waited
+    // for a panel it may not even show. It lands on the task after the opened
+    // thread's own state is applied, which is also where its own reads start
+    // (`thread-open-window`).
+    afterShellPaint(() => {
       contextSidebarState.activateThread(thread.projectId, thread.id, thread.title, rowThreadId)
-    }
-    mark('contextPanel', { deferred: options.deferContextPanel === true })
+    })
+    mark('contextPanel', { deferred: true })
     rendererRecovery.setSelectedThread(thread.projectId, thread.id)
     // Opening a thread re-anchors the project's active scope (file manager,
     // terminal, and action roots follow the thread's scope bucket).

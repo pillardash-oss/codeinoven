@@ -1,5 +1,6 @@
 <script lang="ts">
   import { SvelteMap } from 'svelte/reactivity'
+  import { tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import ThreadView from '$lib/components/threads/ThreadView.svelte'
   import WelcomeStart from './WelcomeStart.svelte'
@@ -159,27 +160,36 @@
     if (awaiting !== null) liftCoverWhenReady(awaiting)
   }
 
-  /** Paint a cached screen, mount the live view after that paint, then lift it. */
+  /**
+   * Paint a cached screen, then mount the live view underneath it.
+   *
+   * The picture is in the pane synchronously, so the switch has something on the
+   * glass immediately. The live view is built on the task after the tick that put
+   * the picture there, which is what `tick()` is for: it says the state changes
+   * are applied, and the task after it cannot be part of the flush that painted
+   * the picture. No frame callback: a covered window runs none, and a thread
+   * opened there must still have a live view behind its picture.
+   */
   function paintCachedScreen(cached: ThreadScreenSnapshot): Attachment<HTMLElement> {
     return (host) => {
       mountThreadScreen(host, cached)
-      let frame = requestAnimationFrame(() => {
-        settle = setTimeout(() => {
-          liveMountedOver = cached
-          coverAwaitingLift = cached
-          clearTimeout(liftFallback)
-          liftFallback = window.setTimeout(() => {
-            // Only ever uncover a view that actually mounted: if the live view
-            // never arrived (a covered window runs no frames), the picture is
-            // still better than an empty pane.
-            if (liveMountedOver === cached) liftCoverWhenReady(cached)
-          }, LIFT_FALLBACK_MS)
-        }, 0)
-      })
-      let settle: ReturnType<typeof setTimeout> | undefined
+      let cancelled = false
+      void (async () => {
+        await tick()
+        if (cancelled) return
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        if (cancelled) return
+        liveMountedOver = cached
+        coverAwaitingLift = cached
+        clearTimeout(liftFallback)
+        liftFallback = window.setTimeout(() => {
+          // Only ever uncover a view that actually mounted: if the live view never
+          // arrived, the picture is still better than an empty pane.
+          if (liveMountedOver === cached) liftCoverWhenReady(cached)
+        }, LIFT_FALLBACK_MS)
+      })()
       return () => {
-        cancelAnimationFrame(frame)
-        clearTimeout(settle)
+        cancelled = true
         clearTimeout(liftFallback)
         coverAwaitingLift = null
       }
