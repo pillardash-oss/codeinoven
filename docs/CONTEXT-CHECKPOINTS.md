@@ -44,15 +44,6 @@ when a decision needs it.
 | Fork records lineage and copies no rows                                       | **Landed** |
 | Old rows reindexed to the narrowed corpus (schema v15)                        | **Landed** |
 
------------------------------------------------------------------------------ | ----------- |
-| `formatHistoryBrief` — the short recap | **Landed** |
-| Fork notice naming the parent thread id | **Landed** |
-| `read_messages` paging (`before_id` / `nextBeforeId`) and tool evidence | **Landed** |
-| Indexes carry the conversation's words only (no tools, reasoning, sub-agents) | **Landed** |
-| Checkpoint-scoped reads, page-level budget, checkpoints in the brief | **Agreed** |
-| App-owned context checkpoints replacing harness compaction | **Planned** |
-| Fork stops copying rows, lineage row instead | **Planned** |
-
 ---
 
 ## 2. What a rebuilt session receives
@@ -412,3 +403,32 @@ has to keep.
 Two things stay out on purpose: tool evidence never enters the FTS or embedding
 indexes (search stays the thing a person would recognise), and a checkpoint never
 summarizes the conversation it closes — the rows stay in the mirror.
+
+---
+
+## 9. What no checkpoint records
+
+A checkpoint names a boundary, never a position inside a turn. `thread_checkpoints`
+says where a session ended; `turn_checkpoints` says which files a turn changed.
+Neither says "the auditor was at check 7 of 12", and nothing else does either.
+
+That gap is deliberate enough to state, because resume is often described as if it
+closed it. When a process dies mid-turn, what survives is whatever had already
+streamed:
+
+- the durable stream log, folded back into the mirror on recovery
+  (`persistStreamedTurnWork`), including the tool calls the turn had made;
+- the harness session, when it outlived the process or can be reopened;
+- for an audit, the attempt artifacts written **after** each answer
+  (`.cio/specs/<feature>/audit/runs/<runId>/attempt-N.json`,
+  `audit/latest-repair.json`) and the `auditCycle` on the plan;
+- the auditor's own thread id in the resume prompt (`auditEvidencePointer`), so a
+  session that was rebuilt can still read its tool calls back with
+  `read_messages` instead of re-running checks it already did.
+
+So a resumed audit continues from **evidence**, not from a booked step: it knows
+what it inspected, never how far through a plan it was. Writing the second thing
+would mean persisting progress _during_ a turn, which the stream log does not
+carry — it holds message parts and tool calls, not milestones. Nothing is planned
+for it today; this section exists so the difference is not mistaken for a bug when
+a resume asks the agent to work out where it was.
