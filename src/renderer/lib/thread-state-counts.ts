@@ -1,5 +1,4 @@
 import {
-  coordinatorHasActiveDelegates,
   isOrchestrationChildThread,
   threadTracksReadStatus,
   isGroupDispatchedRun,
@@ -7,6 +6,7 @@ import {
 } from '$shared/types'
 import { settledThreadReadsUnread } from '$shared/thread-status-policy'
 import { scopeState } from '$lib/stores/scope.svelte'
+import { delegatesWorking } from '$lib/thread-delegate-activity'
 import { threadWorkingForIndicator } from '$lib/components/layout/app-header-thread-status'
 
 /**
@@ -94,7 +94,7 @@ function markUnreadThread(counts: ThreadStateCounts, threadId: string): void {
 export function threadStateBucket(thread: Thread, now = Date.now()): ThreadStateBucket {
   if (
     threadWorkingForIndicator(thread, now) ||
-    coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
+    delegatesWorking(thread, scopeState.allScopeThreads)
   ) {
     return 'working'
   }

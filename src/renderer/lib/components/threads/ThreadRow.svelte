@@ -22,6 +22,7 @@
     threadHoverPopoverStyle
   } from '$lib/components/shared/thread-hover-popover-layout'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
+  import { threadRowPress } from '$lib/thread-row-press.svelte'
   import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
   import {
     threadUsesEngineeringTooling,
@@ -279,6 +280,18 @@
   function preloadThread(): void {
     if (picker || selected) return
     preloadThreadConversation(thread)
+  }
+
+  /**
+   * Drop the press mark once the click that follows this release has run.
+   *
+   * `pointerup` is dispatched before `click`, and the click is what opens the
+   * thread: clearing on the release itself would unlight the row for the whole
+   * flush the open spends building the conversation, and the row would blink
+   * between the two. A task's delay lands after both.
+   */
+  function settlePressRelease(threadId: string): void {
+    setTimeout(() => threadRowPress.release(threadId), 0)
   }
 
   /** Distinct harnesses used in this thread's session, newest first. */
@@ -820,8 +833,17 @@
    *  and read like every other failed row. Mixed over the selected ground, the
    *  row carries both facts: the state keeps its hue and the selection keeps its
    *  fill. */
+  /**
+   * Whether the row reads as the open thread.
+   *
+   * The press counts too: the pointer going down is the user's own action, and
+   * the row it lands on must light in that frame instead of waiting for the
+   * conversation it opens to be built. See `threadRowPress`.
+   */
+  const lit = $derived(selected || (!picker && threadRowPress.id === thread.id))
+
   let rowTintStyle = $derived.by(() => {
-    const ground = selected ? 'var(--color-selected)' : 'transparent'
+    const ground = lit ? 'var(--color-selected)' : 'transparent'
     if (threadState === 'approval') {
       return `background: color-mix(in srgb, var(--color-warning) 8%, ${ground});`
     }
@@ -1238,11 +1260,9 @@
         </span>
       {/if}
       {#if pickerBadge}
-        <StatusPill
-          ><span class={selected ? 'text-accent' : undefined}>{pickerBadge}</span></StatusPill
-        >
+        <StatusPill><span class={lit ? 'text-accent' : undefined}>{pickerBadge}</span></StatusPill>
       {/if}
-      {#if selected}
+      {#if lit}
         <CioCheck size={13} class="shrink-0 text-primary" />
       {/if}
     </span>
@@ -1341,13 +1361,19 @@
       : 'opacity-0'}"
   ></div>
   <button
-    class="relative flex w-full flex-col text-left transition-colors {rowLayoutClass} {selected
+    class="relative flex w-full flex-col text-left transition-colors {rowLayoutClass} {lit
       ? 'bg-selected ring-1 ring-border-strong ring-inset'
       : 'hover:bg-elevated'}"
     style={rowTintStyle}
     title={displayTitle}
-    aria-current={selected ? 'true' : undefined}
-    onpointerdown={() => preloadThread()}
+    aria-current={lit ? 'true' : undefined}
+    onpointerdown={() => {
+      threadRowPress.press(thread.id)
+      preloadThread()
+    }}
+    onpointerup={() => settlePressRelease(thread.id)}
+    onpointercancel={() => settlePressRelease(thread.id)}
+    onpointerleave={() => settlePressRelease(thread.id)}
     onclick={() => {
       popover.hide()
       onOpen(thread)
