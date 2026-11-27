@@ -1284,6 +1284,21 @@ export class ChatEngineTurns {
             issue,
             event.error
           )
+        } else if (
+          issue.kind === 'unknown' &&
+          this.host.units['turns-dispatch'].isAutomaticRetryWaitActive(event.sessionId)
+        ) {
+          // An errored completion the app could not classify must not tear down
+          // a usage-reset wait another record already established. A harness can
+          // report the same cap twice (a structured limit event, then this plain
+          // text record) and this text is often the one phrasing the app does
+          // not recognise. Tearing the wait down here cleared the state that
+          // swallows the teardown noise which follows, so the non-zero exit
+          // replaced the limit card with a bare "process exited" failure.
+          Logger.dev(
+            'Ignored unclassified errored completion trailing an active usage-reset wait:',
+            event.error
+          )
         } else {
           this.host.sessionStatuses.set(event.sessionId, { state: 'error', issue })
           updateRetryWakeWindow(event.sessionId, null)

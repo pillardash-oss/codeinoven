@@ -223,6 +223,7 @@ export function isUsageLimitNoticeText(text: string): boolean {
     lead.includes('usage limit') ||
     lead.includes('rate limit') ||
     lead.includes('session limit') ||
+    isWindowLimitPhrase(lead) ||
     lead.includes('quota') ||
     lead.includes('too many requests') ||
     lead.includes('limit reached') ||
@@ -273,6 +274,26 @@ export function isScopeRootFailure(message: string): boolean {
 }
 
 /**
+ * Window-scoped usage-cap phrasing, e.g. "weekly limit", "5-hour limit".
+ *
+ * Providers do not agree on what to call a cap. Claude Code names the seven-day
+ * window "You've hit your weekly limit" and its session window "5-hour limit",
+ * and neither sentence contains the words "usage limit" or "session limit".
+ * Without these window adjectives the notice classified as `unknown`, the
+ * completed message carried no issue, and the turn's non-zero exit code became
+ * the failure the user was shown. The window word must sit immediately before
+ * `limit`, so agent prose that mentions a week or an hour next to an unrelated
+ * limit never matches.
+ */
+const WINDOW_LIMIT_PATTERN =
+  /\b(?:(?:five|5)[\s-]?hours?|(?:twenty[\s-]?four|24)[\s-]?hours?|hourly|daily|weekly|monthly|yearly|annual)[\s-]?limit\b/u
+
+/** True when the text names a window-scoped cap ("weekly limit", "5-hour limit"). */
+export function isWindowLimitPhrase(text: string): boolean {
+  return WINDOW_LIMIT_PATTERN.test(text.toLowerCase())
+}
+
+/**
  * Classify a provider/harness failure message and optional HTTP status code into
  * a provider-neutral kind so every driver and the chat engine agree on how the
  * failure is presented (title, retry affordance, raw-error visibility).
@@ -307,6 +328,7 @@ export function classifyProviderIssue(
     normalized.includes('quota') ||
     normalized.includes('usage limit') ||
     normalized.includes('session limit') ||
+    isWindowLimitPhrase(normalized) ||
     normalized.includes('exhausted') ||
     normalized.includes('window exceeded')
   ) {

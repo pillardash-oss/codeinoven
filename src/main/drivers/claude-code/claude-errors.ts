@@ -5,6 +5,7 @@ import type {
 } from '../../../lib/types'
 import {
   classifyProviderIssue,
+  isWindowLimitPhrase,
   parseUsageResetAt,
   presentProviderError
 } from '../../../lib/provider-issue'
@@ -29,12 +30,15 @@ export function claudeSessionLimitIssue(
   error: string | undefined,
   rateLimits: AgentRateLimitWindow[]
 ): AgentProviderIssue | undefined {
-  if (
-    !error ||
-    !/(?:you(?:'|’)ve|you have) hit your session limit|session limit reached/iu.test(error)
-  ) {
-    return undefined
-  }
+  if (!error) return undefined
+  // Claude Code words the same refused turn two ways: "You've hit your session
+  // limit" for the five-hour window and "You've hit your weekly limit" for the
+  // seven-day one. Only the first phrasing was recognised here, so a weekly cap
+  // reached its `result` record with no issue at all and the turn fell through
+  // to the generic process-exit failure.
+  const reachedSessionLimit =
+    /(?:you(?:'|’)ve|you have) hit your session limit|session limit reached/iu.test(error)
+  if (!reachedSessionLimit && !isWindowLimitPhrase(error)) return undefined
   const retryAt =
     rateLimits.find((limit) => limit.resetsAt !== undefined)?.resetsAt ??
     claudeSessionLimitResetAt(error)

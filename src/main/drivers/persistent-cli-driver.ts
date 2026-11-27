@@ -1182,7 +1182,14 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         } else if (event.type === 'session.status') {
           if (event.status.state === 'waiting' || event.status.state === 'error') {
             this.structuredProcessIssues.add(session.id)
-          } else {
+          } else if (event.status.state === 'idle') {
+            // Only a turn that actually ended clears the marker. Every plain
+            // `assistant` record reports `working`, including the record that
+            // carries a usage-cap notice, so clearing on `working` erased the
+            // marker a `rate_limit_event` had just set. The process then exited
+            // non-zero (the CLI's normal ending for a refused turn) and the
+            // generic "Harness process exited with code N" replaced the real
+            // limit in the failure the user was shown.
             this.structuredProcessIssues.delete(session.id)
           }
         }

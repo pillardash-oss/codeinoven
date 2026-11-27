@@ -56,6 +56,23 @@ describe('classifyProviderIssue usage-limit detection', () => {
     expect(classifyProviderIssue('Your quota is exhausted')).toBe('quota')
   })
 
+  it('classifies window-scoped cap wording as quota', () => {
+    // The exact notice Claude Code sent when the reported failure was the
+    // process exit code instead of the weekly cap.
+    expect(classifyProviderIssue("You've hit your weekly limit · resets 6am (Africa/Lagos)")).toBe(
+      'quota'
+    )
+    expect(classifyProviderIssue("You've hit your 5-hour limit")).toBe('quota')
+    expect(classifyProviderIssue('You have hit your five hour limit')).toBe('quota')
+    expect(classifyProviderIssue('five hours limit reached')).toBe('quota')
+    expect(classifyProviderIssue('Your daily limit resets at midnight')).toBe('quota')
+    expect(classifyProviderIssue('monthly_limit_reached')).toBe('quota')
+  })
+
+  it('leaves a window word that does not describe the cap unclassified', () => {
+    expect(classifyProviderIssue('The weekly report shows a limit on imports')).toBe('unknown')
+  })
+
   it('classifies machine-style underscore/hyphen limit strings as quota', () => {
     expect(classifyProviderIssue('usage_limit_exceeded')).toBe('quota')
     expect(classifyProviderIssue('session_limit_reached')).toBe('quota')
@@ -106,6 +123,19 @@ describe('isUsageLimitNoticeText', () => {
 
   it('accepts notices whose lead phrasing sits in a longer opening line', () => {
     expect(isUsageLimitNoticeText("You've reached your usage limit for this window")).toBe(true)
+  })
+
+  it('accepts window-scoped cap notices', () => {
+    expect(isUsageLimitNoticeText("You've hit your weekly limit · resets 6am (Africa/Lagos)")).toBe(
+      true
+    )
+    expect(isUsageLimitNoticeText('5-hour limit reached. Resets in 1hr 53min.')).toBe(true)
+    expect(isUsageLimitNoticeText('You have hit your five hour limit')).toBe(true)
+    expect(isUsageLimitNoticeText('Weekly limit reached. Resets Monday.')).toBe(true)
+  })
+
+  it('rejects a window word that does not describe the cap', () => {
+    expect(isUsageLimitNoticeText('The weekly report explains the import limit')).toBe(false)
   })
 
   it('rejects empty input', () => {

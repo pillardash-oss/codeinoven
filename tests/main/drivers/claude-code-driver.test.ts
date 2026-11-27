@@ -289,6 +289,81 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
     ).toBe(false)
   })
 
+  it('reports the weekly cap, not the exit code, when a refused turn ends non-zero', async () => {
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const driver = new ClaudeCodeDriver(await storage())
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    const sessionId = await driver.createSession('/project', 'Claude thread')
+    await driver.sendPrompt('/project', {
+      sessionId,
+      text: 'Fix it',
+      attachments: [],
+      settings: {
+        harnessId: 'claude-code',
+        providerId: 'anthropic',
+        modelId: '',
+        thinkingLevel: 'low',
+        permissionLevel: 'auto_review'
+      }
+    })
+    const notice = "You've hit your weekly limit · resets 6am (Africa/Lagos)"
+    const records = [
+      '{"type":"rate_limit_event","session_id":"native-1","rate_limit_info":{"status":"rejected","resetsAt":1795842000,"rateLimitType":"seven_day"}}',
+      `{"type":"assistant","session_id":"native-1","message":{"id":"assistant-1","content":[{"type":"text","text":"${notice}"}]}}`,
+      `{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"native-1","result":"${notice}"}`
+    ]
+    child.stdout.emit('data', Buffer.from(`${records.join('\n')}\n`))
+    child.emit('exit', 1, null)
+    await vi.waitFor(() => expect(events.some((event) => event.type === 'session.idle')).toBe(true))
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'message.completed',
+        issue: expect.objectContaining({ kind: 'quota', retryAt: 1_795_842_000_000 })
+      })
+    )
+    expect(
+      events.some(
+        (event) => event.type === 'session.error' && event.error?.includes('process exited')
+      )
+    ).toBe(false)
+  })
+
+  it('keeps the structured limit outcome when a later assistant record reports only "working"', async () => {
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const driver = new ClaudeCodeDriver(await storage())
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    const sessionId = await driver.createSession('/project', 'Claude thread')
+    await driver.sendPrompt('/project', {
+      sessionId,
+      text: 'Fix it',
+      attachments: [],
+      settings: {
+        harnessId: 'claude-code',
+        providerId: 'anthropic',
+        modelId: '',
+        thinkingLevel: 'low',
+        permissionLevel: 'auto_review'
+      }
+    })
+    const records = [
+      '{"type":"rate_limit_event","session_id":"native-1","rate_limit_info":{"status":"rejected","resetsAt":1795842000,"rateLimitType":"seven_day"}}',
+      '{"type":"assistant","session_id":"native-1","message":{"id":"assistant-1","content":[{"type":"text","text":"Partial answer"}]}}',
+      '{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"native-1","result":"Claude Code stopped early"}'
+    ]
+    child.stdout.emit('data', Buffer.from(`${records.join('\n')}\n`))
+    child.emit('exit', 1, null)
+    await vi.waitFor(() => expect(events.some((event) => event.type === 'session.idle')).toBe(true))
+    expect(
+      events.some(
+        (event) => event.type === 'session.error' && event.error?.includes('process exited')
+      )
+    ).toBe(false)
+  })
+
   it('maps Claude Agent delegation and child output into one subagent lifecycle', () => {
     const session: PersistentCliSession = {
       id: 'session-1',
@@ -894,6 +969,65 @@ describe.skipIf(process.platform === 'win32')('mapClaudeCodeRecord rate limits',
     const usage = result?.events?.find((event) => event.type === 'usage.updated')
     const rateLimits = usage && 'rateLimits' in usage ? usage.rateLimits : undefined
     expect(rateLimits?.[0]).toMatchObject({ label: '5-hour limit', usedPercent: 21 })
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('mapClaudeCodeRecord usage-cap notices', () => {
+  const context: CliLineParseContext = {
+    sessionId: 'sess-limit',
+    session: {
+      id: 'sess-limit',
+      title: 'Limit',
+      projectPathHash: 'hash',
+      messages: [
+        {
+          id: 'msg-limit',
+          role: 'assistant',
+          parts: [],
+          createdAt: 1,
+          harnessId: 'claude-code'
+        }
+      ],
+      createdAt: 1,
+      updatedAt: 1
+    }
+  }
+
+  function resultRecord(result: string, rateLimits: Record<string, unknown> = {}) {
+    return mapClaudeCodeRecord(
+      {
+        type: 'result',
+        subtype: 'error_during_execution',
+        is_error: true,
+        session_id: 'native-limit',
+        result,
+        rate_limits: rateLimits
+      },
+      context
+    )
+  }
+
+  function completedIssue(parsed: CliLineParseResult | null) {
+    const completed = parsed?.events?.find((event) => event.type === 'message.completed')
+    return completed?.type === 'message.completed' ? completed.issue : undefined
+  }
+
+  it('classifies the weekly-cap notice with the reset time the harness reported', () => {
+    const issue = completedIssue(
+      resultRecord("You've hit your weekly limit · resets 6am (Africa/Lagos)", {
+        seven_day: { status: 'rejected', resets_at: 1_792_000_000, window_duration_mins: 10_080 }
+      })
+    )
+    expect(issue).toMatchObject({
+      kind: 'quota',
+      retryable: true,
+      retryAt: 1_792_000_000_000
+    })
+  })
+
+  it('classifies the five-hour cap notice as a quota issue', () => {
+    const issue = completedIssue(resultRecord("You've hit your 5-hour limit · resets 3:40pm"))
+    expect(issue).toMatchObject({ kind: 'quota', retryable: true })
   })
 })
 
