@@ -406,29 +406,37 @@ summarizes the conversation it closes — the rows stay in the mirror.
 
 ---
 
-## 9. What no checkpoint records
+## 9. An audit records its own position
 
-A checkpoint names a boundary, never a position inside a turn. `thread_checkpoints`
-says where a session ended; `turn_checkpoints` says which files a turn changed.
-Neither says "the auditor was at check 7 of 12", and nothing else does either.
+A checkpoint names a boundary, never a position inside a turn: `thread_checkpoints`
+says where a session ended, `turn_checkpoints` says which files a turn changed.
+Neither says "the auditor was at check 7 of 12", and for a long time nothing did —
+a turn's tool calls only reach the mirror when its message is finalized, so a
+death mid-turn left the next attempt a session and no position.
 
-That gap is deliberate enough to state, because resume is often described as if it
-closed it. When a process dies mid-turn, what survives is whatever had already
-streamed:
+An audit now writes its own position while it works
+(`chat-engine-audit-progress.ts`). Every settled tool call of an audit turn is
+appended, the moment it completes, to a durable log:
 
-- the durable stream log, folded back into the mirror on recovery
-  (`persistStreamedTurnWork`), including the tool calls the turn had made;
-- the harness session, when it outlived the process or can be reopened;
-- for an audit, the attempt artifacts written **after** each answer
-  (`.cio/specs/<feature>/audit/runs/<runId>/attempt-N.json`,
-  `audit/latest-repair.json`) and the `auditCycle` on the plan;
-- the auditor's own thread id in the resume prompt (`auditEvidencePointer`), so a
-  session that was rebuilt can still read its tool calls back with
-  `read_messages` instead of re-running checks it already did.
+`.cio/specs/<feature>/audit/progress/<auditorThreadId>.jsonl`
 
-So a resumed audit continues from **evidence**, not from a booked step: it knows
-what it inspected, never how far through a plan it was. Writing the second thing
-would mean persisting progress _during_ a turn, which the stream log does not
-carry — it holds message parts and tool calls, not milestones. Nothing is planned
-for it today; this section exists so the difference is not mistaken for a bug when
-a resume asks the agent to work out where it was.
+- One `kind: "run"` header names the run and its kind (`independent` or
+  `assignment`), then one `kind: "step"` line per finished call: action phrase,
+  subject, status, timestamp. A call still running is not a step; the same part is
+  seen again when it settles, and that is the moment recorded.
+- A new run of that auditor replaces the log, so what a resume reads is the run it
+  continues, not a pile of history.
+- The log is written by the same turn-stream funnel that persists working traces
+  (`persistTurnStreamEvent`), so it records for every harness without the auditor
+  having to cooperate.
+- `formatAuditProgressBrief` turns it into prompt text: the steps already done,
+  numbered, with how many the prompt left out, and where the whole log lives. It
+  rides the resume prompt of an independent audit and the continuing prompt of an
+  Assignment audit. `auditEvidencePointer` names the auditor's thread id alongside
+  it, so a session that was rebuilt can still read its tool calls with
+  `read_messages`.
+
+The log is a position, never an authority: validation, the repair manifest and the
+attempt artifacts stay the source of truth about what the audit concluded. What the
+log adds is the one thing none of them carried — which checks had already run when
+the process died.

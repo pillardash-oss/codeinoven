@@ -34,6 +34,7 @@ import {
   auditCorrectionPrompt,
   auditEvidencePointer,
   auditRequiresRework,
+  formatAuditProgressBrief,
   latestAssignmentAuditOutput,
   validateAssignmentAuditExecutionEvidence
 } from './chat-engine-pure'
@@ -163,6 +164,14 @@ export class ChatEngineAuditRun {
      *  identical evidence error with zero new auditor work. */
     let continuationRetries = 0
 
+    /** What the previous run of this audit had already finished. The log is
+     *  written while the auditor works, so a death mid-turn still leaves the
+     *  next attempt a position instead of an empty session. */
+    const previousProgress = await this.host.units['audit-progress']
+      .readRun(projectId, coordinatorThreadId, auditorThread.id)
+      .catch(() => null)
+    const previousProgressBrief = previousProgress ? formatAuditProgressBrief(previousProgress) : ''
+
     /** Continuation prompt for a run that stopped partway: the auditor keeps
      *  its prior session context, so it resumes rather than restarting. The
      *  evidence pointer is what makes that true when the session holds no
@@ -171,6 +180,7 @@ export class ChatEngineAuditRun {
       [
         'Your previous independent audit run stopped partway with an error, and no report was delivered.',
         `Previous failure: ${failure}`,
+        ...(previousProgressBrief ? [previousProgressBrief] : []),
         'Your session still contains the work from that run; continue the audit from where you left off instead of starting over. The transcript below is unchanged and remains the contract. Finish the remaining verification and return exactly one audit-report JSON object with no Markdown fences or commentary.',
         auditEvidencePointer(auditorThread.id),
         '',
@@ -184,6 +194,16 @@ export class ChatEngineAuditRun {
     // lifetime.
     await this.host.threadManager.updateThread(projectId, coordinatorThreadId, {
       independentAuditInitialized: true
+    })
+    // Record this run's position from here on: every settled tool call becomes a
+    // durable step, so an attempt that dies mid-turn leaves its successor the
+    // checks already done. The log replaces the previous run's at this point.
+    await this.host.units['audit-progress'].beginRun({
+      projectId,
+      coordinatorThreadId,
+      threadId: auditorThread.id,
+      runId,
+      auditKind: 'independent'
     })
     for (let attemptIndex = 0; attemptIndex < 3; attemptIndex += 1) {
       if (this.consumeIndependentAuditStop(projectId, coordinatorThreadId, runStartedAt)) {
@@ -442,6 +462,7 @@ export class ChatEngineAuditRun {
         )
       }
     }
+    this.host.units['audit-progress'].endRun(auditorThread.id)
 
     if (stopped) {
       // The auditor session was aborted, but a stop observed between attempts
@@ -598,6 +619,14 @@ export class ChatEngineAuditRun {
       resumingAudit ||
       assignment.auditCycle?.status === 'failed' ||
       auditorThread.status === 'failed'
+    /** What the earlier attempt finished, from the log this unit writes while
+     *  the auditor works. Empty on a first run, and always when the log is gone. */
+    const previousProgress = continuingAudit
+      ? await this.host.units['audit-progress']
+          .readRun(projectId, coordinatorThreadId, auditorThread.id)
+          .catch(() => null)
+      : null
+    const previousProgressBrief = previousProgress ? formatAuditProgressBrief(previousProgress) : ''
     const basePrompt = [
       spec
         ? 'Audit the current project implementation against the approved specification and completed Assignment:'
@@ -609,7 +638,8 @@ export class ChatEngineAuditRun {
       ...(spec
         ? [`Open annotations on the specification:\n${formatOpenAnnotations(spec.annotations)}`]
         : []),
-      ...(continuingAudit ? [auditEvidencePointer(auditorThread.id)] : [])
+      ...(continuingAudit ? [auditEvidencePointer(auditorThread.id)] : []),
+      ...(previousProgressBrief ? [previousProgressBrief] : [])
     ].join('\n\n')
     let terminalFailure: Error
     /** Latest shape-valid attempt content plus its remaining evidence gaps,
@@ -747,6 +777,16 @@ export class ChatEngineAuditRun {
         auditorSettings
       })
     }
+    // From here on this run records its own position: every settled tool call
+    // becomes a durable step. Started after the recovery block, so a recovered
+    // run that needs no turn never wipes the log it just read.
+    await this.host.units['audit-progress'].beginRun({
+      projectId,
+      coordinatorThreadId,
+      threadId: auditorThread.id,
+      runId,
+      auditKind: 'assignment'
+    })
     for (let attemptIndex = 0; ; attemptIndex += 1) {
       if (this.host.state.stoppedAssignmentAuditRuns.has(auditRunKey)) {
         terminalFailure = new Error('Assignment audit stopped by user')
@@ -957,6 +997,7 @@ export class ChatEngineAuditRun {
         )
       }
     }
+    this.host.units['audit-progress'].endRun(auditorThread.id)
 
     const failure = terminalFailure
     const stoppedAssignment = this.host.state.assignmentEngine.getActive(

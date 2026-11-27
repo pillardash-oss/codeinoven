@@ -282,6 +282,39 @@ export interface ResolvedToolCall {
   input: Record<string, unknown>
 }
 
+/** Longest tool-input subject a caller shows before it is cut. */
+export const TOOL_CALL_INPUT_PARAM_CAP = 150
+
+/**
+ * First present, truthy input field a reader can show as the call's subject.
+ *
+ * A recap, a diagnostics page and an audit progress line all describe a call the
+ * same way, so the field order lives here rather than in each reader.
+ */
+export function summarizeToolInput(input: Record<string, unknown>): string {
+  const candidateKeys = [
+    'command',
+    'path',
+    'file_path',
+    'filePath',
+    'pattern',
+    'query',
+    'url',
+    'purpose',
+    'description',
+    'prompt'
+  ]
+  for (const key of candidateKeys) {
+    const value = input[key]
+    if (typeof value === 'string' && value.trim()) {
+      return value.length > TOOL_CALL_INPUT_PARAM_CAP
+        ? `${value.slice(0, TOOL_CALL_INPUT_PARAM_CAP)}…`
+        : value
+    }
+  }
+  return ''
+}
+
 /**
  * The tool a call actually reached.
  *

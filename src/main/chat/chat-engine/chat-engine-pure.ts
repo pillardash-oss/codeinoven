@@ -57,6 +57,12 @@ import type {
   ThreadSettings
 } from '../../../lib/types'
 import { isWorkflowCoordinatorThread } from '../../../lib/types'
+import {
+  patternActionPhrase,
+  resolveToolCall,
+  summarizeToolInput
+} from '../../../lib/tool-action-label'
+import type { AuditProgressStep, AuditProgressSummary } from './chat-engine-types'
 import { instanceEventBus } from '../../system/instance-event-bus'
 import { APP_NAME } from '../../../lib/brand'
 import { truncateToTokenBudget } from '../../../lib/prompt-budget'
@@ -133,6 +139,59 @@ export function auditEvidencePointer(threadId: string): string {
     `Everything this audit already inspected is still in the app database under this auditor's thread id, ${threadId}.`,
     `Read it instead of redoing the work: cio_util_diagnose with action read_messages and thread_id "${threadId}" returns this auditor's conversation, newest page first, with the tool calls each turn made. Pass a page's nextBeforeId as before_id to walk older pages back to the beginning.`
   ].join(' ')
+}
+
+/** Longest subject a recorded step keeps, so one shell dump cannot bloat the log. */
+const AUDIT_PROGRESS_SUBJECT_CAP = 200
+
+/** Steps a resume prompt lists; the log itself keeps every recorded step. */
+const AUDIT_PROGRESS_PROMPT_STEPS = 60
+
+/**
+ * One finished tool call as a progress step, or null while it is still running.
+ *
+ * Recording only settled calls is what makes the log a position rather than a
+ * stream: every line is work the auditor actually completed.
+ */
+export function auditProgressStep(
+  part: Extract<AgentPart, { type: 'tool' }>,
+  at: number
+): AuditProgressStep | null {
+  const status = part.state.status
+  if (status !== 'completed' && status !== 'error' && status !== 'aborted') return null
+  const call = resolveToolCall(part.tool, part.state.input ?? {})
+  const action = patternActionPhrase(call.tool) ?? call.tool
+  return {
+    kind: 'step',
+    at,
+    tool: part.tool,
+    action,
+    subject: summarizeToolInput(call.input).slice(0, AUDIT_PROGRESS_SUBJECT_CAP),
+    status
+  }
+}
+
+/**
+ * The steps a resumed audit has already taken, as prompt text.
+ *
+ * The audit continues from evidence, not from a booking, so this is the one
+ * place that turns the durable progress log into "you already did this".
+ */
+export function formatAuditProgressBrief(summary: AuditProgressSummary): string {
+  const total = summary.steps.length
+  if (total === 0) return ''
+  const shown = summary.steps.slice(-AUDIT_PROGRESS_PROMPT_STEPS)
+  const omitted = total - shown.length
+  const firstNumber = omitted + 1
+  return [
+    `Your earlier run of this audit recorded ${total} finished ${total === 1 ? 'step' : 'steps'} before it stopped, in ${summary.artifactPath}.`,
+    ...(omitted > 0 ? [`The ${omitted} earliest are left out here; the file holds them all.`] : []),
+    ...[...shown].map((step, index) => {
+      const subject = step.subject ? `: ${step.subject}` : ''
+      return `${firstNumber + index}. [${step.status}] ${step.action}${subject}`
+    }),
+    `Continue from step ${total + 1}; do not run these again unless a finding still needs evidence they did not produce.`
+  ].join('\n')
 }
 
 export function auditCorrectionPrompt(error: Error | null): string {

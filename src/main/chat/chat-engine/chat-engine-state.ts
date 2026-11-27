@@ -64,6 +64,7 @@ import { GeneratedArtifactService } from '../generated-artifact-service'
 import { GenerationClock } from '../../../lib/usage-rate'
 import type {
   ActiveAssignmentDraftSession,
+  ActiveAuditProgressRun,
   ActiveBrainstormConversationTurn,
   ActiveBrainstormSession,
   ActiveInitialSpecSession,
@@ -338,6 +339,13 @@ export class ChatEngineState {
 
   /** Sessions owned by stopped Assignments stay quarantined until an explicit Resume. */
   stoppedAssignmentSessions = new Set<string>()
+
+  /**
+   * Audit runs currently recording their own progress, keyed by auditor thread.
+   * The entry exists only while an audit turn runs; the durable record is the
+   * JSONL log the unit appends to, which outlives a crash.
+   */
+  readonly auditProgressRuns = new Map<string, ActiveAuditProgressRun>()
 
   /** Consecutive no-op coordinator continuations per Assignment (stall guard). */
   assignmentContinuationStalls = new Map<string, number>()

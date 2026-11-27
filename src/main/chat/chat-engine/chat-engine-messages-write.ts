@@ -210,6 +210,10 @@ export class ChatEngineMessagesWrite {
     owner: SessionInfo,
     event: Extract<AgentEvent, { type: 'message.part.updated' | 'message.part.delta' }>
   ): Promise<void> {
+    // An audit records its own position while it works: each settled tool call
+    // becomes a durable step, so a run that dies mid-turn leaves the next
+    // attempt the list of checks already done. No-op for every other thread.
+    void this.host.units['audit-progress'].observe(owner.threadId, event)
     const streamPath = turnStreamPath(owner.projectId, owner.threadId)
     // A deleted thread's append is a no-op: the deletion removed the file, and a
     // late write would recreate the directory it just freed.
