@@ -231,4 +231,41 @@ describe('task manager modal', () => {
     expect(searchToggle?.hasAttribute('data-modal-primary')).toBe(true)
     expect(pauseToggle?.hasAttribute('data-modal-primary')).toBe(false)
   })
+
+  it('shows the total use of every renderer surface beside the live count', async () => {
+    const withSurfaces: TaskManagerSnapshot = {
+      ...SNAPSHOT,
+      surfaces: [
+        {
+          pid: 11_001,
+          kind: 'window',
+          title: 'CodeInOven',
+          url: 'file:///app/index.html',
+          cpuPercent: 9.5,
+          memoryBytes: 200 * 1024 * 1024
+        },
+        {
+          pid: 11_002,
+          kind: 'tab',
+          title: 'Svelte docs',
+          url: 'https://svelte.dev/docs',
+          cpuPercent: 3,
+          memoryBytes: 100 * 1024 * 1024
+        }
+      ]
+    }
+    bridge.invoke.mockImplementation((channel: string) => {
+      if (channel === 'taskManager:list') return Promise.resolve(withSurfaces)
+      if (channel === 'project:list') return Promise.resolve([])
+      return Promise.resolve(null)
+    })
+    render()
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('Svelte docs')
+    })
+    // The header total is the sum across surfaces, not the CPU-sorted first row.
+    expect(document.body.textContent).toContain('12.5%')
+    expect(document.body.textContent).toContain('300 MB')
+    expect(document.body.textContent).toContain('2 live')
+  })
 })

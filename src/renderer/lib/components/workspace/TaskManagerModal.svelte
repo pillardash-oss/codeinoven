@@ -525,6 +525,18 @@
   /** Surfaces arrive sorted by CPU, so the visible slice is already the hot end. */
   const visibleSurfaces = $derived(surfaces.slice(0, SURFACE_ROW_LIMIT))
   const hiddenSurfaceCount = $derived(Math.max(0, surfaces.length - SURFACE_ROW_LIMIT))
+  /** Aggregate use across every renderer surface, not just the visible slice: a
+   *  surface sampling `null` contributes nothing, and an all-unknown total is
+   *  `null` rather than a misleading zero. */
+  const surfaceTotals = $derived.by(() => {
+    let cpuPercent: number | null = null
+    let memoryBytes: number | null = null
+    for (const surface of surfaces) {
+      if (surface.cpuPercent !== null) cpuPercent = (cpuPercent ?? 0) + surface.cpuPercent
+      if (surface.memoryBytes !== null) memoryBytes = (memoryBytes ?? 0) + surface.memoryBytes
+    }
+    return { cpuPercent, memoryBytes }
+  })
 
   async function load(): Promise<void> {
     if (checking) return
@@ -1404,9 +1416,29 @@
             <p class="text-[0.625rem] font-semibold tracking-wide text-muted uppercase">
               Renderer surfaces
             </p>
-            <p class="text-[0.625rem] text-dimmed tabular-nums">
-              {surfaces.length} live
-            </p>
+            <div class="flex items-center gap-3">
+              <span
+                class="inline-flex shrink-0 items-center gap-1 text-[0.625rem] text-dimmed tabular-nums"
+                title="Total CPU used by every renderer surface"
+                aria-label="Total CPU used by every renderer surface"
+              >
+                <CioCpu size={11} aria-hidden="true" />
+                {formatSurfaceCpu(surfaceTotals.cpuPercent)}
+              </span>
+              <span
+                class="inline-flex shrink-0 items-center gap-1 text-[0.625rem] text-dimmed tabular-nums"
+                title="Total memory used by every renderer surface"
+                aria-label="Total memory used by every renderer surface"
+              >
+                <CioDisk size={11} aria-hidden="true" />
+                {surfaceTotals.memoryBytes === null
+                  ? 'n/a'
+                  : formatMemory(surfaceTotals.memoryBytes)}
+              </span>
+              <p class="shrink-0 text-[0.625rem] text-dimmed tabular-nums">
+                {surfaces.length} live
+              </p>
+            </div>
           </div>
           <p class="px-5 pb-1.5 text-[0.625rem] text-dimmed">
             The windows, tabs and webviews drawn by these renderer processes. Read-only: there is
