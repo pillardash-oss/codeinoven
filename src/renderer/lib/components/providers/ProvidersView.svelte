@@ -49,8 +49,6 @@
   import Switch from '../ui/Switch.svelte'
   import BaseUrlProvidersPanel from './BaseUrlProvidersPanel.svelte'
   import HarnessAccountsPanel from './HarnessAccountsPanel.svelte'
-  import AuxiliaryAgentsPanel from './AuxiliaryAgentsPanel.svelte'
-  import TypesafeDecisionsCard from './TypesafeDecisionsCard.svelte'
 
   import OpenCodeV2CatalogPanel from './OpenCodeV2CatalogPanel.svelte'
 
@@ -761,19 +759,6 @@
       <button
         type="button"
         class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
-        'auxiliary'
-          ? 'bg-surface text-foreground'
-          : 'text-muted hover:text-foreground'}"
-        role="tab"
-        aria-selected={activeTab === 'auxiliary'}
-        title="Assign the model each harness uses for background work"
-        onclick={() => (settingsUiState.harnessesTab = 'auxiliary')}
-      >
-        Auxiliary Agents
-      </button>
-      <button
-        type="button"
-        class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
         'custom'
           ? 'bg-surface text-foreground'
           : 'text-muted hover:text-foreground'}"
@@ -1264,11 +1249,6 @@
     {/if}
   {:else if activeTab === 'accounts'}
     <HarnessAccountsPanel providers={providerStore.providers} />
-  {:else if activeTab === 'auxiliary'}
-    <div class="space-y-4">
-      <TypesafeDecisionsCard />
-      <AuxiliaryAgentsPanel />
-    </div>
   {:else}
     <BaseUrlProvidersPanel providers={providerStore.providers} />
   {/if}

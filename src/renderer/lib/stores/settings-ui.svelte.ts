@@ -5,7 +5,7 @@
  * every agent the user connected over the Agent Client Protocol on the other.
  * The remaining tabs are page-wide surfaces and sit to the right.
  */
-export type HarnessesTab = 'native' | 'acp' | 'accounts' | 'auxiliary' | 'custom'
+export type HarnessesTab = 'native' | 'acp' | 'accounts' | 'custom'
 
 /**
  * Shared settings UI state — lets the app header show which settings

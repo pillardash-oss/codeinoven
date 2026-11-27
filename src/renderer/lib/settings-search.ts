@@ -1,4 +1,5 @@
 import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
+import CioCpu from '@pdslng/cio-icon/CioCpu.svelte'
 import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
 import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
 import CioCloud from '@pdslng/cio-icon/CioCloud.svelte'
@@ -203,13 +204,21 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   },
   {
     id: 'harnesses-typesafe',
-    section: 'harnesses',
+    section: 'audits',
     blockId: 'harnesses-typesafe',
-    harnessesTab: 'auxiliary',
     title: 'TypeSafe decisions',
     description: 'The API key CodeInOven uses for TypeSafe judgments, and its connection state.',
     keywords: ['typesafe', 'jev', 'api key', 'credits', 'decision', 'auxiliary'],
     icon: CioSparkles
+  },
+  {
+    id: 'agents-auxiliary',
+    section: 'audits',
+    blockId: 'harnesses-auxiliary',
+    title: 'Auxiliary agents',
+    description: 'The model each harness uses for titles, memory proposals and turn grading.',
+    keywords: ['auxiliary', 'background', 'title', 'memory', 'grading', 'model', 'harness'],
+    icon: CioCpu
   },
   {
     id: 'utilities',
