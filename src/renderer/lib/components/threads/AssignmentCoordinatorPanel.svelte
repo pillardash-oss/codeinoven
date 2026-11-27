@@ -127,19 +127,6 @@
   const auditWorkAvailable = $derived(
     (auditState === 'offered' || auditState === 'failed') && !finalComplete
   )
-  /** Once the run is complete the Assignment button is no longer the call to
-   *  action: the report takes the highlight when there is one. */
-  const reportPrimary = $derived(finalComplete && reportAvailable && onViewReport !== undefined)
-  const assignmentButtonClass = $derived(
-    finalComplete
-      ? 'flex flex-1 items-center justify-center gap-2 border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay'
-      : 'flex flex-1 items-center justify-center gap-2 bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover'
-  )
-  const reportButtonClass = $derived(
-    reportPrimary
-      ? 'flex flex-1 items-center justify-center gap-2 bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover'
-      : 'flex items-center justify-center gap-2 border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay'
-  )
   /** When this run first started working: the earliest task start, or the
    *  sign-off when the Sr. Engineer is already on it. */
   const runStartedAt = $derived.by(() => {
@@ -290,13 +277,12 @@
     <div class="mt-3 flex gap-2">
       <button
         type="button"
-        class={assignmentButtonClass}
+        class="flex flex-1 items-center justify-center gap-2 bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
         title="Open the complete Assignment in Spec Studio"
         onclick={onOpenAssignment}
       >
         {#if finalComplete}
-          <span class="assignment-label-full">View Assignment</span>
-          <span class="assignment-label-short">Assignment</span>
+          View Assignment
         {:else}
           <span class="assignment-label-full">Review Assignment</span>
           <span class="assignment-label-short">Assignment</span>
@@ -340,10 +326,10 @@
           {auditState === 'failed' ? 'Audit Failed' : 'Audit Work'}
         </button>
       {/if}
-      {#if reportAvailable && onViewReport}
+      {#if reportAvailable && !finalComplete && onViewReport}
         <button
           type="button"
-          class={reportButtonClass}
+          class="border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
           title="Open the latest audit report in Audit Studio"
           onclick={onViewReport}
         >
