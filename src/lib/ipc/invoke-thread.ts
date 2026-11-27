@@ -306,7 +306,7 @@ export const invokeThreadContract = {
     [projectId: string, threadId: string, outcome: ThreadSettledOutcome],
     Thread
   >,
-  /** Renderer → main composer draft transitions feeding the turn-grading timers. */
+  /** Renderer → main composer draft transitions: the edge-triggered drafting flag. */
   'thread:draftActivity': {} as Contract<
     [projectId: string, threadId: string, drafting: boolean],
     void

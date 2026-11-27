@@ -316,7 +316,7 @@ export class ChatEngineTurns {
     threadHarnessId: string
     threadId?: string
     projectId?: string
-    /** Explicit working directory; grading runs outside any thread. */
+    /** Explicit working directory; a search summary runs outside any thread. */
     projectPath?: string
   }): Promise<AuxiliaryRoute | null> {
     const config = await this.host.storage.getConfig()
@@ -468,7 +468,7 @@ export class ChatEngineTurns {
 
     let projectPath = project.path
     // A hidden inbox project has no folder of its own. Its project-level work
-    // (quota reads, grading judges, heartbeats) shares this neutral root, while
+    // (quota reads, summaries, heartbeats) shares this neutral root, while
     // each chat thread resolves to `chats-cwd/<threadId>/` through
     // `resolveThreadPath` so conversations never share a directory.
     if (!projectPath && project.hidden && project.id === INBOX_PROJECT_ID) {

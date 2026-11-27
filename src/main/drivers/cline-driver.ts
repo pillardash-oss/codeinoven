@@ -191,7 +191,7 @@ export class ClineDriver extends PersistentCliDriver {
     )
   }
 
-  /** Cheapest available free/pass models, shared by title and grading runs. */
+  /** Cheapest available free/pass models, shared by title and summary runs. */
   private async cheapestCandidates(): Promise<TitleModelCandidate[]> {
     const remote = await fetchClineCatalog()
     const catalogs = remote.length > 0 ? remote : await this.listProviders()

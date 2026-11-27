@@ -1104,7 +1104,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
   /**
    * Create a session on a fresh, private server.
    *
-   * Disposable work (titles, grading, transcription, temporary chats, the
+   * Disposable work (titles, summaries, transcription, temporary chats, the
    * engineering offshoots) must not queue behind, or block, the turn the user
    * is waiting on, so it gets its own transport that is torn down at the end.
    */

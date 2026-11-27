@@ -264,7 +264,7 @@ export class MuseDriver extends PersistentCliDriver {
     return discovered.length > 0 ? discovered : museFallbackCatalog(capabilities)
   }
 
-  /** First available catalog model, shared by title and grading runs. */
+  /** First available catalog model, shared by title and summary runs. */
   private async cheapestCandidate(): Promise<TitleModelCandidate[]> {
     const providers = await this.listProviders()
     const model = providers[0]?.models[0]

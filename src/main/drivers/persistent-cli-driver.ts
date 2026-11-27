@@ -360,7 +360,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
    * One self-contained cheap-model completion, cheapest candidate first.
    * Subclasses expose their cheapest models through `cheapCandidateModels`;
    * without any, the active thread model is used as the sole candidate.
-   * Every cheap-model scenario (title, grading, lessons, proposals) routes
+   * Every cheap-model scenario (title, summary, lessons, proposals) routes
    * through this single entry point.
    */
   async provideCheapModel(

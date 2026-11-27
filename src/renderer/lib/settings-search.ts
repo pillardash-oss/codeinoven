@@ -216,8 +216,8 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'audits',
     blockId: 'harnesses-auxiliary',
     title: 'Auxiliary agents',
-    description: 'The model each harness uses for titles, memory proposals and turn grading.',
-    keywords: ['auxiliary', 'background', 'title', 'memory', 'grading', 'model', 'harness'],
+    description: 'The model each harness uses for titles, memory proposals and search summaries.',
+    keywords: ['auxiliary', 'background', 'title', 'memory', 'summary', 'model', 'harness'],
     icon: CioCpu
   },
   {

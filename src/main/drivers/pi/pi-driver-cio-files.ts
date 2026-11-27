@@ -42,7 +42,7 @@ export interface PiCioFilesStorage extends PiHandoffStorage {
 export interface PiCioFilesHost {
   /** The file surface for one session's handoff files. */
   storageFor(sessionId: string): PiCioFilesStorage
-  /** Whether the session is an auxiliary one-shot (title, grading, lessons). */
+  /** Whether the session is an auxiliary one-shot (title, summary, lessons). */
   isTitleSession(sessionId: string): boolean
   /** Register the materialized sub-agent watch file for the session. */
   registerWatchPath(sessionId: string, watchFlagPath: string): void
@@ -188,7 +188,7 @@ export class PiCioRuntimeFiles {
       await storage.writeRaw(
         extensionRelative,
         piCioCoreToolsExtension({
-          // One-shot sessions (title, grading, lessons) are pure text turns:
+          // One-shot sessions (title, summary, lessons) are pure text turns:
           // they never publish a gateway endpoint, so the gateway/interactive
           // tools would only bloat the model request and invite spurious
           // tool calls. Status/usage/compaction stay for every session.

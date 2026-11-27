@@ -184,7 +184,7 @@ export async function deleteProjectCascade(
 
   // Project-scoped rows that no foreign key covers go with the project. Left
   // behind, they keep the deleted project id alive in board scans, design
-  // history, work-folder lists and grading queues, which is how a deleted
+  // history and work-folder lists, which is how a deleted
   // project resurfaces in the UI and gets written to again.
   phase('cleanup')
   deps.scopeManager.forgetProject(projectId)
