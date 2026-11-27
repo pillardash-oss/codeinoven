@@ -30,7 +30,6 @@ import { UtilityRuntimeService } from '../../utilities/utility-runtime-service'
 import { UtilityRegistryService } from '../../utilities/utility-registry-service'
 import { AgentSecretService } from '../../utilities/agent-secret-service'
 import { CapabilityDiscoveryService } from '../../agents/capability-discovery-service'
-import type { ExpertSettingsService } from '../../design/expert-settings-service'
 import { McpConnectionTestService } from '../../utilities/mcp-connection-test-service'
 import { McpOAuthService } from '../../utilities/mcp-oauth/mcp-oauth-service'
 import { BaseUrlProviderService } from '../../providers/base-url-provider-service'
@@ -809,14 +808,6 @@ export class ChatEngineState {
   accountRegistry!: HarnessAccountRegistry
 
   utilityOrchestration!: UtilityOrchestrationService
-
-  /**
-   * What each thread decided about the experts its design or video session may
-   * use. Wired by the service graph after the window exists; until then a
-   * delegation reads the config directly, which is what this app did before a
-   * thread could answer for itself.
-   */
-  expertSettings: ExpertSettingsService | null = null
 
   usageRepo!: HarnessUsageRepo
 

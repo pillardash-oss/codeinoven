@@ -1,11 +1,5 @@
 import { authoredWorkCheckpointGuidance } from './design/checkpoint-guidance'
 import {
-  expertDelegationGuidance,
-  EXPERT_FALLBACK_GUIDANCE,
-  NO_EXPERTS,
-  type EffectiveExperts
-} from './experts'
-import {
   DEFAULT_WORK_ROOTS,
   workRootGuidance,
   workRootForKind,
@@ -22,11 +16,8 @@ import {
  * The interface is `preview` and `capture` from `src/main/video/`, which is why
  * this text can promise them.
  *
- * Like the design playbook, the paragraph about the models the user staffed is
- * rebuilt from live settings, because the same experts staff both: a video is
- * words, pictures, clips and sound, and which model does each is the user's
- * decision rather than the app's. The rest of the text is a constant, because the
- * composition's contract is not a setting.
+ * Like the design playbook, the folder comes from live settings; the rest of the
+ * text is a constant, because the composition's contract is not a setting.
  */
 
 /** Display name shown in a search result, the Utilities UI and the thread bank. */
@@ -69,10 +60,7 @@ export function videoOutputRoot(roots: WorkRoots = DEFAULT_WORK_ROOTS): string {
  * lives, the contract that makes it renderable, how to watch it and check it,
  * and only then the craft notes that decide whether the result is good.
  */
-export function videoCapabilityDocs(
-  experts: EffectiveExperts = NO_EXPERTS,
-  roots: WorkRoots = DEFAULT_WORK_ROOTS
-): string {
+export function videoCapabilityDocs(roots: WorkRoots = DEFAULT_WORK_ROOTS): string {
   const videoRoot = videoOutputRoot(roots)
   return `# Video studio
 
@@ -109,7 +97,7 @@ A request to watch something is an export request. For a throwaway delivery the 
 
 The barest minimum makes a real video, and it needs nothing installed: a folder, \`index.html\`, \`composition.json\` and a canvas that draws every frame from \`cioRenderFrame\`. Type, colour, geometry, charts, counters and motion are yours to draw, and \`scaffold\` can start from a film the app already ships. An uninstalled extra never ends the work.
 
-The extras each belong to the user: the ASR model in Sounds for \`transcribe\`, the generation model they assigned to an image, video or audio craft for \`generate\`, and the models they assigned for \`delegate\`. When the film genuinely needs one, name the exact thing that is missing, ask for it in the same turn, and build the version that needs nothing so there is a film to watch meanwhile. Never download a model, pick a model for them or install anything into the app, and never answer a video request with prose, a slide deck of frames or a promise that a file exists. The one thing you provision yourself is a cut-out stack, and only in project scratch: see \`remove-background\` below.
+The extras each belong to the user: the ASR model in Sounds for \`transcribe\`, and the generation model chosen for an image, video or audio kind for \`generate\`. When the film genuinely needs one, name the exact thing that is missing, ask for it in the same turn, and build the version that needs nothing so there is a film to watch meanwhile. Never download a model, pick a model for them or install anything into the app, and never answer a video request with prose, a slide deck of frames or a promise that a file exists. The one thing you provision yourself is a cut-out stack, and only in project scratch: see \`remove-background\` below.
 
 ## Establish the brand before the first frame
 
@@ -314,15 +302,9 @@ Video is not a stack of slides. Work in this order.
 11. Accessibility: caption anything spoken, never carry meaning in colour alone, and keep a burned-in caption inside the safe area.
 12. Skip the generated tells: a purple gradient, a slow zoom on a static card, a wall of text fading in, three equal panels, and a payoff that never arrives.
 
-## The work that is not markup
+## Pictures, clips and sound
 
-Copy, a script, a storyboard, an SEO pass: those are words, and the user assigns a model to each craft in Settings, Design. The design studio's \`delegate\` operation is the lane that runs the model they chose.
-
-${expertDelegationGuidance(experts, 'video')}
-
-Pictures, clips and sound are files rather than answers, so the app generates them with the model the user assigned to that craft. Call \`generate\` with \`kind\` set to \`image\`, \`video\` or \`audio\`, a complete brief in \`prompt\`, and \`name\` with \`directory\` when the asset belongs beside a particular composition. The reply carries the project-relative path, which the composition references relatively. \`options\` is for a provider-specific field the model documents, such as an aspect ratio or a duration.
-
-${EXPERT_FALLBACK_GUIDANCE}
+A picture, a clip or a track is a file rather than an answer, so the app generates it. Call \`generate\` with \`kind\` set to \`image\`, \`video\` or \`audio\`, a complete brief in \`prompt\`, and \`name\` with \`directory\` when the asset belongs beside a particular composition. The reply carries the project-relative path, which the composition references relatively. \`options\` is for a provider-specific field the model documents, such as an aspect ratio or a duration.
 
 Use your own tools when a craft is unassigned. Report a capability limitation only after checking available generation tools. Never leave an empty frame where the user asked for a real asset.`
 }
@@ -330,7 +312,7 @@ Use your own tools when a craft is unassigned. Report a capability limitation on
 /**
  * The seeded copy of the playbook, written into the utilities registry so a
  * reader of that file sees a complete contract. Every activation replaces the
- * experts paragraph with the live list, so this copy is a default rather than
- * the text a turn receives.
+ * folder with the live setting, so this copy is a default rather than the text a
+ * turn receives.
  */
 export const VIDEO_CAPABILITY_DOCS = videoCapabilityDocs()

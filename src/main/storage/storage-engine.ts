@@ -24,7 +24,12 @@ import {
   atomicWrite,
   resolveWithinRoot
 } from '../../lib/utils'
-import type { AppConfig, HeartbeatConfig, VisionModelRecord } from '../../lib/types'
+import type {
+  AppConfig,
+  HeartbeatConfig,
+  MediaGenerationModels,
+  VisionModelRecord
+} from '../../lib/types'
 import { Logger } from '../system/logger'
 import { startupTelemetry, type StartupStep } from '../system/startup-telemetry'
 import {
@@ -80,7 +85,6 @@ import {
   DEFAULT_BROWSER_SEARCH_ENGINE_ID,
   sanitizeCustomSearchEngines
 } from '../../lib/browser-search-engines'
-import { MAX_DESIGN_ASSIGNMENTS, isUsableDesignAssignment } from '../../lib/design-assignments'
 import { MAX_MODEL_PROFILES, isUsableModelProfile } from '../../lib/model-profiles'
 import { DEFAULT_SPEECH_SETTINGS } from '../../lib/speech/types'
 import { normalizeVisionModelId, visionModelRecordMatches } from '../../lib/image-descriptor'
@@ -89,6 +93,30 @@ import { normalizeVisionModelId, visionModelRecordMatches } from '../../lib/imag
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
   return Math.min(max, Math.max(min, Math.round(value)))
+}
+
+/**
+ * The per-kind media models, read tolerantly from a config file.
+ *
+ * Each kind is independent: a user who makes pictures but never clips has one
+ * model and no complaint about the other two, and an entry that is not a string
+ * is dropped rather than guessed at.
+ */
+function normalizedMediaModels(models: unknown): MediaGenerationModels {
+  if (models === null || typeof models !== 'object') return {}
+  const source = models as Record<string, unknown>
+  const read = (key: 'image' | 'video' | 'audio'): string | undefined => {
+    const value = source[key]
+    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
+  }
+  const image = read('image')
+  const video = read('video')
+  const audio = read('audio')
+  return {
+    ...(image ? { image } : {}),
+    ...(video ? { video } : {}),
+    ...(audio ? { audio } : {})
+  }
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -113,9 +141,8 @@ const DEFAULT_CONFIG: AppConfig = {
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: {},
   auxiliaryAgents: {},
-  design: { assignments: [] },
   modelProfiles: [],
-  mediaGeneration: { providerId: null },
+  mediaGeneration: { providerId: null, models: {} },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
   autoInstallUpdates: true,
@@ -386,14 +413,6 @@ export class StorageEngine {
         ...(config?.agentDefaults ?? {})
       },
       auxiliaryAgents: { ...(config?.auxiliaryAgents ?? {}) },
-      // Assignments are read straight off the config file, so the array is
-      // filtered here too: only a complete selection on a valid id survives, and
-      // a hand-edited entry can never reach a model the user did not name.
-      design: {
-        assignments: (Array.isArray(config?.design?.assignments) ? config.design.assignments : [])
-          .filter(isUsableDesignAssignment)
-          .slice(0, MAX_DESIGN_ASSIGNMENTS)
-      },
       // Same tolerance as assignments: a profile missing a harness, a provider, or
       // a model could only be applied to somewhere the user never chose, so it is
       // dropped on read rather than offered as a broken row.
@@ -403,7 +422,12 @@ export class StorageEngine {
       // A provider id a future version wrote is passed through as-is so the
       // choice is not silently erased; only a missing field falls back.
       mediaGeneration: {
-        providerId: config?.mediaGeneration?.providerId ?? DEFAULT_CONFIG.mediaGeneration.providerId
+        providerId:
+          config?.mediaGeneration?.providerId ?? DEFAULT_CONFIG.mediaGeneration.providerId,
+        // One model per kind, each a plain string the user typed or the settings
+        // page wrote. Anything that is not a string is dropped rather than
+        // guessed at: a media kind with no model is simply not offered.
+        models: normalizedMediaModels(config?.mediaGeneration?.models)
       },
       // Read tolerantly, so a hand-edited entry list arrives as a working app
       // rather than as a failed start.

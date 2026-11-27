@@ -1,5 +1,4 @@
 import { flushSync, tick } from 'svelte'
-import type { ThreadExpertState } from '$shared/ipc-contract'
 import { placeCaretAtEnd } from '../../shared/rich-markdown'
 import { type ComposerKeydownContext } from '../chat-composer-keydown'
 import { isSlashRoutedAction, composerReadingSurface } from '../chat-composer-slash.svelte'
@@ -27,8 +26,6 @@ import { speechController } from '../../../speech/speech-controller.svelte'
 import { filterActions, permissionLevelForAction } from '$lib/actions'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { cioSearchVisibility } from '$lib/stores/cio-search-visibility.svelte'
-import { sessionTagKind } from '$shared/session-tags'
-import { expertSessionFor, shouldOfferExpertCard } from '$shared/experts'
 import type { SpeechEditorApplyResult, SpeechEditorTarget } from '../../../speech/editor-target'
 import { notifyVoiceDraftLanded } from '../../../speech/voice-send'
 import type { ActionDefinition, ActionSelection } from '$lib/actions'
@@ -255,47 +252,6 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
     }
   }
 
-  /**
-   * Hold this send for the expert card, or let it go.
-   *
-   * The card has one question, scoped to a session: may this design or video
-   * session hand its craft work to the models the user staffed. It is asked on
-   * the send that opens a session and on later sends until the thread answers,
-   * and it comes back only when the expert list itself changed. Everything else
-   * sends straight through.
-   */
-  async offerExpertCardOrSend(msg: string, direct?: boolean): Promise<void> {
-    this.decideWithExpertState(await this.root.captureComposerRoot.readExpertState(), msg, direct)
-  }
-
-  /**
-   * The same decision, from an answer that is already in hand.
-   *
-   * Synchronous on purpose: this is the path a normal send takes, and it must not
-   * be able to wait for anything. The words are the user's; the card, the turn
-   * and the dispatch follow.
-   */
-  decideWithExpertState(state: ThreadExpertState | null, msg: string, direct?: boolean): void {
-    const session = expertSessionFor(sessionTagKind(msg), state?.session ?? null)
-    if (
-      !state ||
-      !shouldOfferExpertCard({
-        session,
-        expertCount: state.experts.length,
-        decision: state.decision,
-        signature: state.signature
-      })
-    ) {
-      this.performSend(direct)
-      return
-    }
-    this.root.captureComposerRoot.expertGateState = state
-    this.root.captureComposerRoot.expertGateSession = session === 'video' ? 'video' : 'design'
-    this.root.captureComposerRoot.expertGateDirect = direct
-    this.root.captureComposerRoot.expertGateOpen = true
-    void this.root.captureComposerRoot.warmSession()
-  }
-
   slashActions = $derived(filterActions(this.root.handleDropData.slash.available, this.slashQuery))
 
   pendingStop = $state(false)
@@ -439,8 +395,8 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
     // of sending a prompt without the attachment the user just gave it.
     if (this.pendingAttachments.length > 0) await this.waitForPendingAttachments()
     // A tag typed but never picked still targets what it names. Resolve it
-    // before anything reads the draft, so the expert gate sees a session tag
-    // and the dispatched turn carries the tagged reference.
+    // before anything reads the draft, so the dispatched turn carries the
+    // tagged reference.
     if (this.resolvingSend) return
     this.resolvingSend = true
     try {
@@ -498,21 +454,6 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
     // We still clear the input so the user can type their next message.
     if (this.root.handleDropData.shouldInterceptImageGate()) {
       this.root.handleDropData.openImageDescriptorGate(direct)
-      return
-    }
-    // A design or video session holds its send once, so the expert card can ask.
-    // The answer is read when the composer mounts, not here: a send asks a
-    // question that was already answered, and waiting for it put a round trip
-    // between the click and the message on screen. A reader who types and sends
-    // inside the composer's first round trip is the only case left that waits,
-    // and it waits for the same answer it would have got anyway.
-    if (this.root.props.projectId && this.root.props.threadId) {
-      const warm = this.root.captureComposerRoot.cachedExpertState()
-      if (warm !== undefined) {
-        this.decideWithExpertState(warm, msg, direct)
-        return
-      }
-      void this.offerExpertCardOrSend(msg, direct)
       return
     }
     this.performSend(direct)

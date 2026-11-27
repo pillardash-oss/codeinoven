@@ -64,7 +64,7 @@ let fontWeight = $state(DEFAULT_APP_FONT_WEIGHT)
 let contrastLevel = $state<ContrastLevel>(DEFAULT_CONTRAST_LEVEL)
 let zoomLevel = $state(DEFAULT_ZOOM_LEVEL)
 /** The generation backend choice, mirrored so deep components can read it. */
-let mediaGeneration = $state<MediaGenerationConfig>({ providerId: null })
+let mediaGeneration = $state<MediaGenerationConfig>({ providerId: null, models: {} })
 /**
  * The `.cio` folders CIO Cleanup must keep, mirrored because the file tree's
  * context menu reads it to say whether a row is protected, and the tree is too
@@ -234,7 +234,10 @@ export const appConfigState = {
     fontWeight = config.fontWeight
     contrastLevel = config.contrastLevel
     zoomLevel = config.zoomLevel
-    mediaGeneration = { providerId: config.mediaGeneration.providerId }
+    mediaGeneration = {
+      providerId: config.mediaGeneration.providerId,
+      models: { ...config.mediaGeneration.models }
+    }
     cioCleanupExcludedCategories = [
       ...(config.cioCleanupExcludedCategories ?? DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES)
     ]

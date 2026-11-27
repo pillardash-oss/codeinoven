@@ -1040,8 +1040,8 @@ export class DesignService {
   /**
    * Mirror a recorded work kind onto the thread row.
    *
-   * The row is what the sidebar draws its markers from, and what the expert card
-   * and media generation read the session from, so the folder record alone is not
+   * The row is what the sidebar draws its markers from, and what the preview and
+   * media generation read the session from, so the folder record alone is not
    * enough. The write adds the kind to the thread's durable set as well as naming
    * the session it is in now, and the set is what comes back to be announced.
    * Best-effort: the folder record has already landed, and a failed mirror must

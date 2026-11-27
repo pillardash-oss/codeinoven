@@ -168,12 +168,6 @@ export class ChatComposerEffects extends BoardUnit<ChatComposer> {
       this.root.submit.focusComposerAtSavedCaret
     )
 
-    // The expert gate's answer is read once, while nothing is waiting for it, so
-    // a send never asks a question over IPC after the words have left the box.
-    $effect(() => {
-      this.root.captureComposerRoot.prefetchExpertState()
-    })
-
     $effect(() => {
       modelRuntime.ensure(this.root.handleDropData.modelRuntimeSelection)
     })

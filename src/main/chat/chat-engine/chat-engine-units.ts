@@ -28,13 +28,13 @@ import { ChatEngineMessagesLoad } from './chat-engine-messages-load'
 import { ChatEngineTranscripts } from './chat-engine-transcripts'
 import { ChatEngineMessagesWrite } from './chat-engine-messages-write'
 import { ChatEngineAssignment } from './chat-engine-assignment'
+import { ChatEngineAssignmentRun } from './chat-engine-assignment-run'
 import { ChatEngineAssistantAuthoring } from './chat-engine-assistant-authoring'
 import { ChatEngineThreadsDelete } from './chat-engine-threads-delete'
 import { ChatEngineTemporaryChats } from './chat-engine-temporary-chats'
 import { ChatEngineTurnsSteer } from './chat-engine-turns-steer'
 import { ChatEngineWorkStall } from './chat-engine-work-stall'
 import { ChatEngineCapacityContinue } from './chat-engine-capacity-continue'
-import { ChatEngineAssignmentRun } from './chat-engine-assignment-run'
 import { ChatEngineDelegationReports } from './chat-engine-delegation-reports'
 import { ChatEngineTurnsSendPrompt } from './chat-engine-turns-send-prompt'
 import { ChatEngineBrainstorm } from './chat-engine-brainstorm'
@@ -96,6 +96,7 @@ export function buildChatEngineUnits(engine: ChatEngine) {
     transcripts: new ChatEngineTranscripts(engine),
     'messages-write': new ChatEngineMessagesWrite(engine),
     assignment: new ChatEngineAssignment(engine),
+    'assignment-run': new ChatEngineAssignmentRun(engine),
     'assistant-authoring': new ChatEngineAssistantAuthoring(engine),
     citations: new ChatEngineCitations(engine),
     'threads-delete': new ChatEngineThreadsDelete(engine),
@@ -103,7 +104,6 @@ export function buildChatEngineUnits(engine: ChatEngine) {
     'turns-steer': new ChatEngineTurnsSteer(engine),
     'work-stall': new ChatEngineWorkStall(engine),
     'capacity-continue': new ChatEngineCapacityContinue(engine),
-    'assignment-run': new ChatEngineAssignmentRun(engine),
     'delegation-reports': new ChatEngineDelegationReports(engine),
     'turns-send-prompt': new ChatEngineTurnsSendPrompt(engine),
     brainstorm: new ChatEngineBrainstorm(engine),

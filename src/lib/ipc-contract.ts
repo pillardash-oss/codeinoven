@@ -14,7 +14,6 @@ import { invokeSpeechContract } from './ipc/invoke-speech'
 import { invokeAssistantContract } from './ipc/invoke-assistant'
 import { invokeTypesafeContract } from './ipc/invoke-typesafe'
 import { invokeDesignContract } from './ipc/invoke-design'
-import { invokeExpertContract } from './ipc/invoke-expert'
 import { invokeDisplayContract } from './ipc/display'
 import { invokeMediaContract } from './ipc/invoke-media'
 import { invokeOvenContract } from './ipc/invoke-oven'
@@ -31,7 +30,6 @@ import type { GitInvocation, GitRefusedOperation, GitRemoteUnavailable } from '.
 export * from './ipc/updater'
 export * from './ipc/browser'
 export * from './ipc/design'
-export * from './ipc/expert'
 export * from './ipc/media'
 export * from './ipc/display'
 export * from './ipc/logging'
@@ -62,7 +60,6 @@ export const IPC_INVOKE_CONTRACT = {
   ...invokeTypesafeContract,
   ...invokeAssistantContract,
   ...invokeDesignContract,
-  ...invokeExpertContract,
   ...invokeMediaContract,
   ...invokeDisplayContract,
   ...invokeOvenContract,

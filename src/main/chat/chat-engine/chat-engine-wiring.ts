@@ -48,7 +48,6 @@ import { McpOAuthService } from '../../utilities/mcp-oauth/mcp-oauth-service'
 import { BaseUrlProviderService } from '../../providers/base-url-provider-service'
 import { HarnessAccountRegistry } from '../../providers/harness-account-registry'
 import { UtilityOrchestrationService } from '../../utilities/utility-orchestration-service'
-import { createDesignAssignmentExecutor } from '../../design/design-assignment-executor'
 import { ModelPricingService } from '../../providers/model-pricing-service'
 import { BrainstormEngine } from '../../../lib/engines/brainstorm-engine'
 import { inlineArtifactMessage } from '../inline-artifact-service'
@@ -217,16 +216,6 @@ export function wireChatEngine(
         else engine.state.cioVideoThreads.set(threadId, true)
         void engine.rememberAuthoredWorkKind(projectId, threadId, kind)
       }
-    )
-    // Design work the user routed to a model of their own choosing. The config
-    // is read per call, so re-assigning a model applies to the next delegation
-    // rather than the next app run, and the app never substitutes a model.
-    engine.state.utilityOrchestration.setDesignAssignmentExecutor(
-      createDesignAssignmentExecutor({
-        database,
-        experts: (context) => engine.expertsForThread(context.threadId),
-        run: (request) => engine.runDesignAssignment(request)
-      })
     )
     // Secret collection is an app-owned gateway tool, so the tool call has to be
     // able to wait for the user: the engine registers the card and settles a

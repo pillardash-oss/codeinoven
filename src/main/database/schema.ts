@@ -37,7 +37,7 @@ const USAGE_EVENT_FEATURE_LIST_SQL = USAGE_EVENT_FEATURES.map((feature) => `'${f
  * already on disk. A data repair that has to run exactly once per install earns
  * a version the same way, with no DDL in it.
  */
-export const DATABASE_SCHEMA_VERSION = 16
+export const DATABASE_SCHEMA_VERSION = 17
 
 export const SCHEMA_SQL = `
 -- ─── Metadata ────────────────────────────────────────────────────────────
@@ -1144,28 +1144,6 @@ CREATE TABLE IF NOT EXISTS design_origins (
 CREATE INDEX IF NOT EXISTS idx_design_origins_thread ON design_origins(thread_id);`
 
 /**
- * What a thread decided about the experts its design or video session may use.
- *
- * The card that asks this question is shown once, before the first send of a
- * session, and the answer has to outlive the window: a restarted app that asked
- * again would be asking a question the user already answered, and a session that
- * was muted would quietly delegate again. The row is the thread's answer, and the
- * foreign key makes it follow the thread's deletion instead of orphaning.
- *
- * `signature` is the digest of the expert set the user answered about. It is what
- * lets the card return when the user staffs different experts, without asking
- * again every time they send.
- */
-const THREAD_EXPERTS_SQL = `
-CREATE TABLE IF NOT EXISTS thread_experts (
-  thread_id  TEXT PRIMARY KEY NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-  choice     TEXT NOT NULL CHECK(choice IN ('all','off')),
-  silent     INTEGER NOT NULL DEFAULT 0,
-  signature  TEXT NOT NULL DEFAULT '',
-  updated_at INTEGER NOT NULL
-);`
-
-/**
  * A design's or composition's change history, one row per point in time.
  *
  * A design is iterated, and the app keeps the iterations so the user can walk back
@@ -1355,7 +1333,6 @@ export const DATABASE_SCHEMA_SQL = [
   STICKY_NOTES_SQL,
   THREAD_DESIGNS_SQL,
   DESIGN_ORIGINS_SQL,
-  THREAD_EXPERTS_SQL,
   DESIGN_REVISIONS_SQL,
   DESIGN_HISTORY_HEADS_SQL,
   ASSISTANTS_SQL,

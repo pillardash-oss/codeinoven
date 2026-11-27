@@ -32,15 +32,9 @@ import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-se
 import { type AgentSecretResolution } from '../utilities/agent-secret-service'
 import { type OrchestrationRuntime } from './chat-engine-orchestration'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
-import { type EffectiveExperts } from '../../lib/experts'
 import type { ThreadOpenDigest } from '../../lib/ipc/invoke-thread'
-import type { ExpertSettingsService } from '../design/expert-settings-service'
 import { McpOAuthService } from '../utilities/mcp-oauth/mcp-oauth-service'
 import type { ReapOrphansOptions, ReapOrphansResult } from '../agents/agent-process-service'
-import {
-  type DesignAssignmentRunRequest,
-  type DesignAssignmentRunResult
-} from '../design/design-assignment-executor'
 import type { AssignmentWorkerScopeProvisioner } from '../../lib/engines/assignment-worker-scope'
 import type {
   BrowserUtilityExecutor,
@@ -499,12 +493,6 @@ export class ChatEngine {
    */
   setFollowUpExecutor(executor: FollowUpExecutor | null): void {
     return this.units['utilities'].setFollowUpExecutor(executor)
-  }
-  setExpertSettings(settings: ExpertSettingsService | null): void {
-    return this.units['utilities-mcp'].setExpertSettings(settings)
-  }
-  async expertsForThread(threadId: string): Promise<EffectiveExperts> {
-    return this.units['utilities-mcp'].expertsForThread(threadId)
   }
   setDesignPreviewExecutor(executor: DesignCapabilityExecutor | null): void {
     return this.units['media-visual'].setDesignPreviewExecutor(executor)
@@ -1148,11 +1136,6 @@ export class ChatEngine {
     selection: AgentModelSelection
   ): Promise<ImageDescriptorBatchCapability> {
     return this.units['utilities-gateway'].imageDescriptorBatchCapability(request, selection)
-  }
-  async runDesignAssignment(
-    request: DesignAssignmentRunRequest
-  ): Promise<DesignAssignmentRunResult> {
-    return this.units['assignment-run'].runDesignAssignment(request)
   }
   async abort(
     projectId: string,

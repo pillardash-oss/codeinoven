@@ -977,7 +977,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   const [
     { DesignService },
     { ScreenBoardService },
-    { ExpertSettingsService },
     { createDesignPreviewExecutor },
     { createDesignMediaExecutor },
     { MediaGenerationService },
@@ -990,7 +989,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   ] = await Promise.all([
     import('../design/design-service'),
     import('../design/screen-board-service'),
-    import('../design/expert-settings-service'),
     import('../preview/design-preview-executor'),
     import('../design/design-media-executor'),
     import('../media/media-generation-service'),
@@ -1080,18 +1078,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   ipcMain.handle('design:screenBoardPlace', (_event, projectId, directory, groupId, entries) =>
     screenBoards.place(projectId, directory, groupId, entries)
   )
-  // What each thread decided about the experts its design or video session may
-  // delegate to. One service answers it, because the playbook that names the
-  // experts and the `delegate` operation that would run one have to agree: a
-  // thread the user muted must be neither described as staffed nor allowed to
-  // delegate, and two derivations is how those two answers drift apart.
-  const expertSettings = new ExpertSettingsService({
-    database,
-    config: () => storage.getConfig(),
-    sessionKind: async (_projectId, threadId) => designService.authoredWorkKindFor(threadId)
-  })
-  expertSettings.registerIpc()
-  state.chatEngine.setExpertSettings(expertSettings)
   // A tab is recognised from the page it is showing rather than from a record of who
   // opened it, so a design the agent opened itself and a tab the renderer restored
   // after a restart are designs too, and a tab that navigated away stops being one.

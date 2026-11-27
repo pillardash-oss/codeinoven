@@ -97,7 +97,7 @@
     const next: MediaProviderId | null = choice === 'none' ? null : choice
     try {
       if (next) focusTokenOnMount = true
-      await updateConfig({ mediaGeneration: { providerId: next } })
+      await updateConfig({ mediaGeneration: { providerId: next, models: {} } })
     } catch (saveError) {
       reportError(saveError, 'The generation backend could not be saved.')
     }
@@ -119,6 +119,51 @@
       saving = false
     }
   }
+
+  /** The model each kind is made with, as the user typed or chose it. */
+  const models = $derived(config.mediaGeneration.models)
+
+  const MEDIA_KINDS = [
+    { kind: 'image' as const, label: 'Image', hint: 'Pictures, illustrations, textures' },
+    { kind: 'video' as const, label: 'Video', hint: 'Clips and motion' },
+    { kind: 'audio' as const, label: 'Audio', hint: 'Music, voice and sound' }
+  ]
+
+  /**
+   * Save one kind's model.
+   *
+   * A blank field removes that kind's model rather than storing an empty string:
+   * a kind with no model is simply not offered, and the capability refuses the
+   * request instead of calling something the user never chose.
+   */
+  async function saveModel(kind: 'image' | 'video' | 'audio', value: string): Promise<void> {
+    const trimmed = value.trim()
+    notice = ''
+    try {
+      await updateConfig({
+        mediaGeneration: {
+          providerId,
+          models: { ...models, [kind]: trimmed.length > 0 ? trimmed : undefined }
+        }
+      })
+      notice = trimmed.length > 0 ? `${kind} model saved.` : `${kind} model cleared.`
+    } catch (saveError) {
+      reportError(saveError, 'The generation model could not be saved.')
+    }
+  }
+
+  /**
+   * The field text, seeded from the stored model and owned by the input after
+   * that: a save round trip must not rewrite what the user is typing.
+   */
+  let modelDrafts = $state<Record<'image' | 'video' | 'audio', string | null>>({
+    image: null,
+    video: null,
+    audio: null
+  })
+
+  const modelValue = (kind: 'image' | 'video' | 'audio'): string =>
+    modelDrafts[kind] ?? models[kind] ?? ''
 
   async function removeToken(): Promise<void> {
     const id = providerId
@@ -168,6 +213,33 @@
           />
         </div>
       </div>
+    </div>
+
+    <div class="mt-4 space-y-3 border border-border bg-elevated/40 p-3">
+      <p class="text-xs leading-relaxed text-dimmed">
+        The model each kind is made with, in the provider's own spelling (<code
+          class="text-foreground">owner/name</code
+        > or a version hash). A kind with no model is not offered to the agent, and nothing is generated
+        with a model you did not choose.
+      </p>
+      {#each MEDIA_KINDS as entry (entry.kind)}
+        <label class="block">
+          <span class="block text-xs text-muted">{entry.label}</span>
+          <input
+            class="mt-1 w-full border border-border bg-surface px-2 py-1.5 text-xs text-foreground"
+            value={modelValue(entry.kind)}
+            placeholder={entry.hint}
+            disabled={!settingsReady}
+            title={`The model that makes ${entry.label.toLowerCase()} assets`}
+            aria-label={`The model that makes ${entry.label.toLowerCase()} assets`}
+            oninput={(event) => (modelDrafts[entry.kind] = event.currentTarget.value)}
+            onchange={(event) => void saveModel(entry.kind, event.currentTarget.value)}
+          />
+        </label>
+      {/each}
+      {#if notice}
+        <p class="text-xs text-muted" role="status">{notice}</p>
+      {/if}
     </div>
 
     {#if selectedProvider}

@@ -574,8 +574,8 @@ export class ThreadManager {
    * Record that a thread has entered an authored-work session.
    *
    * One method, because the two columns have to agree. `authoredWorkKind` is the
-   * session the thread is in now, which is what a preview, the expert card and
-   * media generation resolve against. `authoredWorkKinds` is every session it has
+   * session the thread is in now, which is what a preview and media generation
+   * resolve against. `authoredWorkKinds` is every session it has
    * entered, which is what the row's markers draw. The set only grows, so a
    * thread that designed something and later cut a video about it keeps both
    * marks for the rest of its life. A turn that names the kind the thread already

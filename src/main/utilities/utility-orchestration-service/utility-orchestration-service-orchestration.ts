@@ -55,7 +55,6 @@ import {
 } from '../../../lib/engineering-tools'
 import { PAWN_AGENT_TOOL_NAME } from '../../../lib/pawn-tools'
 import { EXT_SIMULATION_TOOL_NAME } from '../../../lib/simulation-tools'
-import { NO_EXPERTS, type EffectiveExperts } from '../../../lib/experts'
 import { currentWorkRoot, currentWorkRoots } from '../../design/work-roots-state'
 import { gatewayStructuredResult } from '../../../lib/image-payload'
 import {
@@ -75,7 +74,6 @@ import {
   reanchorCuaAction,
   type CuaSnapshotView
 } from '../../../lib/cua-driver'
-import type { ExpertSettingsService } from '../../design/expert-settings-service'
 import { ThreadRepo } from '../../database/repositories/thread-repo'
 import { DesignRepo } from '../../database/repositories/design-repo'
 import { ProjectRepo } from '../../database/repositories/project-repo'
@@ -280,17 +278,6 @@ export class UtilityOrchestrationServiceOrchestration {
    */
   setAuthoredWorkSessionRecorder(recorder: AuthoredWorkSessionRecorder | null): void {
     this.host.authoredWorkSessionRecorder = recorder
-  }
-
-  /**
-   * Register the service that owns what a thread decided about its experts.
-   *
-   * The playbook names the models the user staffed, so a thread whose experts are
-   * muted has to be described by the same policy that refuses `delegate`, or a
-   * session would be offered a delegation it cannot make.
-   */
-  setExpertSettings(settings: ExpertSettingsService | null): void {
-    this.host.expertSettings = settings
   }
 
   /**
@@ -1006,15 +993,14 @@ export class UtilityOrchestrationServiceOrchestration {
 
   /**
    * The design capability's playbook, with the external-asset paragraph rebuilt
-   * from the current settings policy and the delegation section rebuilt from the
-   * experts this thread may use.
+   * from the current settings policy.
    *
    * Resolved rather than seeded because both facts are user settings: the CDN
-   * allowlist decides which hosts will actually load, and the experts decide which
-   * models a design turn is allowed to delegate to, and whether it may at all.
-   * All paths that hand the playbook to a model   activation, the promotion a
-   * `@cio-design` session performs at turn start, and a post-compaction docs
-   * re-dump   come through here, so they cannot disagree.
+   * allowlist decides which hosts will actually load, and the work roots say
+   * where a design or a composition is written. All paths that hand the playbook
+   * to a model   activation, the promotion a `@cio-design` session performs at
+   * turn start, and a post-compaction docs re-dump   come through here, so they
+   * cannot disagree.
    */
   async workContext(
     threadId: string
@@ -1028,18 +1014,6 @@ export class UtilityOrchestrationServiceOrchestration {
         ? `\nThe current ${current.kind} is in ${JSON.stringify(current.directory)}. Continue editing this folder. An individual save-path change affects only this folder. The project save root controls new work. Use the current recorded path rather than paths in older messages.\n`
         : ''
     }
-  }
-
-  /**
-   * The experts a thread's session may delegate to.
-   *
-   * The expert settings service owns the decision, so a service graph that has
-   * not wired one reads as "nothing is staffed", which is the honest answer for a
-   * deployment without the design capability rather than a promise the app cannot
-   * keep.
-   */
-  async expertsForThread(threadId: string): Promise<EffectiveExperts> {
-    return this.host.expertSettings ? this.host.expertSettings.effectiveFor(threadId) : NO_EXPERTS
   }
 
   /** Build the capability payload (tools, operations, or instructions) that

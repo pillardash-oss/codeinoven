@@ -1,11 +1,5 @@
 import { authoredWorkCheckpointGuidance } from './design/checkpoint-guidance'
 import {
-  expertDelegationGuidance,
-  EXPERT_FALLBACK_GUIDANCE,
-  NO_EXPERTS,
-  type EffectiveExperts
-} from './experts'
-import {
   DEFAULT_WORK_ROOTS,
   workRootGuidance,
   workRootForKind,
@@ -23,14 +17,13 @@ import {
  *
  * The capability is knowledge plus app operations. The knowledge is the design
  * pass below and the facts a design turn cannot guess from the repository: where
- * a design should be written, which external hosts will load once it is served,
- * and which models the user assigned to the design work. The operations are
- * `preview`, which serves the design folder on the app's own loopback origin and
- * opens it in the project's browser tab (`src/main/preview/design-preview-executor.ts`),
- * `delegate`, which runs one prompt on a model the user assigned rather than on
- * one the agent picked (`src/main/design/design-assignment-executor.ts`), and
- * `save-media`, which turns a generated asset on a link into a file beside the
- * design (`src/main/design/design-media-executor.ts`).
+ * a design should be written, and which external hosts will load once it is
+ * served. The operations are `preview`, which serves the design folder on the
+ * app's own loopback origin and opens it in the project's browser tab
+ * (`src/main/preview/design-preview-executor.ts`), `generate`, which makes media
+ * with the model chosen for that kind in settings, and `save-media`, which turns
+ * a generated asset on a link into a file beside the design
+ * (`src/main/design/design-media-executor.ts`).
  *
  * That shape is deliberate. The content security policy of the engineering
  * prototype phase and the open posture of the design preview differ, and both
@@ -80,21 +73,10 @@ function externalAssetGuidance(policy: PrototypeCdnPolicy): string {
 }
 
 /**
- * The delegation paragraph.
- *
- * Written for a design session by the shared builder, so the video playbook
- * states the same thing about the same list of models.
- */
-function delegationGuidance(experts: EffectiveExperts): string {
-  return expertDelegationGuidance(experts, 'design')
-}
-
-/**
  * The seeded copy of the playbook, written into the utilities registry so a
  * reader of that file sees a complete contract. Every activation replaces the
- * external-asset paragraph with the live policy and the delegation paragraph
- * with the user's live experts, so this copy is a default rather than the text a
- * turn receives.
+ * external-asset paragraph with the live policy and the folder with the live
+ * setting, so this copy is a default rather than the text a turn receives.
  */
 export const DESIGN_CAPABILITY_DOCS = designCapabilityDocs({
   allowExternalCdn: DEFAULT_PROTOTYPE_CDN_ENABLED,
@@ -103,13 +85,12 @@ export const DESIGN_CAPABILITY_DOCS = designCapabilityDocs({
 
 /**
  * The playbook handed back when the capability is activated. Kept as a function
- * because the external-asset paragraph is the live CDN policy, the delegation
- * section is the user's live experts, and the folder is the user's live setting;
- * a stale copy of any of them is the drift those resolvers exist to prevent.
+ * because the external-asset paragraph is the live CDN policy and the folder is
+ * the user's live setting; a stale copy of either is the drift those resolvers
+ * exist to prevent.
  */
 export function designCapabilityDocs(
   policy: PrototypeCdnPolicy,
-  experts: EffectiveExperts = NO_EXPERTS,
   roots: WorkRoots = DEFAULT_WORK_ROOTS
 ): string {
   const designRoot = designOutputRoot(roots)
@@ -201,19 +182,11 @@ When adjustable accent, density, theme or sample data helps the review, declare 
 
 Use the project's real token names and values; up to 12 controls of type color, range, select or text, and a \`variable\` sets that CSS custom property immediately. For theme or sample data listen for \`cio:tweaks\` on \`document\` and apply \`event.detail\`. Changes never reload. Keep this review strip out of production code.
 
-## Delegating to the models the user assigned
-
-Some design work is a craft rather than markup: the copy that sounds like the product, an SEO pass, a script, a storyboard. The user puts a model on each craft in Settings, Design, and \`delegate\` runs the one they chose for the work you name, whether you name the assignment or its title. Its \`prompt\` is the complete brief, because the assigned model sees nothing of this conversation: the subject, the tone, the format, every constraint and the deliverable you want back.
-
-${delegationGuidance(experts)}
-
-\`delegate\` answers with text only. A craft that produces a picture, a clip or a track is made with \`generate\`, so never accept prose as though it were the asset, and say which assignment produced a piece when you report.
-
 ## Pictures, video and sound
 
-\`generate\` makes media with the model the user assigned to that craft, chosen by \`kind\`: \`image\`, \`video\` or \`audio\`. Its \`prompt\` is the complete brief, since the model has seen nothing of this work, and \`name\` with \`directory\` lands the file beside the design it belongs to. Pass \`options\` only for a provider-specific field the model documents, such as an aspect ratio or a duration. The reply carries the project-relative path: reference it relatively, preview the folder to check size and position, and look at the asset before describing it.
+\`generate\` makes media with the model chosen for that kind in Settings, served by the generation backend. \`kind\` is \`image\`, \`video\` or \`audio\`. Its \`prompt\` is the complete brief, since the model has seen nothing of this work, and \`name\` with \`directory\` lands the file beside the design it belongs to. Pass \`options\` only for a provider-specific field the model documents, such as an aspect ratio or a duration. The reply carries the project-relative path: reference it relatively, preview the folder to check size and position, and look at the asset before describing it.
 
-${EXPERT_FALLBACK_GUIDANCE}
+When a kind has no model configured, say so in one line and ask the user to pick one in Settings, Media. Do not download a model, pick one for them, or accept prose where a picture, a clip or a track was asked for.
 
 ## External assets
 

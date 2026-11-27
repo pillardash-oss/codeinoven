@@ -5,7 +5,6 @@ import { registerComposerFocusTarget } from '$lib/focus/composer-focus-registry'
 import { posixBasename } from '$shared/paths'
 import { composerHasThirdLine, composerShowsExpandControl } from '$shared/composer-expand'
 import { showToastWarning } from '$lib/stores/app-errors.svelte'
-import { invoke } from '$lib/ipc.svelte'
 import { fileUrlToPath } from '$lib/mime'
 import { placeCaretAtEnd } from '../../shared/rich-markdown'
 import { handleComposerKeydown } from '../chat-composer-keydown'
@@ -18,7 +17,6 @@ import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
 import { APP_NAME } from '$shared/brand'
 import { getVendorIconSvg } from '$shared/vendor-icons/registry'
 import ComposerShoe from '../ComposerShoe.svelte'
-import type { ExpertDecisionInput, ThreadExpertState } from '$shared/ipc-contract'
 import type { PromptAttachment } from '$shared/types'
 import { MAX_PROMPT_ATTACHMENTS } from '$shared/types'
 import type { ChatComposer } from './ChatComposer-board.svelte'
@@ -65,20 +63,6 @@ export class ChatComposerCaptureComposerRoot extends BoardUnit<ChatComposer> {
     this.expansion.toggle()
     this.root.submit.focusComposerAtSavedCaret()
   }
-
-  /**
-   * Expert gate state: a design or video session the user has not answered for
-   * is held once, before the message goes, so the card can ask.
-   */
-  expertGateOpen = $state(false)
-
-  expertGateState = $state<ThreadExpertState | null>(null)
-
-  expertGateSession = $state<'design' | 'video'>('design')
-
-  expertGateDirect = $state<boolean | undefined>(undefined)
-
-  expertWarming = $state(false)
 
   /**
    * Every tag this composer can draw, by token.
@@ -214,116 +198,6 @@ export class ChatComposerCaptureComposerRoot extends BoardUnit<ChatComposer> {
   cancelImageDescriptorGate(): void {
     this.root.handleDropData.imageDescriptorGateOpen = false
     this.root.submit.focusComposerAtSavedCaret()
-  }
-
-  /**
-   * Read the thread's experts and its recorded answer.
-   *
-   * Null on any failure: the card is an offer, and a read that fails must let the
-   * message go rather than hold it. The read happens on a user send, not in a
-   * render loop, so it costs one indexed lookup and one small config read.
-   */
-  /**
-   * The expert gate's answer for this thread, kept warm.
-   *
-   * The send path asks this question before every message, and asking it over IPC
-   * at submit time is exactly the wrong moment: the words were already handed
-   * over, so the message waited a round trip - a whole second when the main
-   * process is busy - before it could appear in the transcript. The question never
-   * changes without the user staffing an expert, so it is read once when the
-   * composer mounts and again after a window of use, and the send path answers
-   * from here.
-   *
-   * `undefined` is "not read yet", which is why the send path can tell a warm
-   * answer from none and fall back to reading when the reader types and sends
-   * faster than one round trip.
-   */
-  private expertState: ThreadExpertState | null | undefined = undefined
-  private expertStateReadAt = 0
-  private static readonly EXPERT_STATE_FRESH_MS = 30_000
-
-  /** Read the expert gate's answer before a send needs it. */
-  prefetchExpertState(): void {
-    if (!this.root.props.projectId || !this.root.props.threadId) return
-    if (this.cachedExpertState() !== undefined) return
-    void this.readExpertState()
-  }
-
-  /** The warm answer, or `undefined` when there is none to decide with. */
-  cachedExpertState(): ThreadExpertState | null | undefined {
-    if (this.expertState === undefined) return undefined
-    if (
-      Date.now() - this.expertStateReadAt >
-      ChatComposerCaptureComposerRoot.EXPERT_STATE_FRESH_MS
-    ) {
-      return undefined
-    }
-    return this.expertState
-  }
-
-  async readExpertState(): Promise<ThreadExpertState | null> {
-    if (!this.root.props.projectId || !this.root.props.threadId) return null
-    try {
-      const state = await invoke(
-        'experts:state',
-        this.root.props.projectId,
-        this.root.props.threadId
-      )
-      this.expertState = state
-      this.expertStateReadAt = Date.now()
-      return state
-    } catch {
-      // A read that fails answers nothing; the gate then just lets the send go.
-      this.expertState = null
-      this.expertStateReadAt = Date.now()
-      return null
-    }
-  }
-
-  /**
-   * Start the harness while the card is on screen.
-   *
-   * The send is held for as long as the user reads the card, so the spawn they
-   * would otherwise wait for happens behind it. Fire and forget: a warm-up that
-   * fails changes nothing about the send that follows.
-   */
-  async warmSession(): Promise<void> {
-    if (!this.root.props.projectId || !this.root.props.threadId) return
-    this.expertWarming = true
-    try {
-      await invoke('agent:warmSession', this.root.props.projectId, this.root.props.threadId)
-    } catch {
-      // A warm-up is an optimization; its failure must not surface.
-    } finally {
-      this.expertWarming = false
-    }
-  }
-
-  /** Record the card's answer, then send the message it was holding. */
-  async decideExperts(choice: 'all' | 'off', silent: boolean): Promise<void> {
-    const direct = this.expertGateDirect
-    this.expertGateOpen = false
-    const input: ExpertDecisionInput = { choice, silent }
-    if (this.root.props.projectId && this.root.props.threadId) {
-      try {
-        const decided = await invoke(
-          'experts:decide',
-          this.root.props.projectId,
-          this.root.props.threadId,
-          input
-        )
-        this.expertGateState = decided
-        // The send path answers from the warm copy, so the answer the user just
-        // gave has to land in it: a card that asked twice for one decision would
-        // be asking a question it already had.
-        this.expertState = decided
-        this.expertStateReadAt = Date.now()
-      } catch {
-        // The decision is remembered for the next send; it must not block this one.
-      }
-    }
-    this.root.submit.focusComposerAtSavedCaret()
-    this.root.submit.performSend(direct)
   }
 
   hasText = $derived(this.root.submit.value.trim().length > 0)

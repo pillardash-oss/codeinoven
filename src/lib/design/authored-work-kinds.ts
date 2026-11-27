@@ -7,8 +7,8 @@ import { AUTHORED_WORK_KINDS } from './work-roots'
  * A thread row draws one marker per kind, but a thread is in one session at a
  * time, so this is deliberately a second fact beside `Thread.authoredWorkKind`
  * rather than a replacement for it. `authoredWorkKind` answers "which session is
- * this thread in now", which is what a preview resolves against, what the expert
- * card reads and what media generation writes into. This set answers "which
+ * this thread in now", which is what a preview resolves against and what media
+ * generation writes into. This set answers "which
  * sessions has this thread entered", which is what the row's markers mean. A
  * thread that designed something and later cut a video about it has done both,
  * and the single session field can only ever name one of them.

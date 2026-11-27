@@ -1,14 +1,8 @@
 import { isAbsolute, relative, sep } from 'node:path'
-import { EXPERT_FALLBACK_GUIDANCE } from '../../lib/experts'
 import { findAuthoredWork, slashPath } from '../design/authored-work'
 import { saveDesignMedia } from '../design/design-media-service'
 import { requiredString } from '../utilities/utility-orchestration/utility-input'
 import { MAX_DESIGN_MEDIA_NAME_LENGTH } from '../../lib/design-media'
-import {
-  DESIGN_ASSIGNMENT_MEDIA_OUTPUTS,
-  designAssignmentOutputWork,
-  mediaModelForKind
-} from '../../lib/design-assignments'
 import {
   MEDIA_INPUT_JSON_MAX,
   MEDIA_INPUT_OPTION_MAX,
@@ -20,6 +14,9 @@ import {
 import type { AppConfig } from '../../lib/types'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import type { DesignMediaKind } from '../../lib/design-media'
+
+/** The kinds the generator accepts, and the only ones a config can name. */
+const DESIGN_MEDIA_KINDS: readonly DesignMediaKind[] = ['image', 'video', 'audio']
 import type { DesignCapabilityExecutor } from '../utilities/utility-orchestration-service'
 import type { Database } from '../database/database'
 import type { MediaGenerationService } from './media-generation-service'
@@ -27,16 +24,15 @@ import type { MediaGenerationService } from './media-generation-service'
 /**
  * Run the app-owned design capability's `generate` operation.
  *
- * This is the step the app was missing: an agent could ask a delegated model for
- * a music bed and get prose back, because the only lane a craft could staff was a
- * text completion. Here the prompt goes to the model the user assigned to that
- * craft, the provider answers with a URL, and the bytes are written into the
- * project by the same saver `save-media` uses, so there is one writer and one set
- * of byte ceilings for generated media.
+ * This is the step the app was missing: a picture, a clip or a music bed is a
+ * file, not an answer. Here the prompt goes to the model configured for that
+ * kind of media, the provider answers with a URL, and the bytes are written into
+ * the project by the same saver `save-media` uses, so there is one writer and one
+ * set of byte ceilings for generated media.
  *
- * The operation never chooses a model. A craft with no user-assigned generation
- * model is refused by name with guidance to use the calling agent's own
- * generation tools instead. No app-managed default is selected.
+ * The operation never chooses a model. A kind with no configured model is
+ * refused by name, because a model the user did not pick is not a fallback: it is
+ * a different decision made on their behalf.
  */
 
 export interface MediaGenerationExecutorOptions {
@@ -62,12 +58,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** The media craft a call names, refused when it is not one of the three. */
 function readKind(raw: unknown): DesignMediaKind {
-  if (
-    typeof raw !== 'string' ||
-    !(DESIGN_ASSIGNMENT_MEDIA_OUTPUTS as readonly string[]).includes(raw)
-  ) {
+  if (typeof raw !== 'string' || !(DESIGN_MEDIA_KINDS as readonly string[]).includes(raw)) {
     throw new Error(
-      `kind must be one of ${DESIGN_ASSIGNMENT_MEDIA_OUTPUTS.join(', ')}, and "${String(raw)}" is not`
+      `kind must be one of ${DESIGN_MEDIA_KINDS.join(', ')}, and "${String(raw)}" is not`
     )
   }
   return raw as DesignMediaKind
@@ -122,16 +115,16 @@ export function createMediaGenerationExecutor(
     const promptField = optionalPromptField(input['prompt_field'])
 
     const config = await options.config()
-    const assigned = mediaModelForKind(config.design, kind)
-    if (!assigned) {
+    const model = config.mediaGeneration.models[kind]?.trim()
+    if (!model) {
       throw new Error(
-        `The user has not put a model on ${designAssignmentOutputWork(kind)}. ${EXPERT_FALLBACK_GUIDANCE}`
+        `No ${kind} model is configured. Ask the user to pick one in Settings, Media: generated media is made with the model chosen for its kind, and the app never picks one on their behalf.`
       )
     }
-    const ref = parseMediaModelRef(assigned.model)
+    const ref = parseMediaModelRef(model)
     if (!ref) {
       throw new Error(
-        `The model assigned to ${designAssignmentOutputWork(kind)} is "${assigned.model}", which is not a model reference. Use "owner/name" or a version hash.`
+        `The ${kind} model "${model}" is not a model reference. Use "owner/name" or a version hash.`
       )
     }
 
@@ -144,7 +137,7 @@ export function createMediaGenerationExecutor(
       input['directory']
     )
 
-    const result = await options.service.generate(kind, ref, assigned.model, {
+    const result = await options.service.generate(kind, ref, model, {
       kind,
       prompt,
       ...(promptField ? { promptField } : {}),
@@ -157,7 +150,7 @@ export function createMediaGenerationExecutor(
     const saved = await saveDesignMedia({
       directory: directory.absolute,
       source: result.url,
-      name: name ?? assigned.model.replace(/[^a-z0-9]+/giu, '-')
+      name: name ?? model.replace(/[^a-z0-9]+/giu, '-')
     })
     const file = isAbsolute(directory.display)
       ? slashPath(saved.path)

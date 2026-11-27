@@ -90,7 +90,6 @@
   import CioPromptsSettings from './CioPromptsSettings.svelte'
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
-  import DesignAssignmentsSettings from './DesignAssignmentsSettings.svelte'
   import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
   import IdeModeSettingsTab from './IdeModeSettingsTab.svelte'
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
@@ -1474,7 +1473,6 @@
         <div class="mb-6">
           <MediaGenerationSettings {config} {settingsReady} {updateConfig} />
         </div>
-        <DesignAssignmentsSettings {config} {settingsReady} {updateConfig} />
       </div>
     {:else if section === 'cio-prompts'}
       <CioPromptsSettings />

@@ -19,7 +19,6 @@
   import ChatComposerDropZone from './ChatComposerDropZone.svelte'
   import ChatComposerImageGate from './ChatComposerImageGate.svelte'
   import ChatComposerOvenSetupCard from './ChatComposerOvenSetupCard.svelte'
-  import ExpertCard from './ExpertCard.svelte'
   import ChatComposerPermissionPicker from './ChatComposerPermissionPicker.svelte'
   import ChatComposerPlusMenu from './ChatComposerPlusMenu.svelte'
   import { isEditablePastedTextAttachment } from './chat-composer-attachments'
@@ -30,7 +29,6 @@
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import ComposerShoe from './ComposerShoe.svelte'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
   import { createChatComposer } from './ChatComposer/ChatComposer-board.svelte'
   import type { Props } from './ChatComposer/ChatComposer-types'
 
@@ -321,19 +319,6 @@
       onReorderFavorite={board.props.onReorderFavorite}
       onCancel={board.captureComposerRoot.cancelImageDescriptorGate}
       onConfirm={board.handleDropData.confirmImageDescriptorGate}
-    />
-  {/if}
-
-  {#if board.captureComposerRoot.expertGateOpen && board.captureComposerRoot.expertGateState}
-    <ExpertCard
-      expertState={board.captureComposerRoot.expertGateState}
-      session={board.captureComposerRoot.expertGateSession}
-      modelLabel={board.handleDropData.expertModelLabel}
-      warming={board.captureComposerRoot.expertWarming}
-      onUse={() => void board.captureComposerRoot.decideExperts('all', false)}
-      onDisable={() => void board.captureComposerRoot.decideExperts('off', false)}
-      onNeverAsk={() => void board.captureComposerRoot.decideExperts('off', true)}
-      onOpenSettings={() => workspaceState.navigateToSettings?.('design')}
     />
   {/if}
 
