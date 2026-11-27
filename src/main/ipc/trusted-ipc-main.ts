@@ -2,11 +2,39 @@ import { app, ipcMain as electronIpcMain } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Logger } from '../system/logger'
+import { recordPerfOperation } from '../system/perf-trace'
 import { PrivilegedIpcValidator } from './ipc-validation'
 import { isShippedBuild } from '../bootstrap/app-resources'
 
 type InvokeHandler = Parameters<typeof electronIpcMain.handle>[1]
 type EventListener = Parameters<typeof electronIpcMain.on>[1]
+
+/**
+ * Channels the trace must never measure.
+ *
+ * Every instrumented operation writes a record, and these channels *are* the
+ * record path: timing them would have each measurement produce a measurement.
+ */
+const UNTRACED_CHANNELS: ReadonlySet<string> = new Set([
+  'perf:records',
+  'perf:memory',
+  'perf:flush'
+])
+
+/** Whether a handler answered with a promise rather than a value. */
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { then?: unknown }).then === 'function'
+  )
+}
+
+function describeFailure(error: unknown): string {
+  if (error instanceof Error) return error.message || error.name
+  if (typeof error === 'string') return error
+  return 'Unknown IPC failure'
+}
 
 interface TrustedIpcMainFacade {
   handle: (channel: string, handler: InvokeHandler) => void
@@ -63,9 +91,43 @@ function getSenderValidator(): PrivilegedIpcValidator {
  */
 export const trustedIpcMain: TrustedIpcMainFacade = {
   handle(channel: string, handler: InvokeHandler): void {
+    const traced = !UNTRACED_CHANNELS.has(channel)
     electronIpcMain.handle(channel, (event, ...args) => {
       getSenderValidator().assertTrustedSender(event)
-      return handler(event, ...args)
+      if (!traced) return handler(event, ...args)
+      const startedAt = Date.now()
+      const report = (outcome: 'ok' | 'error', error?: string): void => {
+        recordPerfOperation({
+          kind: 'ipc',
+          name: `ipc:${channel}`,
+          startedAt,
+          durationMs: Date.now() - startedAt,
+          outcome,
+          context: { side: 'main' },
+          ...(error === undefined ? {} : { error })
+        })
+      }
+      let result: unknown
+      try {
+        result = handler(event, ...args)
+      } catch (error) {
+        report('error', describeFailure(error))
+        throw error
+      }
+      if (isPromiseLike(result)) {
+        return Promise.resolve(result).then(
+          (value: unknown) => {
+            report('ok')
+            return value
+          },
+          (error: unknown) => {
+            report('error', describeFailure(error))
+            throw error
+          }
+        )
+      }
+      report('ok')
+      return result
     })
   },
 
@@ -75,7 +137,33 @@ export const trustedIpcMain: TrustedIpcMainFacade = {
         Logger.error('One-way IPC rejected: sender frame is not trusted', { channel })
         return
       }
-      listener(event, ...args)
+      if (UNTRACED_CHANNELS.has(channel)) {
+        listener(event, ...args)
+        return
+      }
+      const startedAt = Date.now()
+      try {
+        listener(event, ...args)
+      } catch (error) {
+        recordPerfOperation({
+          kind: 'ipc',
+          name: `send:${channel}`,
+          startedAt,
+          durationMs: Date.now() - startedAt,
+          outcome: 'error',
+          context: { side: 'main' },
+          error: describeFailure(error)
+        })
+        throw error
+      }
+      recordPerfOperation({
+        kind: 'ipc',
+        name: `send:${channel}`,
+        startedAt,
+        durationMs: Date.now() - startedAt,
+        outcome: 'ok',
+        context: { side: 'main' }
+      })
     })
     return trustedIpcMain
   },

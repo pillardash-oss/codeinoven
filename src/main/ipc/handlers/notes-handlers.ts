@@ -10,6 +10,7 @@ import {
   validateEntityId,
   validateScopeSlice,
   validateSortOrder,
+  validateThreadSettledOutcome,
   validateThreadSettings,
   validateThreadStatus
 } from '../ipc-validation'
@@ -250,11 +251,19 @@ export function registerNotesHandlers(ctx: IpcHandlerContext): void {
     return threadManager.markUnread(projectId, safeThreadId)
   })
   ipcMain.handle(
+    'thread:setSettledOutcome',
+    async (_, projectId: unknown, threadId: unknown, outcome: unknown) =>
+      threadManager.setSettledOutcome(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateThreadSettledOutcome(outcome)
+      )
+  )
+  ipcMain.handle(
     'thread:draftActivity',
     (_, projectId: string, threadId: string, drafting: boolean) => {
       // Composer typing is the user working in the app, so it holds every
-      // pending card's countdown just as answering a card does. Grading deadlines
-      // are untouched: they close on thread deletion or the inactivity deadline.
+      // pending card's countdown just as answering a card does.
       validateEntityId(projectId, 'Project ID')
       validateEntityId(threadId, 'Thread ID')
       validateBoolean(drafting, 'Drafting')

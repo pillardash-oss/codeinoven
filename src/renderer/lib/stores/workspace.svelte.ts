@@ -18,6 +18,10 @@ import { openComposerFocusWindow } from '$lib/focus/composer-focus'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { relativeTimeClock } from '$lib/relative-time.svelte'
 import { preloadThreadConversation } from './thread-preload'
+import { threadMessages } from './thread-messages.svelte'
+import { perfMarkNextPaint, perfSpan } from '$lib/perf-trace'
+import { settleSelectedThreadRead } from './selected-thread-read'
+import { afterShellPaint, beginThreadOpenWindow } from '$lib/thread-open-window'
 import { scopeState } from './scope.svelte'
 import { invoke } from '$lib/ipc.svelte'
 import { prewarmThreadOven } from '$lib/ovens/oven-prewarm'
@@ -86,7 +90,29 @@ export interface ThreadStudioOpenRequest {
 const SOURCE_PROCESS_COUNT_TTL_MS = 30_000
 
 class WorkspaceState {
-  /** Currently open thread, if any. */
+  /**
+   * The thread the conversation pane is showing.
+   *
+   * This is the selection the click makes, published immediately: it is the one
+   * surface the user asked to see, and everything else in the app reads
+   * {@link selectedThread}, which follows one task later. The difference is not
+   * cosmetic. Svelte applies every reaction to a state change in one flush, in
+   * component order, so publishing the selection to the whole app at once meant
+   * the sidebar, the dock, the git panel and the board all re-derived and fired
+   * their own work *before* the pane that answers the click could mount. On the
+   * real app that flush measured 1.4 s for a blank thread: a six millisecond
+   * template waiting a second for the rest of the app to finish reacting.
+   *
+   * The pane is the only reader of this value that has to be current, so it is
+   * the only reader given a value that is current.
+   */
+  paneThread: Thread | null = $state.raw(null)
+  /**
+   * The open thread as the rest of the app sees it.
+   *
+   * Published one task after {@link paneThread}, so a click paints its
+   * conversation before anything else reacts to the same selection.
+   */
   selectedThread: Thread | null = $state(null)
   /**
    * True while the launch's saved thread is still being restored.
@@ -260,10 +286,30 @@ class WorkspaceState {
     iconUrl?: string | null,
     options: { deferContextPanel?: boolean } = {}
   ): void {
+    // One span covers the whole selection path, with a mark at every stage, so a
+    // slow open can be attributed to the stage that caused it instead of to
+    // "opening a thread" as a single unhelpful number. `cold` is the field that
+    // separates a first open from a revisit: the two do different work.
+    const openStartedAt = Date.now()
+    const span = perfSpan('thread.open', {
+      projectId: thread.projectId,
+      threadId: thread.id,
+      status: thread.status,
+      cold: !threadMessages.loaded(thread.projectId, thread.id),
+      deferredPanel: options.deferContextPanel === true
+    })
+    const preloadedBefore = threadMessages.loaded(thread.projectId, thread.id)
+    const mark = (name: string, context?: Record<string, string | number | boolean | null>): void =>
+      span.mark(name, { atMs: Date.now() - openStartedAt, ...context })
     // The chat composer owns keyboard focus after any thread switch. Open the
     // guard window so sidebar tools re-attaching around the switch (terminal
     // panels, action terminals) never steal focus back from the composer.
     openComposerFocusWindow()
+    // Every panel that reacts to this selection (git, checkpoints, the design
+    // coordinator, orchestration, processes, citations) now asks for its data
+    // after the conversation that was just opened has had its frame, instead of
+    // in front of it. Opening a thread is one read, not thirty.
+    beginThreadOpenWindow()
     // Start the conversation read in the same tick as the selection, before the
     // conversation view mounts. Every switch path (sidebar click, Ctrl+Tab,
     // notification, restore) then opens against an in-flight load instead of
@@ -271,16 +317,17 @@ class WorkspaceState {
     // "Loading conversation…". The bounded trace read is warmed in the same
     // pass, so a live thread's tail paints instead of arriving seconds later.
     preloadThreadConversation(thread)
-    recentVisits.recordThread(thread)
-    // The sidebar rows stamp their last-activity age against the shared clock,
-    // so opening a thread re-reads it on the spot: the row the user just entered
-    // is measured against this moment instead of the last shared tick.
-    relativeTimeClock.refresh()
-    this.selectedThread = thread
-    // A thread attached to an Oven opens that Oven's session now, before the
-    // user touches anything: the file tree, Git status and composer all read
-    // through it on mount.
-    prewarmThreadOven(thread)
+    mark('preload')
+    // The pane gets the thread now; the rest of the app gets it one task later,
+    // after the conversation is on screen (see `paneThread`).
+    this.paneThread = thread
+    afterShellPaint(() => {
+      if (this.paneThread !== thread) return
+      this.selectedThread = thread
+    })
+    // Exactly one transcript is live at a time; the other slots are frozen
+    // snapshots that must not be fed events while they are off screen.
+    threadMessages.setActive(thread.projectId, thread.id)
     this.activeProject = project
     this.activeProjectIconUrl = iconUrl ?? null
     this.rememberContentViewThread(thread)
@@ -292,32 +339,65 @@ class WorkspaceState {
     // A boot restore defers this: the context panel is a secondary surface, and
     // its reads must never share the moment the restored conversation paints.
     const rowThreadId = activeThreadRowId(thread) ?? thread.id
-    if (options.deferContextPanel) {
-      scheduleDeferredWork('workspace:contextPanel', () => {
-        contextSidebarState.activateThread(thread.projectId, thread.id, thread.title, rowThreadId)
-      })
-    } else {
-      contextSidebarState.activateThread(thread.projectId, thread.id, thread.title, rowThreadId)
-    }
     rendererRecovery.setSelectedThread(thread.projectId, thread.id)
-    // Opening a thread re-anchors the project's active scope (file manager,
-    // terminal, and action roots follow the thread's scope bucket).
-    scopeState.noteProjectBucket(thread.projectId, thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
-    // Event-driven git refresh: every thread open (creation, switch, restore)
-    // tells the git store the project is in use, so it can refresh status and
-    // the connection-gated PR indicators without any polling.
-    gitState.notifyThreadOpened(project, thread)
-    // The moment a thread is opened every notice it carried is acknowledged:
-    // once its conversation is on screen there is nothing left for the panel to
-    // report, so a read thread never lingers there waiting to be dismissed by
-    // hand. The retire is durable, so neither a restart nor a scope reload can
-    // rebuild it.
-    notificationPanelState.acknowledgeOpenThread(thread)
+    // Everything that reacts to the selection without being the conversation is
+    // written on the task after the conversation has had its frame. It is one
+    // flush: a write here reaches every subscriber - the visit order, the shared
+    // relative clock every row stamps its age against, the scope bucket the file
+    // manager and terminals follow, the git store, the notice panel, the Oven
+    // prewarm - and each of them re-derives and reads, in front of the pane the
+    // user asked for. None of it is needed to paint the thread that was clicked.
+    // The guard skips the whole block when the reader has already moved on, so a
+    // burst of clicks pays for the thread they land on rather than for every one
+    // they passed through.
+    afterShellPaint(() => {
+      if (this.paneThread !== thread) return
+      recentVisits.recordThread(thread)
+      // Rows stamp their last-activity age against the shared clock, and the
+      // row that was just entered is measured against this moment.
+      relativeTimeClock.refresh()
+      // A thread attached to an Oven opens that Oven's session before the user
+      // touches anything: the file tree, Git status and composer read through it
+      // on mount.
+      prewarmThreadOven(thread)
+      // The project's active scope is what the file manager, the terminal and
+      // action roots resolve against.
+      scopeState.noteProjectBucket(
+        thread.projectId,
+        thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
+      )
+      // Every open (creation, switch, restore) tells the git store the project is
+      // in use, so it refreshes status and the connection-gated PR indicators
+      // without polling.
+      gitState.notifyThreadOpened(project, thread)
+      // Once the conversation is on screen there is nothing left for the notice
+      // panel to report, so a read thread never lingers there. The retire is
+      // durable, so neither a restart nor a scope reload can rebuild it.
+      notificationPanelState.acknowledgeOpenThread(thread)
+    })
+    mark('deferredReactions', { deferred: true })
+    // A panel is a surface beside the conversation, and the conversation is what
+    // the user asked to open: activating the dock here mounted its panel in the
+    // same flush as the transcript, so the thread waited for a panel it may not
+    // even show. It lands on the task after the opened thread's own state is
+    // applied, which is also where its own reads start (`thread-open-window`).
+    afterShellPaint(() => {
+      if (this.paneThread !== thread) return
+      contextSidebarState.activateThread(thread.projectId, thread.id, thread.title, rowThreadId)
+    })
+    mark('contextPanel', { deferred: true })
     // The live process count is a badge, and reading it walks a session's
     // process table. It must never share the switch instant with the
     // conversation mount.
     scheduleDeferredWork('workspace:sourceProcessCount', () => {
       void this.refreshSourceProcessCount(thread.projectId, thread.id)
+    })
+    span.end('ok')
+    // The selection is settled when this returns, which is a different thing
+    // from the conversation being on screen. This is the second number.
+    perfMarkNextPaint('thread.open.paint', {
+      projectId: thread.projectId,
+      cold: !preloadedBefore
     })
   }
 
@@ -395,11 +475,30 @@ class WorkspaceState {
 
   /** Update the selected thread object in place (e.g. after a status change). */
   updateThread(thread: Thread): void {
-    if (this.selectedThread?.id === thread.id) {
+    if (this.paneThread?.id === thread.id) {
+      // Both surfaces follow: this republishes the row the open conversation is
+      // already reading, which is not a selection change and must not wait a
+      // task (a lagging row would re-render the pane twice).
+      this.paneThread = thread
       this.selectedThread = thread
       if (!thread.settings?.ovenId || thread.settings.ovenId === 'local')
         contextSidebarState.close(`oven:${thread.projectId}:${thread.id}`)
     }
+  }
+
+  /**
+   * Settle the open thread's read flag without republishing its row.
+   *
+   * Opening a thread settles its unread badge a moment after the click, and that
+   * write used to go through {@link updateThread}: the same thread, but a new
+   * object, which every derivation reading the open thread treated as a
+   * different thread. Rebuilding the conversation around that new identity was a
+   * third of a second of blocking script landing between the click and the first
+   * frame   for a field the conversation does not even draw. See
+   * `settleSelectedThreadRead` for the rule itself.
+   */
+  settleSelectedThreadRead(threadId: string, read: boolean): void {
+    settleSelectedThreadRead(this.selectedThread, threadId, read)
   }
 
   /**
@@ -413,7 +512,8 @@ class WorkspaceState {
    * at.
    */
   adoptConfirmedThread(thread: Thread): void {
-    if (this.selectedThread?.id !== thread.id) return
+    if (this.paneThread?.id !== thread.id) return
+    this.paneThread = thread
     this.selectedThread = thread
   }
 
@@ -597,7 +697,11 @@ class WorkspaceState {
       this.contentViewThreadRefs = { ...this.contentViewThreadRefs, [family]: null }
     }
     this.sourceProcessCountRequestId += 1
+    this.paneThread = null
     this.selectedThread = null
+    // Nothing is on screen, so no transcript stays live and no frozen slot is
+    // kept: the reader is not coming back to any of them from here.
+    threadMessages.setActive(null, null)
     this.activeProject = null
     this.activeProjectIconUrl = null
     contextSidebarState.deactivateThread()

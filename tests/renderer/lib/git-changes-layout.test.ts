@@ -24,10 +24,17 @@ describe('waterFillHeights', () => {
     expect(waterFillHeights(500, [100, 900, 900])).toEqual([100, 200, 200])
   })
 
-  it('never asks for more than the sections need, leaving the rest of the column empty', () => {
-    const heights = waterFillHeights(800, [180, 60])
-    expect(heights).toEqual([180, 60])
-    expect(sum(heights)).toBeLessThan(800)
+  it('gives the height nobody asked for to the section with the most content', () => {
+    // A column of short sections still fills: the slack lands where it buys the
+    // most rows, so a lone section fills the panel instead of sitting in a corner.
+    expect(waterFillHeights(800, [180, 60])).toEqual([740, 60])
+    expect(waterFillHeights(500, [252])).toEqual([500])
+    expect(sum(waterFillHeights(800, [180, 60]))).toBe(800)
+  })
+
+  it('never takes the slack from a section that is already full', () => {
+    // Both full: the split is the water fill's, unchanged.
+    expect(waterFillHeights(900, [2400, 2400])).toEqual([450, 450])
   })
 
   it('returns nothing to show for an empty column', () => {

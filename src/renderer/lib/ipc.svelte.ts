@@ -20,6 +20,16 @@ import {
 import { GitRemoteUnavailableError } from '$lib/ipc-errors'
 import { agentDebug } from '$lib/stores/agent-debug.svelte'
 import { logRendererError } from '$lib/system/renderer-logger'
+import { recordPerfInvoke } from '$lib/perf-trace'
+import { settleBehindThreadOpen, waitsBehindThreadOpen } from '$lib/thread-open-window'
+
+/**
+ * Channels whose own cost must never be measured.
+ *
+ * The trace's channels are the record path; timing them would let each
+ * measurement produce another measurement.
+ */
+const UNTRACED_INVOKE_CHANNELS: ReadonlySet<string> = new Set(['perf:memory', 'perf:flush'])
 
 declare global {
   interface Window {
@@ -120,6 +130,35 @@ export async function invoke<Channel extends InvokeChannel>(
   channel: Channel,
   ...args: InvokeArgs<Channel>
 ): Promise<InvokeResult<Channel>> {
+  if (UNTRACED_INVOKE_CHANNELS.has(channel)) return invokeUntraced(channel, ...args)
+  // The clock starts before the feature-graph wait on purpose: a channel that
+  // had to wait for the graph is exactly the kind of stall this measures, and
+  // timing only the bridge call would hide it.
+  const startedAt = Date.now()
+  try {
+    // A panel's read steps back for the thread that was just opened (see
+    // `thread-open-window`). The conversation's own reads never match, so what
+    // the user is waiting for is never behind this.
+    if (waitsBehindThreadOpen(channel)) await settleBehindThreadOpen()
+    const result = await invokeUntraced(channel, ...args)
+    recordPerfInvoke(channel, startedAt, 'ok')
+    return result
+  } catch (error) {
+    recordPerfInvoke(
+      channel,
+      startedAt,
+      'error',
+      error instanceof Error ? error.message : String(error)
+    )
+    throw error
+  }
+}
+
+/** One IPC call, without measurement. */
+async function invokeUntraced<Channel extends InvokeChannel>(
+  channel: Channel,
+  ...args: InvokeArgs<Channel>
+): Promise<InvokeResult<Channel>> {
   await waitForFeatureHandlers(channel)
   const plainArgs = args.map((arg) => $state.snapshot(arg)) as InvokeArgs<Channel>
   const target = isOvenRootChannel(channel) ? ovenRootTarget(channel, plainArgs) : null
@@ -140,6 +179,31 @@ export async function invoke<Channel extends InvokeChannel>(
  * editor was opened on, not whichever thread happens to be selected now.
  */
 export async function invokeAtOvenRoot<Channel extends InvokeChannel>(
+  channel: Channel,
+  target: { threadId: string; ovenId: string },
+  ...args: InvokeArgs<Channel>
+): Promise<InvokeResult<Channel>> {
+  const projectId = args[0]
+  if (typeof projectId !== 'string' || !isOvenRootChannel(channel))
+    throw new Error('Invalid root operation.')
+  const startedAt = Date.now()
+  try {
+    const result = await invokeAtOvenRootUntraced(channel, target, ...args)
+    recordPerfInvoke(`oven:${channel}`, startedAt, 'ok')
+    return result
+  } catch (error) {
+    recordPerfInvoke(
+      `oven:${channel}`,
+      startedAt,
+      'error',
+      error instanceof Error ? error.message : String(error)
+    )
+    throw error
+  }
+}
+
+/** One routed call to an Oven checkout, without measurement. */
+async function invokeAtOvenRootUntraced<Channel extends InvokeChannel>(
   channel: Channel,
   target: { threadId: string; ovenId: string },
   ...args: InvokeArgs<Channel>

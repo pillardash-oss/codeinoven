@@ -1,4 +1,5 @@
 import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
+import CioCpu from '@pdslng/cio-icon/CioCpu.svelte'
 import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
 import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
 import CioCloud from '@pdslng/cio-icon/CioCloud.svelte'
@@ -8,7 +9,7 @@ import CioHeartPulse from '@pdslng/cio-icon/CioHeartPulse.svelte'
 import CioKey from '@pdslng/cio-icon/CioKey.svelte'
 import CioKeyboard from '@pdslng/cio-icon/CioKeyboard.svelte'
 import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
-import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
+import CioPerson from '@pdslng/cio-icon/CioPerson.svelte'
 import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
 import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
 import CioServer from '@pdslng/cio-icon/CioServer.svelte'
@@ -59,11 +60,17 @@ interface SettingsSearchEntryBase {
   icon: Component
 }
 
-/** A whole section page: it is a Settings sidebar tab, so it names its category. */
+/**
+ * A whole section page: it is a Settings sidebar tab, so it names its category.
+ *
+ * A page reached through a tab of another page (Accounts lives on Harnesses)
+ * names that tab here, so the sidebar entry and the search spotlight land on
+ * the same route with the same tab selected.
+ */
 export interface SettingsPageEntry extends SettingsSearchEntryBase {
   group: SettingsGroupId
   blockId?: undefined
-  harnessesTab?: undefined
+  harnessesTab?: HarnessesTab
 }
 
 /** A named block on a section page, revealed by the settings search spotlight. */
@@ -143,6 +150,16 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     icon: CioPlug
   },
   {
+    id: 'harness-accounts',
+    section: 'harnesses',
+    harnessesTab: 'accounts',
+    group: 'agents',
+    title: 'Accounts',
+    description: 'Every harness account, its quota, and the one new sessions start with.',
+    keywords: ['accounts', 'quota', 'usage', 'capacity', 'subscription', 'default account'],
+    icon: CioPerson
+  },
+  {
     id: 'memory',
     section: 'memory',
     group: 'agents',
@@ -161,38 +178,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     icon: CioTeam
   },
   {
-    id: 'design-generation',
-    section: 'design',
-    blockId: 'design-generation',
-    title: 'Generation backend',
-    description: 'The provider that generates images, clips and sound.',
-    keywords: ['replicate', 'generation', 'image', 'video', 'audio', 'token', 'api key', 'media'],
-    icon: CioSparkles
-  },
-  {
-    id: 'design',
-    section: 'design',
-    group: 'agents',
-    title: 'Design and video',
-    description: 'Where design and video work is saved, and who does each kind of it.',
-    keywords: [
-      'design',
-      'video',
-      'assignments',
-      'copywriter',
-      'illustrator',
-      'video editor',
-      'voice-over',
-      'copy',
-      'seo',
-      'script',
-      'storyboard',
-      'delegate',
-      'image generation'
-    ],
-    icon: CioPalette
-  },
-  {
     id: 'cio-prompts',
     section: 'cio-prompts',
     group: 'agents',
@@ -203,13 +188,21 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   },
   {
     id: 'harnesses-typesafe',
-    section: 'harnesses',
+    section: 'audits',
     blockId: 'harnesses-typesafe',
-    harnessesTab: 'auxiliary',
     title: 'TypeSafe decisions',
     description: 'The API key CodeInOven uses for TypeSafe judgments, and its connection state.',
     keywords: ['typesafe', 'jev', 'api key', 'credits', 'decision', 'auxiliary'],
     icon: CioSparkles
+  },
+  {
+    id: 'agents-auxiliary',
+    section: 'audits',
+    blockId: 'harnesses-auxiliary',
+    title: 'Auxiliary agents',
+    description: 'The model each harness uses for titles, memory proposals and search summaries.',
+    keywords: ['auxiliary', 'background', 'title', 'memory', 'summary', 'model', 'harness'],
+    icon: CioCpu
   },
   {
     id: 'utilities',

@@ -6,6 +6,8 @@ import {
   parseProjectEnvFile,
   PROJECT_ENV_DISABLED_PREFIX,
   projectEnvReference,
+  sameEnvFileName,
+  suggestEnvFileName,
   validateEnvFileName,
   type ProjectEnvApplyTextResult,
   type ProjectEnvEntry,
@@ -194,9 +196,7 @@ export class ProjectEnvService {
     const group = normalizeGroup(input.group)
     const fileName = validateEnvFileName(input.fileName)
     const files = await this.dependencies.store.readProject(input.projectId)
-    let file = files.find(
-      (candidate) => candidate.group === group && candidate.fileName === fileName
-    )
+    let file = findFile(files, group, fileName)
     const lines = parseProjectEnvFile(input.text)
     const skipped: { line: number; reason: string }[] = []
     const typed = new Map<string, { value: string | null; line: number; disabled: boolean }>()
@@ -376,10 +376,17 @@ export class ProjectEnvService {
     const group = normalizeGroup(input.group)
     const fileName = validateEnvFileName(input.fileName)
     const files = await this.dependencies.store.readProject(input.projectId)
-    if (!files.some((file) => file.group === group && file.fileName === fileName)) {
-      files.push({ group, fileName, entries: [], updatedAt: Date.now() })
-      await this.dependencies.store.writeProject(input.projectId, files)
+    const taken = files.filter((file) => file.group === group).map((file) => file.fileName)
+    // A path holds one file. Creating over an existing one would either duplicate
+    // the manifest or silently open what is already there, so name the conflict and
+    // offer the next free name instead.
+    if (isTaken(taken, fileName)) {
+      throw new Error(
+        `${group || 'The project root'} already has ${fileName}. Open it, or use ${suggestEnvFileName(taken)} for a second file.`
+      )
     }
+    files.push({ group, fileName, entries: [], updatedAt: Date.now() })
+    await this.dependencies.store.writeProject(input.projectId, files)
     return this.listProjectEnv(input.projectId)
   }
 
@@ -387,7 +394,7 @@ export class ProjectEnvService {
     const group = normalizeGroup(input.group)
     const fileName = validateEnvFileName(input.fileName)
     const files = await this.dependencies.store.readProject(input.projectId)
-    const target = files.find((file) => file.group === group && file.fileName === fileName)
+    const target = findFile(files, group, fileName)
     const remaining = files.filter((file) => file !== target)
     await this.dependencies.store.writeProject(input.projectId, remaining)
     for (const entry of target?.entries ?? []) {
@@ -720,11 +727,30 @@ function requireFile(
   group: string,
   fileName: string
 ): StoredProjectEnvFile {
-  const file = files.find(
-    (candidate) => candidate.group === group && candidate.fileName === fileName
-  )
+  const file = findFile(files, group, fileName)
   if (!file) throw new Error('That env file no longer exists. Create it again.')
   return file
+}
+
+/**
+ * The file one group and name stand for.
+ *
+ * Names are matched the way the filesystem matches them, so `.ENV` opens `.env`
+ * instead of becoming a second manifest written to the same path.
+ */
+function findFile(
+  files: readonly StoredProjectEnvFile[],
+  group: string,
+  fileName: string
+): StoredProjectEnvFile | undefined {
+  return files.find(
+    (candidate) => candidate.group === group && sameEnvFileName(candidate.fileName, fileName)
+  )
+}
+
+/** True when `fileName` is one of the names a group already uses. */
+function isTaken(taken: readonly string[], fileName: string): boolean {
+  return taken.some((candidate) => sameEnvFileName(candidate, fileName))
 }
 
 function upsertEntry(file: StoredProjectEnvFile, entry: StoredProjectEnvEntry): void {

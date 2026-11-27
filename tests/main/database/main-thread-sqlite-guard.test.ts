@@ -54,7 +54,10 @@ const SYNC_READ_ALLOWANCES: readonly SyncReadAllowance[] = [
   },
   {
     file: 'src/main/database/repositories/agent-message-repo.ts',
-    maxSites: 14,
+    // The 15th site is `inheritsHistory`: one indexed seek on
+    // `thread_checkpoints` that decides whether a read pays the fork lineage
+    // shape. It replaces a full scan of the messages table on the same path.
+    maxSites: 15,
     reason: REPOSITORY_READ
   },
   {
@@ -78,11 +81,6 @@ const SYNC_READ_ALLOWANCES: readonly SyncReadAllowance[] = [
     maxSites: 1,
     reason:
       'the indexed single-row relocation redirect lookup that resolves a folder on the preview path immediately before the synchronous upsert writes'
-  },
-  {
-    file: 'src/main/database/repositories/expert-settings-repo.ts',
-    maxSites: 1,
-    reason: REPOSITORY_READ
   },
   {
     file: 'src/main/database/repositories/harness-usage-repo.ts',

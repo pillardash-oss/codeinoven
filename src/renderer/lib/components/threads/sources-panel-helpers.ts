@@ -1,4 +1,9 @@
-import type { AgentCapabilityEntry, AgentCapabilityOrigin, MemoryEntry } from '$shared/types'
+import type {
+  AgentCapabilityEntry,
+  AgentCapabilityOrigin,
+  AgentRunningProcess,
+  MemoryEntry
+} from '$shared/types'
 import { formatTime } from '$shared/date-time-format'
 import { memoryScopeSummary } from '$shared/memory/memory-scopes'
 import type { AgentSource, FileAgentSource, FileCitationAgentSource } from '$lib/agent-sources'
@@ -65,6 +70,44 @@ export function processName(command: string): string {
 
 export function processStartedAt(startedAt: number): string {
   return formatTime(startedAt)
+}
+
+/**
+ * The words a running-process row can be found by: the executable name, the pid,
+ * the whole command line, every port it listens on, and the directory it runs
+ * in. Every field is joined into one lowercase haystack so a query token only
+ * has to appear somewhere in the row.
+ */
+export function processSearchText(process: AgentRunningProcess): string {
+  return [
+    processName(process.command),
+    String(process.pid),
+    process.command,
+    (process.ports ?? []).join(' '),
+    process.cwd ?? ''
+  ]
+    .join('\n')
+    .toLowerCase()
+}
+
+/** A query split into lowercase tokens, so "3000 pnpm" narrows to the row whose
+ *  port and executable both match. */
+export function processSearchTokens(query: string): string[] {
+  return query
+    .trim()
+    .toLowerCase()
+    .split(/\s+/u)
+    .filter((token) => token.length > 0)
+}
+
+/** True when every token appears in the row's searchable text. */
+export function processMatchesSearch(
+  process: AgentRunningProcess,
+  tokens: readonly string[]
+): boolean {
+  if (tokens.length === 0) return true
+  const text = processSearchText(process)
+  return tokens.every((token) => text.includes(token))
 }
 
 export function memoryScopeLabel(entry: MemoryEntry): string {

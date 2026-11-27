@@ -619,18 +619,25 @@ export class WorkspaceMarkThreadReadAndApply extends BoardUnit<Workspace> {
   applyThreadRead(thread: Thread): void {
     this.root.createThreadInProject.upsertThreadInList(thread)
     scopeState.updateThread(thread)
-    if (workspaceState.selectedThread?.id === thread.id) {
-      workspaceState.updateThread(thread)
-    }
+    // The open thread's row is not replaced here on purpose: only its read flag
+    // moved, and handing the conversation a new thread object to re-derive
+    // around costs a blocking frame right after the click that opened it. See
+    // `settleSelectedThreadRead`.
+    workspaceState.settleSelectedThreadRead(thread.id, thread.read)
   }
 
   /** Mark a thread read through the backend and apply the confirmed snapshot.
    *  A failed or lost request must never leave a thread the user has already
-   *  interacted with stuck on unread, so an unconfirmed read still applies
-   *  locally (the next `thread:updated` broadcast reconciles any drift), and
-   *  the request retries once after a short delay before the failure is
-   *  surfaced to the durable log. */
+   *  interacted with stuck on unread: the row clears locally the moment the
+   *  request starts, so the badge never waits on a worker that is slow, backed up
+   *  behind a locked database, or gone. The next `thread:updated` broadcast
+   *  reconciles any drift, and the request retries once after a short delay
+   *  before the failure is surfaced to the durable log. */
   async markThreadReadAndApply(projectId: string, threadId: string): Promise<void> {
+    // Opening a thread *is* the read. Applying it here, ahead of the round trip,
+    // is what makes that true even when the backend cannot answer: the promise is
+    // about what the user did, not about what the database managed to store.
+    this.applyLocalRead(projectId, threadId)
     const key = `${projectId}:${threadId}`
     try {
       const updated = await invoke('thread:markRead', projectId, threadId)
@@ -648,9 +655,9 @@ export class WorkspaceMarkThreadReadAndApply extends BoardUnit<Workspace> {
         )
       }
     } catch (error) {
-      // The backend never confirmed. Schedule one delayed retry so a transient
-      // IPC or worker failure cannot leave the badge stuck on unread; clear the
-      // pending key first so the retry is not gated as a duplicate.
+      // The backend never confirmed. The row already cleared locally when the
+      // request started; schedule one delayed retry so the stored flag catches up
+      // too. Clear the pending key first so the retry is not gated as a duplicate.
       this.pendingReadThreads.delete(key)
       if (this.readRetryTimers.has(key)) return
       this.readRetryTimers.set(
@@ -679,13 +686,34 @@ export class WorkspaceMarkThreadReadAndApply extends BoardUnit<Workspace> {
       .finally(() => this.pendingReadThreads.delete(key))
   }
 
+  /**
+   * Clear a row's unread mark in every sidebar store, without waiting for the
+   * backend.
+   *
+   * The thread is looked up in the two lists a row can be drawn from, so this
+   * works for a timeline row and for a scoped board row alike. Nothing is written
+   * when the row is already read or is not loaded: a read applied to a thread
+   * nobody can see would only be forgotten again by the next merge.
+   */
+  applyLocalRead(projectId: string, threadId: string): void {
+    const matches = (candidate: Thread): boolean =>
+      candidate.id === threadId && candidate.projectId === projectId
+    const thread =
+      this.root.createThreadInProject.allThreads.find(matches) ??
+      scopeState.allScopeThreads.find(matches)
+    if (thread === undefined || thread.read) return
+    this.applyThreadRead({ ...thread, read: true })
+  }
+
   markThreadReadAfterPaint(thread: Thread): void {
     if (thread.read) return
-    window.requestAnimationFrame(() => {
-      window.setTimeout(() => {
-        this.requestThreadRead(thread.projectId, thread.id)
-      }, 0)
-    })
+    // A timer, not a paint callback: `requestAnimationFrame` never runs while the
+    // window is hidden or occluded, and a thread opened in that window would then
+    // stay unread for the rest of the session. The macrotask still lands after
+    // the click's own frame, which is all the deferral was for.
+    window.setTimeout(() => {
+      this.requestThreadRead(thread.projectId, thread.id)
+    }, 0)
   }
 
   // ─── Assistant actions ────────────────────────────────────────────────────

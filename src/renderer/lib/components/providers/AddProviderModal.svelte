@@ -4,6 +4,7 @@
   import CioServer from '@pdslng/cio-icon/CioServer.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { onMount } from 'svelte'
+  import { toast } from 'svelte-sonner'
 
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
@@ -82,6 +83,16 @@
   let hiddenIds = $state<string[]>([])
   let togglingHide = $state(false)
   let notice = $state('')
+  /**
+   * Progress the user has to act on, not a result.
+   *
+   * An ACP agent runs the sign-in method it declared and answers only when the
+   * user is done with it, so the panel says the sign-in is waiting on them while
+   * it runs. Painted green it read as "signed in" a minute before anything was,
+   * and the wording names no transport: browser, code or terminal belongs to the
+   * method, not to this panel.
+   */
+  let info = $state('')
   let actionWarning = $state('')
   let actionError = $state('')
   let accountLabel = $state('')
@@ -162,6 +173,7 @@
       actionError = ''
       actionWarning = ''
       notice = ''
+      info = ''
     },
     setActionError: (message) => (actionError = message),
     bindSignInAccount: async (providerId) => (await preparePendingAccount(providerId)).id,
@@ -421,6 +433,23 @@
   }
 
   async function loadOffered(): Promise<void> {
+    // An ACP agent's providers are the sign-in methods it declares, never the
+    // harness provider catalog: those ids are model providers, and handing one
+    // to `authenticate` is the "Invalid params" the agent answers with.
+    if (isAcpHarness) {
+      offeredLoading = true
+      offeredError = ''
+      try {
+        await loadAcpAuth()
+      } catch (offerError) {
+        offeredError =
+          offerError instanceof Error ? offerError.message : 'Providers could not be loaded.'
+        offered = []
+      } finally {
+        offeredLoading = false
+      }
+      return
+    }
     offeredLoading = true
     offeredError = ''
     try {
@@ -465,6 +494,7 @@
     actionError = ''
     actionWarning = ''
     notice = ''
+    info = ''
     step = 'picking'
     if (offered.length === 0) void loadOffered()
   }
@@ -483,6 +513,7 @@
     actionError = ''
     actionWarning = ''
     notice = ''
+    info = ''
     const key = apiKey.trim()
     if (!key) {
       actionWarning = `Enter an API key for ${selectedProvider.name}.`
@@ -511,21 +542,34 @@
     actionError = ''
     actionWarning = ''
     notice = ''
+    info = ''
     if (isAcpHarness) {
       if (!provider) {
         openPicker()
         return
       }
       // The agent runs the method it declared; there is no command to hand to a
-      // terminal and no key for the app to store.
+      // terminal and no key for the app to store. A method that needs the user
+      // runs its own flow and answers only when they finish it, so the panel
+      // says the sign-in is waiting on them instead of spinning silently.
       storingKey = true
+      info = `${provider.name} is handling the sign-in now. Finish it wherever it asks, and this panel follows the result.`
       try {
         const status = await invoke('acpAgents:authenticate', harness.id, provider.id)
+        info = ''
         await loadAcpAuth()
+        const signedIn = status.state === 'authenticated'
+        notice = signedIn ? `Signed in to ${provider.name}.` : ''
+        // The panel can be docked or dismissed while the browser flow runs, so
+        // the one acknowledgement that always reaches the user is the toast.
+        if (signedIn) toast.success(`Signed in to ${provider.name}`)
         // A successful sign-in changes the models the agent reports, so the
         // picker's cached (refused) catalog has to be dropped and re-probed now.
         providerCatalog.invalidateAll()
         void providerStore.checkOne(harness.id).catch(() => undefined)
+        // The picker that opened this panel re-probes its own project's catalog
+        // on this signal, so its empty list becomes the agent's models now.
+        if (status.state === 'authenticated') onProviderConnected?.()
         step = 'idle'
         selectedProvider = null
         actionWarning =
@@ -533,6 +577,8 @@
             ? ''
             : `${provider.name} finished, but ${harness.name} still refuses a session.`
       } catch (authError) {
+        info = ''
+        notice = ''
         actionError =
           authError instanceof Error ? authError.message : `${provider.name} could not run.`
       } finally {
@@ -661,7 +707,10 @@
     // the connect screen itself. Jumping straight to the filtered list hid the
     // sign-in status and the already-connected providers, which is exactly what
     // a user who has accounts needs to see first.
-    void Promise.all([checkAuth(), loadOffered()]).then(() => {
+    // One read per harness: an ACP agent's provider list IS its auth status, so
+    // asking both would probe the agent twice for the same answer.
+    const ready = isAcpHarness ? checkAuth() : Promise.all([checkAuth(), loadOffered()])
+    void ready.then(() => {
       const query = initialSearch.trim()
       search = offered.some((provider) => providerMatchesSearch(provider, query)) ? query : ''
     })
@@ -795,6 +844,7 @@
       {actionError}
       {actionWarning}
       {notice}
+      {info}
       {authenticatedProvider}
       bind:accountLabel
       {loginHandoff}

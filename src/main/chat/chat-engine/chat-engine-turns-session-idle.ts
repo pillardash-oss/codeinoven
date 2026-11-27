@@ -9,7 +9,12 @@ import type {
   EngineeringSpec,
   ThreadSettings
 } from '../../../lib/types'
-import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID, isAssistantThread } from '../../../lib/types'
+import {
+  ASSISTANT_SPACE_ID,
+  INBOX_PROJECT_ID,
+  isAssistantThread,
+  threadTracksReadStatus
+} from '../../../lib/types'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/ipc/browser'
 import { mermaidRepairPrompt, validateMermaidOutput } from '../mermaid-output-validator'
 import type { MermaidValidationFailure } from '../mermaid-output-validator'
@@ -1170,8 +1175,11 @@ export class ChatEngineTurnsSessionIdle {
         finalStatus
       )
       if (!assignmentDrafting) {
+        // A settled turn is unread unless the user stopped it. An orchestration
+        // child never is: a worker's finish is carried by the Assignment, so it
+        // must not raise an unread dot on the coordinator row or the rail.
         await this.host.threadManager.setStatus(info.projectId, info.threadId, finalStatus, {
-          read: userAborted,
+          read: userAborted || (thread !== null && !threadTracksReadStatus(thread)),
           notify: announcement.notify
         })
         if (announcement.record) {
@@ -1558,6 +1566,28 @@ export class ChatEngineTurnsSessionIdle {
         )
       } catch (error) {
         Logger.error('Queued coordinator handoff dispatch failed', {
+          projectId: info.projectId,
+          threadId: info.threadId,
+          error: rawErrorMessage(error)
+        })
+      }
+      // A delegated report waits for exactly this moment: the turn is over, so
+      // its batch is delivered as the next turn instead of a steer that would
+      // have cost this one. A queue that still has work drains again on the next
+      // idle, one batch per turn.
+      try {
+        const delivered = await this.host.units['delegation-reports'].drain(
+          info.projectId,
+          info.threadId
+        )
+        if (delivered) {
+          Logger.dev('Delegated reports delivered into an idle thread', {
+            projectId: info.projectId,
+            threadId: info.threadId
+          })
+        }
+      } catch (error) {
+        Logger.error('Queued delegated report dispatch failed', {
           projectId: info.projectId,
           threadId: info.threadId,
           error: rawErrorMessage(error)

@@ -1,7 +1,11 @@
 import { MEMORY_EXTRACTION_LIMITS } from '../memory-service'
 import { QUESTION_ANSWER_MESSAGE_PREFIX } from '../../../lib/question-answers'
 import { isTodoToolPart } from '../../../lib/agent-todos'
-import { patternActionPhrase, resolveToolCall } from '../../../lib/tool-action-label'
+import {
+  patternActionPhrase,
+  resolveToolCall,
+  summarizeToolInput
+} from '../../../lib/tool-action-label'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import type { TitleAttemptAccounting } from '../../drivers/persistent-cli-driver'
 import type {
@@ -72,37 +76,14 @@ export function textForMessage(message: AgentMessage): string {
  * patterns match on intent, not on any one harness's naming, and are checked
  * in order from most to least specific.
  */
-export const TOOL_CALL_INPUT_PARAM_CAP = 150
-
 export const TOOL_CALL_RESULT_CAP = 500
 
 /** A single stream delta larger than this is raw payload, never persisted. */
 export const MAX_PERSISTED_DELTA = 16 * 1024
 
-/** First present, truthy input field a resume recap can show as the call's subject. */
-export function summarizeToolInput(input: Record<string, unknown>): string {
-  const candidateKeys = [
-    'command',
-    'path',
-    'file_path',
-    'filePath',
-    'pattern',
-    'query',
-    'url',
-    'purpose',
-    'description',
-    'prompt'
-  ]
-  for (const key of candidateKeys) {
-    const value = input[key]
-    if (typeof value === 'string' && value.trim()) {
-      return value.length > TOOL_CALL_INPUT_PARAM_CAP
-        ? `${value.slice(0, TOOL_CALL_INPUT_PARAM_CAP)}…`
-        : value
-    }
-  }
-  return ''
-}
+// The subject reading lives in the leaf module because every reader of a tool
+// call (recap, diagnostics page, audit progress) shares it.
+export { TOOL_CALL_INPUT_PARAM_CAP, summarizeToolInput } from '../../../lib/tool-action-label'
 
 export function truncateToolResult(text: string): string {
   return text.length > TOOL_CALL_RESULT_CAP

@@ -8,6 +8,8 @@
   import { modelKey } from '$lib/model-keys'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import WorkerNamesSettings from './WorkerNamesSettings.svelte'
+  import TypesafeDecisionsCard from '../providers/TypesafeDecisionsCard.svelte'
+  import AuxiliaryAgentsPanel from '../providers/AuxiliaryAgentsPanel.svelte'
   import type {
     AgentDefaultsConfig,
     AgentModelSelection,
@@ -188,9 +190,8 @@
   <div class="mb-6">
     <h1 class="text-xl font-bold tracking-tight">Agents</h1>
     <p class="mt-0.5 text-sm text-muted">
-      Worker names, and the vision model that describes images for a thread whose model cannot read
-      them. Every worker a thread spawns now inherits that thread's own harness, account, model and
-      Oven, so there is no role model left to choose here.
+      How the agents read images, what runs their background work, and what the workers are called.
+      A worker inherits the thread's own harness, account, model and Oven.
     </p>
   </div>
 
@@ -207,9 +208,7 @@
       <div class="bg-primary/10 p-2 text-primary"><CioEye size={18} /></div>
       <div class="min-w-0 flex-1">
         <h2 class="text-sm font-semibold text-foreground">Image descriptor</h2>
-        <p class="mt-0.5 text-xs text-muted">
-          Vision model used to describe images for text-only models that cannot see them.
-        </p>
+        <p class="mt-0.5 text-xs text-muted">Describes images for models that cannot see them.</p>
         {#if !defaults.imageDescriptor}
           <p class="mt-1 text-[0.6875rem] text-dimmed">
             Not set · you'll be asked when you send an image
@@ -264,9 +263,7 @@
       <div class="bg-elevated p-2 text-muted"><CioRefresh size={18} /></div>
       <div class="min-w-0 flex-1">
         <h2 class="text-sm font-semibold text-foreground">Fallback</h2>
-        <p class="mt-0.5 text-xs text-muted">
-          Tried automatically when the primary vision model fails.
-        </p>
+        <p class="mt-0.5 text-xs text-muted">Used when the primary fails.</p>
         {#if !defaults.imageDescriptorFallback}
           <p class="mt-1 text-[0.6875rem] text-dimmed">
             Not set · primary failures ask you for a model
@@ -323,5 +320,12 @@
     </div>
   </section>
 
-  <WorkerNamesSettings {settingsReady} />
+  <div class="mt-6 space-y-6">
+    <TypesafeDecisionsCard />
+    <AuxiliaryAgentsPanel />
+  </div>
+
+  <div class="mt-6">
+    <WorkerNamesSettings {settingsReady} />
+  </div>
 </div>

@@ -4,10 +4,6 @@ import type { IncomingMessage, ServerResponse } from 'http'
 import { Logger } from '../../system/logger'
 import { AssignmentEngineError } from '../../../lib/engines/assignment-engine'
 import { validateBoundedString, validateEntityId } from '../../ipc/ipc-validation'
-import {
-  type DesignAssignmentRunRequest,
-  type DesignAssignmentRunResult
-} from '../../design/design-assignment-executor'
 import type { AgentMessage, AssignmentPlan, AuditReport, ThreadSettings } from '../../../lib/types'
 import { parseGeneratedAssignmentContent } from '../../../lib/assignment/assignment-validation'
 import type { AssignmentApiCapability } from './chat-engine-types'
@@ -68,53 +64,6 @@ export class ChatEngineAssignmentRun {
    * user picked, so a model that fails is reported as a failure rather than
    * quietly replaced.
    */
-  async runDesignAssignment(
-    request: DesignAssignmentRunRequest
-  ): Promise<DesignAssignmentRunResult> {
-    const selection = request.selection
-    const account = await this.host.state.accountRegistry.resolveForProvider(
-      selection.harnessId,
-      selection.providerId,
-      selection.accountId
-    )
-    const { driver, projectPath } = await this.host.resolve(
-      request.projectId,
-      selection.harnessId,
-      request.threadId,
-      account.id
-    )
-    const result = await driver.provideCheapModel(projectPath, {
-      settings: {
-        harnessId: selection.harnessId,
-        accountId: account.id,
-        providerId: selection.providerId,
-        modelId: selection.modelId,
-        inferenceMode: selection.inferenceMode,
-        contextWindow: selection.contextWindow,
-        thinkingLevel: selection.thinkingLevel ?? 'minimal',
-        permissionLevel: 'auto_review',
-        assignmentMode: false,
-        loopMode: false
-      },
-      purpose: `Design assignment: ${request.label}`,
-      prompt: request.prompt,
-      candidates: [{ providerId: selection.providerId, modelId: selection.modelId }]
-    })
-    const text = result.text?.trim()
-    if (!text) {
-      const failure = result.attempts.at(-1)?.failure
-      throw new Error(
-        `The model assigned to "${request.label}" (${selection.harnessId}/${selection.providerId}/${selection.modelId}) returned nothing.${failure ? ` ${failure}` : ' Check that the assigned model is available on that account, or assign a different model in Settings, Design.'}`
-      )
-    }
-    return {
-      text,
-      harnessId: selection.harnessId,
-      providerId: selection.providerId,
-      modelId: selection.modelId
-    }
-  }
-
   async startAssignment(
     projectId: string,
     coordinatorThreadId: string,

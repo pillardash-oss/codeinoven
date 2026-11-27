@@ -5,6 +5,12 @@ import { pathToFileURL } from 'node:url'
 import ts from 'typescript'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { piUtilityGatewayExtension } from '../../../src/main/drivers/pi-utility-gateway-extension'
+import {
+  CORE_GATEWAY_TOOL_NAMES,
+  PROCESS_LIST_TOOL_NAME,
+  PROCESS_START_TOOL_NAME,
+  PROCESS_STOP_TOOL_NAME
+} from '../../../src/lib/gateway-tools'
 
 /**
  * The generated pi extension is the only transport CodeInOven has for the
@@ -129,5 +135,39 @@ describe('generated pi gateway bridge', () => {
     const body = posted[0] ?? {}
     expect(body['inputs']).toEqual([{ utility_id: 'cio:gateway' }, { utility_id: 'cio:browser' }])
     expect(Object.keys(body)).not.toContain('utility_id')
+  })
+
+  /**
+   * A gateway tool the app grants but this extension never registers is a tool
+   * the model cannot call, while the prompt and the refusal message still name
+   * it. That is how a pi thread was refused every form of process stop and left
+   * its own probe instances running: the three process routes were granted on
+   * every turn, the shell block pointed at them by name, and none of them
+   * existed in the session.
+   */
+  it('registers every gateway tool the app grant set names', () => {
+    expect([...CORE_GATEWAY_TOOL_NAMES].filter((name) => !tools.has(name))).toEqual([])
+  })
+})
+
+describe('generated pi process tools', () => {
+  it('lists this thread’s processes with no arguments', async () => {
+    await tool(PROCESS_LIST_TOOL_NAME).execute('call-5', {})
+    expect(posted).toHaveLength(1)
+    expect(posted[0]).toEqual({})
+  })
+
+  it('starts a process with only the fields the model passed', async () => {
+    await tool(PROCESS_START_TOOL_NAME).execute('call-6', {
+      command: 'bun run dev:probe',
+      label: 'probe instance'
+    })
+    expect(posted[0]).toEqual({ command: 'bun run dev:probe', label: 'probe instance' })
+    expect(Object.keys(posted[0] ?? {})).not.toContain('cwd')
+  })
+
+  it('stops an owned pid by number', async () => {
+    await tool(PROCESS_STOP_TOOL_NAME).execute('call-7', { pid: 37337, force: true })
+    expect(posted[0]).toEqual({ pid: 37337, force: true })
   })
 })

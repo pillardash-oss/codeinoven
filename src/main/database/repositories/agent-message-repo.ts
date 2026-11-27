@@ -1044,21 +1044,70 @@ export class AgentMessageRepo {
     return runProviderDeltaSync(this.db, threadId, sessionId, messages)
   }
 
-  loadByThread(threadId: string): AgentMessage[] {
+  loadByThread(threadId: string, inheritsHistory = true): AgentMessage[] {
+    const source = this.pageSource(threadId, inheritsHistory)
     const rows = this.db.all<AgentMessageRow>(
-      `SELECT * FROM agent_messages
-       WHERE thread_id = ? AND session_id IS NULL
-         AND visibility IN ('conversation', 'working_trace')
-       ORDER BY created_at ASC`,
-      threadId
+      `${source.sql}
+        ORDER BY created_at ASC, id ASC`,
+      ...source.params
     )
     return rows.map((row) => rowToMessage(row))
+  }
+
+  /**
+   * The `FROM`/`WHERE` shape of a thread page read.
+   *
+   * A fork's transcript is its own rows plus its ancestors', which needs the
+   * recursive clause. Every other thread is a plain indexed read by thread id,
+   * and asking lineage about it costs a scan of the whole messages table, so the
+   * caller answers `inheritsHistory` from one indexed probe on
+   * `thread_checkpoints` (see `ThreadTranscriptStore.loadMessagePage`).
+   */
+  private pageSource(
+    threadId: string,
+    inheritsHistory: boolean,
+    visibility = "visibility IN ('conversation', 'working_trace')"
+  ): { sql: string; params: string[] } {
+    if (inheritsHistory) {
+      return {
+        sql: `${MESSAGE_LINEAGE_CTE}
+           SELECT ${MESSAGE_READ_COLUMNS_JOINED} ${MESSAGE_LINEAGE_FROM}
+             AND session_id IS NULL
+             AND ${visibility}`,
+        params: [threadId, threadId]
+      }
+    }
+    return {
+      sql: `SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages
+         WHERE session_id IS NULL
+           AND ${visibility}
+           AND ${MESSAGE_OWN_ROWS}`,
+      params: [threadId]
+    }
+  }
+
+  /**
+   * Whether this thread owns a fork checkpoint, i.e. inherits history.
+   *
+   * One indexed seek on `thread_checkpoints`. Callers pass the answer into the
+   * read builders so a thread that inherits nothing never pays the lineage
+   * shape, which visits every row of the messages table.
+   */
+  inheritsHistory(threadId: string): boolean {
+    const row = this.db.get<{ one: number }>(
+      `SELECT 1 AS one FROM thread_checkpoints
+        WHERE thread_id = ? AND kind = 'fork' AND parent_thread_id IS NOT NULL
+        LIMIT 1`,
+      threadId
+    )
+    return row !== undefined
   }
 
   loadPageByThread(
     threadId: string,
     before: ThreadMessageCursor | undefined,
-    limit: number
+    limit: number,
+    inheritsHistory = true
   ): ThreadMessagePage {
     // Backward pages are turn-aligned: a page carries at most `limit` trace/
     // assistant rows and extends down to the next older user-role row so the
@@ -1066,27 +1115,24 @@ export class AgentMessageRepo {
     // instead of slicing a working trace mid-turn. The scan cap bounds the work
     // for pathological single-turn histories (dozens of compaction windows).
     const scanCap = Math.max(limit * 4, limit + 40)
+    const source = this.pageSource(threadId, inheritsHistory)
     const rows = before
       ? this.db.all<AgentMessageRow>(
-          `SELECT * FROM agent_messages
-           WHERE thread_id = ? AND session_id IS NULL
-             AND visibility IN ('conversation', 'working_trace')
+          `${source.sql}
              AND (created_at < ? OR (created_at = ? AND id < ?))
            ORDER BY created_at DESC, id DESC
            LIMIT ?`,
-          threadId,
+          ...source.params,
           before.createdAt,
           before.createdAt,
           before.id,
           scanCap
         )
       : this.db.all<AgentMessageRow>(
-          `SELECT * FROM agent_messages
-           WHERE thread_id = ? AND session_id IS NULL
-             AND visibility IN ('conversation', 'working_trace')
+          `${source.sql}
            ORDER BY created_at DESC, id DESC
            LIMIT ?`,
-          threadId,
+          ...source.params,
           scanCap
         )
     // Walk newest → oldest and stop just past the first user-role row that has
@@ -1117,7 +1163,10 @@ export class AgentMessageRepo {
    */
   loadPageAroundByThread(threadId: string, anchorId: string, limit: number): ThreadMessagePage {
     const anchor = this.db.get<{ created_at: number }>(
-      'SELECT created_at FROM agent_messages WHERE thread_id = ? AND id = ?',
+      `${MESSAGE_LINEAGE_CTE}
+       SELECT agent_messages.created_at ${MESSAGE_LINEAGE_FROM}
+        AND agent_messages.id = ?`,
+      threadId,
       threadId,
       anchorId
     )
@@ -1125,12 +1174,14 @@ export class AgentMessageRepo {
 
     const half = Math.max(1, Math.floor(limit / 2))
     const olderRows = this.db.all<AgentMessageRow>(
-      `SELECT * FROM agent_messages
-       WHERE thread_id = ? AND session_id IS NULL
-         AND visibility IN ('conversation', 'working_trace')
-         AND (created_at < ? OR (created_at = ? AND id < ?))
-       ORDER BY created_at DESC, id DESC
-       LIMIT ?`,
+      `${MESSAGE_LINEAGE_CTE}
+       SELECT ${MESSAGE_READ_COLUMNS_JOINED} ${MESSAGE_LINEAGE_FROM}
+          AND session_id IS NULL
+          AND visibility IN ('conversation', 'working_trace')
+          AND (created_at < ? OR (created_at = ? AND id < ?))
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?`,
+      threadId,
       threadId,
       anchor.created_at,
       anchor.created_at,
@@ -1138,12 +1189,14 @@ export class AgentMessageRepo {
       half + 1
     )
     const newerRows = this.db.all<AgentMessageRow>(
-      `SELECT * FROM agent_messages
-       WHERE thread_id = ? AND session_id IS NULL
-         AND visibility IN ('conversation', 'working_trace')
-         AND (created_at > ? OR (created_at = ? AND id > ?))
-       ORDER BY created_at ASC, id ASC
-       LIMIT ?`,
+      `${MESSAGE_LINEAGE_CTE}
+       SELECT ${MESSAGE_READ_COLUMNS_JOINED} ${MESSAGE_LINEAGE_FROM}
+          AND session_id IS NULL
+          AND visibility IN ('conversation', 'working_trace')
+          AND (created_at > ? OR (created_at = ? AND id > ?))
+        ORDER BY created_at ASC, id ASC
+        LIMIT ?`,
+      threadId,
       threadId,
       anchor.created_at,
       anchor.created_at,
@@ -1152,9 +1205,11 @@ export class AgentMessageRepo {
     )
     const hasOlder = olderRows.length > half
     const hasNewer = newerRows.length > half
+    // The anchor may be an inherited message (a fork's parent row), which is why
+    // this read is by id alone: the lineage predicate above already proved the
+    // caller may see it.
     const anchorRow = this.db.get<AgentMessageRow>(
-      'SELECT * FROM agent_messages WHERE thread_id = ? AND id = ?',
-      threadId,
+      'SELECT * FROM agent_messages WHERE id = ?',
       anchorId
     )
     const rows = [
@@ -1389,12 +1444,98 @@ function afterCursor(after: ThreadMessageCursor | undefined): string {
  * shipping it across the worker port would roughly double every transcript
  * page's serialized payload.
  */
+/**
+ * The WITH clause that makes a fork's inherited history part of its transcript.
+ *
+ * A fork copies no rows: the parent thread is the one place its history lives. So
+ * a fork's transcript is its own rows plus the rows of every ancestor up to the
+ * message it was cut at, and a fork of a fork reaches its grandparent the same
+ * way. The boundary only ever moves backwards along a chain (a fork can only be
+ * cut at what its parent showed), so one cutoff — the leaf's — bounds every
+ * ancestor.
+ *
+ * `scope` is the read's driving table: the leaf itself (no cutoff) plus one row
+ * per ancestor with the cutoff that applies to it. It is deliberately a table
+ * rather than a predicate, because a predicate is what made this read cost a
+ * scan: `thread_id = ? OR EXISTS (...)` cannot be answered from
+ * `idx_agent_messages_thread_timeline`, so SQLite visited every row of a 134k-row,
+ * 850 MB messages table to return one page — measured at 4.1 s for a single
+ * fork page, against 6.7 ms once the ancestor list drives the same read.
+ *
+ * A thread reached by two paths (two fork checkpoints in one chain) appears
+ * twice in `lineage`. `scope` collapses it to one row per thread: an ancestor
+ * with any unbounded path stays unbounded, otherwise the widest cutoff wins,
+ * which is exactly the union of the prefixes those paths describe.
+ *
+ * The clause takes the leaf's thread id twice: once for the anchor, once for the
+ * scope. Non-fork threads pay one indexed probe that returns nothing.
+ */
+export const MESSAGE_LINEAGE_CTE = `WITH RECURSIVE lineage(thread_id, boundary_at) AS (
+  SELECT parent_thread_id, boundary_created_at FROM thread_checkpoints
+   WHERE thread_id = ? AND kind = 'fork' AND parent_thread_id IS NOT NULL
+  UNION
+  SELECT c.parent_thread_id,
+         CASE
+           WHEN l.boundary_at IS NULL THEN c.boundary_created_at
+           WHEN c.boundary_created_at IS NULL THEN l.boundary_at
+           ELSE min(l.boundary_at, c.boundary_created_at)
+         END
+    FROM thread_checkpoints c JOIN lineage l ON c.thread_id = l.thread_id
+   WHERE c.kind = 'fork' AND c.parent_thread_id IS NOT NULL
+), scope(thread_id, boundary_at) AS (
+  SELECT thread_id,
+         CASE WHEN count(*) = count(boundary_at) THEN max(boundary_at) END
+    FROM (SELECT ? AS thread_id, NULL AS boundary_at
+          UNION ALL
+          SELECT thread_id, boundary_at FROM lineage)
+   GROUP BY thread_id
+)`
+
+/**
+ * One thread's own rows, for a thread that inherits nothing.
+ *
+ * The lineage clause is the right answer for a fork and the wrong price for
+ * everything else. A thread only has inherited rows when it owns a fork
+ * checkpoint: the clause anchors on the leaf's own row, so a thread without one
+ * has an empty lineage no matter how many forks descend from it.
+ * `AgentMessageRepo.pageSource` decides between the two shapes with one indexed
+ * probe on `thread_checkpoints`.
+ */
+const MESSAGE_OWN_ROWS = 'thread_id = ?'
+
+/**
+ * The driving side of a lineage read: the leaf and its ancestors, then their rows.
+ *
+ * `CROSS JOIN` is load-bearing, not decoration. It pins `scope` to the outer
+ * loop, so each ancestor's rows come from one range seek on
+ * `idx_agent_messages_thread_timeline`. Without it SQLite is free to drive from
+ * `agent_messages` instead, which is the full-table scan this shape exists to
+ * avoid.
+ *
+ * The messages table is left unaliased on purpose: every builder below writes its
+ * columns unqualified, and `scope` is always the left side of the join.
+ */
+export const MESSAGE_LINEAGE_FROM = `FROM scope s CROSS JOIN agent_messages
+  WHERE agent_messages.thread_id = s.thread_id
+    AND (s.boundary_at IS NULL OR agent_messages.created_at <= s.boundary_at)`
+
 const MESSAGE_READ_COLUMNS = `id, thread_id, session_id, role, origin, visibility, parts,
   content_hash, transport_parts, transport_origin, model_id, provider_id, harness_id,
   account_id, account_label, oven_id, oven_label, oven_appearance_json,
   thinking_level, references_json, project_references_json, author, created_at, completed_at, cost,
   tokens_json, normalized_usage_json, rate_limits_json, usage_credits_json, context_window, context_used,
   context_estimated, generation_ms, error, structured_output`
+
+/**
+ * The same projection, qualified to the messages table.
+ *
+ * A lineage read joins `scope`, which carries a `thread_id` of its own, so an
+ * unqualified `thread_id` in the select list is ambiguous. Deriving the
+ * qualified list keeps one list of columns to maintain.
+ */
+const MESSAGE_READ_COLUMNS_JOINED = MESSAGE_READ_COLUMNS.split(',')
+  .map((column) => `agent_messages.${column.trim()}`)
+  .join(', ')
 
 /**
  * SQL for one bounded page of the mirrored conversation (parent-session rows),
@@ -1416,18 +1557,37 @@ export function buildLoadByThreadPageSql(
   }
 }
 
-/** SQL for one bounded page of parent-session records (incl. transport prompts). */
+/** SQL for one bounded page of parent-session records (incl. transport prompts).
+ *
+ * `inheritsHistory` is the same indexed answer `buildLoadPageSql` takes: only a
+ * thread that owns a fork checkpoint reads through the lineage clause. This
+ * builder runs on every turn (the mirror is merged with the driver's transcript
+ * before each send), so paying the lineage read for a thread that inherits
+ * nothing charged every turn in the app for a scan of the whole messages table.
+ */
 export function buildLoadAllPageSql(
   threadId: string,
-  after: ThreadMessageCursor | undefined
+  after: ThreadMessageCursor | undefined,
+  inheritsHistory: boolean
 ): { sql: string; params: unknown[] } {
-  const params: unknown[] = [threadId]
   const cursor = afterCursor(after)
-  if (after) params.push(after.createdAt, after.createdAt, after.id)
+  const cursorParams: unknown[] = after ? [after.createdAt, after.createdAt, after.id] : []
+  if (!inheritsHistory) {
+    return {
+      sql: `SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages
+       WHERE thread_id = ? AND session_id IS NULL${cursor}
+       ORDER BY created_at ASC, id ASC`,
+      params: [threadId, ...cursorParams]
+    }
+  }
   return {
-    sql: `SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages WHERE thread_id = ? AND session_id IS NULL${cursor}
-      ORDER BY created_at ASC, id ASC`,
-    params
+    // The whole transcript of a fork is its own rows plus the inherited ones, so
+    // a rebuilt session's recap reads the same conversation the user sees.
+    sql: `${MESSAGE_LINEAGE_CTE}
+      SELECT ${MESSAGE_READ_COLUMNS_JOINED} ${MESSAGE_LINEAGE_FROM}
+        AND session_id IS NULL${cursor}
+       ORDER BY created_at ASC, id ASC`,
+    params: [threadId, threadId, ...cursorParams]
   }
 }
 
@@ -1553,21 +1713,38 @@ export function buildSaveSubagentStatements(
   return statements
 }
 
-/** SQL for one bounded page (newest first, cursor-based), no LIMIT. */
+/**
+ * SQL for one bounded page (newest first, cursor-based), no LIMIT.
+ *
+ * `inheritsHistory` is the caller's indexed answer to "does this thread own a
+ * fork checkpoint" (see `AgentMessageRepo.inheritsHistory`). It decides between
+ * the lineage shape, which is the only correct read for a fork, and the plain
+ * threaded read, which is the only fast one everywhere else.
+ */
 export function buildLoadPageSql(
   threadId: string,
-  before: ThreadMessageCursor | undefined
+  before: ThreadMessageCursor | undefined,
+  inheritsHistory: boolean
 ): { sql: string; params: unknown[] } {
-  const params: unknown[] = [threadId]
   const cursor = before ? ` AND (created_at < ? OR (created_at = ? AND id < ?))` : ''
-  if (before) {
-    params.push(before.createdAt, before.createdAt, before.id)
+  const cursorParams: unknown[] = before ? [before.createdAt, before.createdAt, before.id] : []
+  if (!inheritsHistory) {
+    return {
+      sql: `SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages
+         WHERE session_id IS NULL
+           AND visibility IN ('conversation', 'working_trace')
+           AND ${MESSAGE_OWN_ROWS}${cursor}
+         ORDER BY created_at DESC, id DESC`,
+      params: [threadId, ...cursorParams]
+    }
   }
   return {
-    sql: `SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages
-      WHERE thread_id = ? AND session_id IS NULL
-        AND visibility IN ('conversation', 'working_trace')${cursor}
-      ORDER BY created_at DESC, id DESC`,
-    params
+    sql: `${MESSAGE_LINEAGE_CTE}
+      SELECT ${MESSAGE_READ_COLUMNS_JOINED} ${MESSAGE_LINEAGE_FROM}
+         AND session_id IS NULL
+         AND visibility IN ('conversation', 'working_trace')${cursor}
+       ORDER BY created_at DESC, id DESC`,
+    // The clause names the leaf twice, then the cursor continues the page.
+    params: [threadId, threadId, ...cursorParams]
   }
 }

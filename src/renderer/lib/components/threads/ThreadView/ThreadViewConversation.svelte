@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ThreadView as ThreadViewBoard } from './ThreadView-board.svelte'
+  import { perfSpan } from '$lib/perf-trace'
   import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
@@ -101,6 +102,20 @@
 
   /** The board the surface built, and the few values only it can build. */
   let { board }: { board: ThreadViewBoard } = $props()
+
+  /**
+   * What the transcript costs to build.
+   *
+   * It sits inside the thread's shell (`thread.shell`), and on its own it is the
+   * difference between a thread that appears and a thread that appears with its
+   * conversation in it. Timed to the moment its scroller is in the tree.
+   */
+  const buildSpan = perfSpan('thread.conversation')
+
+  /** The transcript's scroller is in the tree: its build is done. */
+  function conversationBuilt(): void {
+    buildSpan.end('ok', { threadId: board.handleAgentEvent.thread.id })
+  }
 
   /**
    * The run thread a receipt belongs to, when this conversation is one.
@@ -441,6 +456,7 @@
   role="log"
   aria-label="Conversation"
   data-region={board.submitSpecDecision.showSpecStudio ? undefined : 'conversation'}
+  {@attach conversationBuilt}
 >
   <div
     class="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6"

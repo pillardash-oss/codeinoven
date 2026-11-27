@@ -8,6 +8,7 @@ import {
   THREAD_GROUP_MARK,
   THREAD_STATE_MARKS
 } from '$lib/components/threads/thread-state-marks'
+import { scopeState } from '$lib/stores/scope.svelte'
 
 // The row asks the live agent-run store whether a thread is working. These tests
 // drive that one question directly, so a fixture can be "working" without a real
@@ -550,5 +551,94 @@ describe('ThreadRow, the detailed spine row', () => {
 
     unmount(app)
     waiting.queue.length = 0
+  })
+
+  /** A pawn worker of `t1`: a thread of its own, owned by the row under test. */
+  function workerThread(over: Partial<Thread> = {}): Thread {
+    return thread({
+      id: 'w1',
+      coordinatorThreadId: 't1',
+      userInputLocked: true,
+      status: 'executing',
+      sessionId: 's2',
+      ...over
+    })
+  }
+
+  it('waits on its workers rather than spinning when its own turn is parked', async () => {
+    // The Sr. Engineer row is idle between dispatches while its pawn still runs.
+    // Nothing is being produced on this thread, so a climbing spine would claim
+    // work that is happening somewhere else: the row wears the held spine and the
+    // robot says what it is waiting for.
+    scopeState.allScopeThreads = [workerThread()]
+    const { target, app } = render(thread({ status: 'completed' }))
+    await tick()
+
+    expect(target.querySelector('[aria-label="Waiting on sub-agents"]')).not.toBeNull()
+    expect(target.querySelector('[aria-label="Working"]')).toBeNull()
+
+    unmount(app)
+    scopeState.allScopeThreads = []
+  })
+
+  it('goes back to working the moment its own turn resumes', async () => {
+    // Same worker still running, but the parent is producing again: the wait is
+    // over, and the row says so with the working mark it had before.
+    scopeState.allScopeThreads = [workerThread()]
+    runs.busy.add('p1:t1')
+    const { target, app } = render(thread({ status: 'executing', sessionId: 's1' }))
+    await tick()
+
+    expect(target.querySelector('[aria-label="Waiting on sub-agents"]')).toBeNull()
+    expect(target.querySelector('[aria-label="Working"]')).not.toBeNull()
+
+    unmount(app)
+    runs.busy.delete('p1:t1')
+    scopeState.allScopeThreads = []
+  })
+})
+
+/**
+ * The thread the user has open, when it is also wearing a state that wants them.
+ *
+ * A failed row tints its own ground, and that tint is an inline style, which beats
+ * any class a row carries. Mixed over nothing, it erased the selection fill: the
+ * pawn board's open thread read exactly like every other failed pawn, and the
+ * reader could not tell which row the conversation was in.
+ */
+describe('ThreadRow, the open thread with a state of its own', () => {
+  function rowButton(target: HTMLElement): HTMLElement {
+    const button = target.querySelector<HTMLElement>('[data-thread-row="t1"] > button')
+    expect(button).not.toBeNull()
+    return button as HTMLElement
+  }
+
+  it('keeps the selection ground under the danger tint', async () => {
+    const { target, app } = render(thread({ status: 'failed' }), { selected: true })
+    await tick()
+
+    // The tint mixes over the ground the row already has, so both facts survive.
+    expect(rowButton(target).getAttribute('style')).toContain('var(--color-selected)')
+    unmount(app)
+  })
+
+  it('draws the selection with its own mark, never only with a fill', async () => {
+    const { target, app } = render(thread({ status: 'failed' }), { selected: true })
+    await tick()
+
+    // A ring is the cue that survives whatever colour the state paints, and it is
+    // drawn inset so it cannot change the row's size in a column of rows.
+    expect(rowButton(target).className).toContain('ring-inset')
+    unmount(app)
+  })
+
+  it('tints a row that is not the open one over nothing', async () => {
+    const { target, app } = render(thread({ status: 'failed' }))
+    await tick()
+
+    const style = rowButton(target).getAttribute('style') ?? ''
+    expect(style).toContain('transparent')
+    expect(style).not.toContain('var(--color-selected)')
+    unmount(app)
   })
 })

@@ -23,7 +23,6 @@ import {
   type PendingOrchestrationDispatch
 } from '../chat-engine-orchestration'
 import { awaitDelegationOutcome } from '../delegation/delegation-report-grace'
-import { deliverDelegationReport } from '../delegation/delegation-report-delivery'
 import { legacyHarnessAccountId } from '../../providers/harness-account-registry'
 import type { ResolvedImageEntry } from '../../providers/image-descriptor-provider'
 import type {
@@ -693,11 +692,16 @@ export class ChatEngineTurnsDispatch {
           return runThread?.status ?? null
         },
         {
-          // A parked thread with a retry already scheduled is not a failure: the
-          // retry's own settle reports for it.
-          isRetryPending: () =>
-            runThreadSessionId !== undefined &&
-            this.host.state.retryScheduler?.getPendingRetry(runThreadSessionId) !== undefined
+          // A run whose retry arrives in moments is not a failure: the retry's
+          // own settle reports for it. A run parked until next week is reported
+          // now, so nobody is left believing it is still working.
+          retryAt: () => {
+            const record =
+              runThreadSessionId === undefined
+                ? undefined
+                : this.host.state.retryScheduler?.getPendingRetry(runThreadSessionId)
+            return record?.retryAt ?? record?.resetAt
+          }
         }
       )
       // A retry owns the run thread now. The dispatch stays pending, so whichever
@@ -709,22 +713,14 @@ export class ChatEngineTurnsDispatch {
         dispatch.requestingThreadId
       )
       if (!thread?.settings) return
-      const reportingSettings = thread.settings
-      await deliverDelegationReport(() =>
-        this.host.sendPrompt(
-          dispatch.requestingProjectId,
-          dispatch.requestingThreadId,
-          reportingSettings,
-          buildOrchestrationReportPrompt(dispatch, verdict.status),
-          [],
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          'internal'
-        )
-      )
+      await this.host.units['delegation-reports'].enqueue({
+        projectId: dispatch.requestingProjectId,
+        threadId: dispatch.requestingThreadId,
+        kind: 'dispatch',
+        text: buildOrchestrationReportPrompt(dispatch, verdict.status),
+        action: `Dispatched run ${verdict.status} · ${dispatch.runThreadId}`.slice(0, 120),
+        body: `${dispatch.runThreadId} · ${verdict.status}`
+      })
     } catch (error) {
       Logger.dev('Orchestration dispatch report skipped:', error)
     }

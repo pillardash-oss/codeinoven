@@ -116,7 +116,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
     // A video session works the same way: the user opened it, so the edit pass
     // travels with the turn and both operations are callable from the first
     // token. Its craft notes are a constant, but the paragraph about the models
-    // the user staffed is resolved from live settings, because the same experts
+    // the user staffed is resolved from live settings, because the same
     // staff a composition and a design.
     if (request.videoSession && request.videoSession !== 'off') {
       const video = eligible.find(({ utility }) => utility.id === APP_VIDEO_UTILITY_ID)

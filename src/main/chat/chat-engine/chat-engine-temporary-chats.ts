@@ -34,6 +34,7 @@ import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/ipc/browser'
 import { messageId as createMessageId } from '../../../lib/id'
 import type { TemporaryChatDisplayRecord, TemporaryChatSession } from './chat-engine-types'
 import { TemporaryChatCancelledError, rawErrorDetail } from './chat-engine-errors'
+import { mergeHeldSteerPayload } from './chat-engine-held-steer-merge'
 import { presentableMessages, stampHarnessId } from './chat-engine-message-merge'
 import {
   formatHistoryRecap,
@@ -509,7 +510,7 @@ export class ChatEngineTemporaryChats {
     settings = validateThreadSettings(settings)
     text = validateBoundedString(text, 'Prompt', 0, 200_000)
     const validatedReferences = validatePromptReferences(references)
-    const safeDisplayText = displayText
+    let safeDisplayText = displayText
       ? validateBoundedString(displayText, 'Display text', 1, 200_000)
       : text
     if (!Array.isArray(attachments)) {
@@ -518,7 +519,7 @@ export class ChatEngineTemporaryChats {
     if (attachments.length > MAX_PROMPT_ATTACHMENTS) {
       throw new TypeError(`Attach at most ${MAX_PROMPT_ATTACHMENTS} files per message`)
     }
-    const validatedAttachments = attachments.map((attachment) => {
+    const validatedAttachments: PromptAttachment[] = attachments.map((attachment) => {
       const url = validateBoundedString(attachment.url, 'Attachment URL', 1, 20_000)
       const mime = validateBoundedString(attachment.mime, 'Attachment MIME', 1, 512)
       return {
@@ -561,6 +562,9 @@ export class ChatEngineTemporaryChats {
       throw new Error('The quick chat turn finished before the steer message could be delivered')
     }
     this.refreshTemporaryChatExpiry(temporary)
+    const steerUserMessageId = userMessageId
+      ? validateBoundedString(userMessageId, 'User message ID', 1, 128)
+      : createMessageId()
 
     const driver = this.host.units['turns-dispatch'].driverForRuntime(
       temporary.driverId,
@@ -577,14 +581,43 @@ export class ChatEngineTemporaryChats {
     if (!text && !referenceBlock && validatedAttachments.length === 0) {
       throw new TypeError('A temporary chat message needs text, an attachment, or a comment')
     }
+    // An earlier steer still held for its undo window never reached the
+    // harness either: fold it into this message so both rows settle as one
+    // steer instead of the last one quietly replacing the first. This runs
+    // only after the steer is known to be deliverable, so a refused steer never
+    // costs the words still waiting in an earlier one.
+    const heldPayload = await this.host.units['turns-steer'].takeHeldSteerForMerge(
+      temporary.sessionId,
+      { projectId, conversationId: temporaryChatId, kind: 'temporary' }
+    )
+    if (heldPayload) {
+      const merged = mergeHeldSteerPayload(heldPayload, {
+        text: safeDisplayText,
+        promptText: text,
+        attachments: validatedAttachments,
+        promptReferences: validatedReferences,
+        projectReferences: [],
+        taskReferences: []
+      })
+      safeDisplayText = merged.text
+      text = merged.promptText ?? merged.text
+      validatedAttachments.splice(0, validatedAttachments.length, ...merged.attachments)
+      validatedReferences.splice(0, validatedReferences.length, ...merged.promptReferences)
+      // The side chat has no confirmed-message reply to rewrite the bubble
+      // with, so the folded text is announced directly: the surviving row says
+      // both messages while the earlier one is already removed.
+      this.host.broadcast({
+        type: 'steer.merged',
+        sessionId: temporary.sessionId,
+        userMessageId: steerUserMessageId,
+        text: safeDisplayText
+      })
+    }
     const promptText = referenceBlock
       ? text
         ? `${referenceBlock}\n\nUser request:\n${text}`
         : referenceBlock
       : text
-    const steerUserMessageId = userMessageId
-      ? validateBoundedString(userMessageId, 'User message ID', 1, 128)
-      : createMessageId()
     // Threads register steered outbound IDs so the live `message.part.updated`
     // echo never overwrites the display record; temporary steers skipped this.host,
     // letting the full transport prompt ghost into the conversation.
@@ -627,6 +660,14 @@ export class ChatEngineTemporaryChats {
         conversationId: temporaryChatId,
         userMessageId: steerUserMessageId,
         kind: 'temporary',
+        payload: {
+          text: safeDisplayText,
+          promptText: text,
+          attachments: validatedAttachments,
+          promptReferences: validatedReferences,
+          projectReferences: [],
+          taskReferences: []
+        },
         deliverMidTurn: deliverTemporarySteer,
         deliverAfterTurn: async () => {
           // The turn ended while the steer was held   send as the next turn.

@@ -32,15 +32,9 @@ import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-se
 import { type AgentSecretResolution } from '../utilities/agent-secret-service'
 import { type OrchestrationRuntime } from './chat-engine-orchestration'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
-import { type EffectiveExperts } from '../../lib/experts'
 import type { ThreadOpenDigest } from '../../lib/ipc/invoke-thread'
-import type { ExpertSettingsService } from '../design/expert-settings-service'
 import { McpOAuthService } from '../utilities/mcp-oauth/mcp-oauth-service'
 import type { ReapOrphansOptions, ReapOrphansResult } from '../agents/agent-process-service'
-import {
-  type DesignAssignmentRunRequest,
-  type DesignAssignmentRunResult
-} from '../design/design-assignment-executor'
 import type { AssignmentWorkerScopeProvisioner } from '../../lib/engines/assignment-worker-scope'
 import type {
   BrowserUtilityExecutor,
@@ -500,20 +494,11 @@ export class ChatEngine {
   setFollowUpExecutor(executor: FollowUpExecutor | null): void {
     return this.units['utilities'].setFollowUpExecutor(executor)
   }
-  setExpertSettings(settings: ExpertSettingsService | null): void {
-    return this.units['utilities-mcp'].setExpertSettings(settings)
-  }
-  async expertsForThread(threadId: string): Promise<EffectiveExperts> {
-    return this.units['utilities-mcp'].expertsForThread(threadId)
-  }
   setDesignPreviewExecutor(executor: DesignCapabilityExecutor | null): void {
     return this.units['media-visual'].setDesignPreviewExecutor(executor)
   }
   setDesignMediaExecutor(executor: DesignCapabilityExecutor | null): void {
     return this.units['media-visual'].setDesignMediaExecutor(executor)
-  }
-  setMediaGenerationExecutor(executor: DesignCapabilityExecutor | null): void {
-    return this.units['media-visual'].setMediaGenerationExecutor(executor)
   }
   setVideoPreviewExecutor(executor: VideoCapabilityExecutor | null): void {
     return this.units['media-visual'].setVideoPreviewExecutor(executor)
@@ -655,6 +640,10 @@ export class ChatEngine {
   }
   async refreshAcpHarnesses(): Promise<void> {
     return this.units['providers-catalog'].refreshAcpHarnesses()
+  }
+  /** Replace an ACP agent's process after a sign-in, so it reads the new credentials. */
+  async restartAcpAgent(harnessId: string): Promise<void> {
+    return this.units['providers-catalog'].restartAcpAgent(harnessId)
   }
   async restartHarnessRuntime(
     harnessId: string,
@@ -968,7 +957,16 @@ export class ChatEngine {
     /** Persist this internal prompt as a visible user turn. Used by the
      *  Assignment worker dispatch so the task that started a worker reads as
      *  the first user prompt in its conversation. */
-    visiblePrompt = false
+    visiblePrompt = false,
+    /**
+     * Start a new turn even when the session's row still says it is working.
+     *
+     * A delegated report is news, not the user speaking into the live turn. It
+     * must never be steered into a running turn   on a one-process-per-turn
+     * harness that steer kills the turn to append one line   so the report queue
+     * delivers it as the parent's next turn instead.
+     */
+    deliverAsNewTurn = false
   ): Promise<AgentMessage> {
     // A user turn may not start on a machine that has no room for it. The window
     // parks the message before it gets here, so this is the guard for every other
@@ -993,7 +991,8 @@ export class ChatEngine {
       origin,
       presentation,
       taskReferences,
-      visiblePrompt
+      visiblePrompt,
+      deliverAsNewTurn
     )
   }
   async sendTemporaryPrompt(
@@ -1134,11 +1133,6 @@ export class ChatEngine {
     selection: AgentModelSelection
   ): Promise<ImageDescriptorBatchCapability> {
     return this.units['utilities-gateway'].imageDescriptorBatchCapability(request, selection)
-  }
-  async runDesignAssignment(
-    request: DesignAssignmentRunRequest
-  ): Promise<DesignAssignmentRunResult> {
-    return this.units['assignment-run'].runDesignAssignment(request)
   }
   async abort(
     projectId: string,
@@ -1341,6 +1335,21 @@ export class ChatEngine {
   static readonly PAWN_RUN_TIMEOUT_MS = 60 * 60_000
   async runPawnTool(input: Record<string, unknown>, context: PawnToolContext): Promise<unknown> {
     return this.units['assignment-workers'].runPawnTool(input, context)
+  }
+  /** Run a pawn agent again from its own thread, without a conversation. */
+  async retryPawnRun(projectId: string, threadId: string, picked?: ThreadSettings): Promise<void> {
+    return this.units['assignment-workers'].retryPawnRun(projectId, threadId, picked)
+  }
+  /** Whether an open pawn thread is running, and the failure it ended on. */
+  async pawnRunState(
+    projectId: string,
+    threadId: string
+  ): Promise<{ pawn: boolean; running: boolean; failure: string | null }> {
+    return this.units['assignment-workers'].pawnRunState(projectId, threadId)
+  }
+  /** Settle the pawn runs a crash left with a card that still says running. */
+  async repairStrandedPawnRuns(projectId: string, spawnerThreadId: string): Promise<void> {
+    return this.units['assignment-workers'].repairStrandedPawnRuns(projectId, spawnerThreadId)
   }
   async runEngineeringTool(
     operation: EngineeringToolOperation,
@@ -1551,6 +1560,20 @@ export class ChatEngine {
     threadId: string
   ): Promise<HarnessSessionMoveResult> {
     return this.units['turns-sessions'].moveSessionToNewHost(projectId, threadId)
+  }
+
+  /**
+   * Check the thread in: close its session and continue on a successor.
+   *
+   * This is the user-facing `/checkpoint`. It is its own entry point rather than
+   * an alias for `compactSession` so a refused checkpoint reports itself instead
+   * of silently falling back to a harness compaction the user did not ask for.
+   */
+  async checkpointSession(projectId: string, threadId: string): Promise<void> {
+    const successor = await this.units['checkpoints'].checkpointNow(projectId, threadId)
+    if (!successor) {
+      throw new Error('This thread could not be checked in. Give it a turn first, then try again.')
+    }
   }
 
   async compactSession(projectId: string, threadId: string): Promise<void> {

@@ -2,6 +2,7 @@
   import type { ThreadView as ThreadViewBoard } from './ThreadView-board.svelte'
   import type { ComposerShoeData } from '../../chats/ComposerShoe.svelte'
   import type { ActionDefinition } from '$lib/actions'
+  import { perfSpan } from '$lib/perf-trace'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import { fly, slide } from 'svelte/transition'
@@ -15,7 +16,7 @@
   import CardNotice from '../../shared/CardNotice.svelte'
   import { cardArrive, dismissSlide } from '../../shared/card-motion'
   import AgentTodoCard from '../AgentTodoCard.svelte'
-  import ComposerQueuedCard from '../ComposerQueuedCard.svelte'
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import { queuedResourceWait } from '$lib/stores/queued-resource-wait.svelte'
   import AgentQuestionCard from '../DeferredAgentQuestionCard.svelte'
   import AgentSecretCard from '../AgentSecretCard.svelte'
@@ -37,7 +38,6 @@
   import AuditReadyCard from '../AuditReadyCard.svelte'
   import AuditGeneratedCard from '../AuditGeneratedCard.svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { providerStore } from '$lib/stores/providers.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import AssistantRecapCard from '$lib/components/assistant/AssistantRecapCard.svelte'
   import AssistantReadyCard from '$lib/components/assistant/AssistantReadyCard.svelte'
@@ -48,7 +48,6 @@
   import { dismissedTodo } from '$lib/stores/dismissed-todo.svelte'
   import { assistantIsScheduled } from '$shared/types'
   import { APP_NAME } from '$shared/brand'
-  import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { harnessDisplayName } from '../thread-message-presentation'
 
   /** The board the surface built, and the few values only it can build. */
@@ -63,6 +62,25 @@
     activeActions: ActionDefinition[]
     compactionFold: { readonly folded: boolean }
   } = $props()
+
+  /**
+   * What the composer itself costs to build.
+   *
+   * The composer is most of a thread's shell, and "creating a blank thread is
+   * slow" is about this number: a new thread's pane cannot paint until its
+   * composer exists. Timed from the component's first line to the moment its
+   * root element is in the tree, so the trace can say whether the shell's cost
+   * is the composer or the conversation it sits beside.
+   */
+  const buildSpan = perfSpan('thread.composer')
+
+  /** The composer's root is in the tree: its build is done. */
+  function composerBuilt(): void {
+    buildSpan.end('ok', {
+      threadId: board.handleAgentEvent.thread.id,
+      centered: board.composerScope.centeredComposer
+    })
+  }
 
   /**
    * The thread this conversation was forked from, shown above the composer the
@@ -81,47 +99,86 @@
   $effect(() => {
     forkOrigins.ensure(board.handleAgentEvent.thread.projectId, board.handleAgentEvent.thread.id)
   })
+
+  /**
+   * The pawn controls the locked card carries, or undefined for any other
+   * coordinated thread.
+   *
+   * A pawn takes no user prompt, so the card that replaces the composer is the
+   * only place its failed run can be read and retried. Nothing else belongs
+   * there.
+   */
+  const pawnControls = $derived.by(() => {
+    if (board.currentWorkingTraceAttribution.coordinatedThreadKind !== 'pawn') return undefined
+    const thread = board.handleAgentEvent.thread
+    return {
+      projectId: thread.projectId,
+      // Any settle, stop, error or retry moves one of these, so the card re-reads
+      // the run instead of trusting what it saw when it mounted.
+      refreshKey: `${thread.status}:${thread.updatedAt}:${thread.lastErrorAt ?? ''}:${
+        board.handleAgentEvent.providerStatus?.state ?? ''
+      }`,
+      // The retry runs on the pawn's own thread settings, and the card's picker
+      // writes them: a pawn that died on a rate limit, a paused provider or the
+      // wrong model is retried on the model and thinking level chosen here.
+      settings: board.loadOlderMessages.settings,
+      providers: board.currentWorkingTraceAttribution.providers,
+      favoriteModels: rendererRecovery.favoriteModels,
+      recentModels: rendererRecovery.recentModels,
+      onModelChange: board.currentWorkingTraceAttribution.changeThreadModel,
+      onRemoveRecent: (key: string) => rendererRecovery.removeRecentModel(key),
+      onToggleFavorite: (providerId: string, modelId: string, harnessId: string) =>
+        rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId)),
+      onReorderFavorite: (draggedKey: string, targetKey: string, position: 'before' | 'after') =>
+        rendererRecovery.reorderFavorite(draggedKey, targetKey, position)
+    }
+  })
 </script>
 
 <!-- One queued-message card, rendered in two places: over the bottom chrome in
-     every layout, and inside the composer's own column in the centered one. -->
+     every layout, and inside the composer's own column in the centered one.
+     A card only exists once the user has queued something, so its chunk loads at
+     that moment instead of riding the first screen; the wait is one cached file
+     read behind an already-visible card slot. -->
 {#snippet queuedMessageCard()}
-  <ComposerQueuedCard
-    text={board.steerQueuedMessage.queuedMessage}
-    hasContent={board.steerQueuedMessage.queuedHasContent}
-    attachments={board.steerQueuedMessage.queuedAttachments}
-    previewUrls={board.studioTemporaryChatContext.attachmentPreview.urls}
-    queue={board.unmirroredTraceStartTime.queuedRows}
-    promptReferences={board.steerQueuedMessage.queuedPromptReferences}
-    presentation={board.steerQueuedMessage.queuedPresentation}
-    startAfterThreads={board.steerQueuedMessage.queuedStartAfterThreads}
-    resourceWait={queuedResourceWait.for(
-      board.handleAgentEvent.thread.projectId,
-      board.handleAgentEvent.thread.id
-    )?.decision ?? null}
-    delivering={board.steerQueuedMessage.queuedDelivering}
-    resourceWaitTarget={queuedResourceWait.for(
-      board.handleAgentEvent.thread.projectId,
-      board.handleAgentEvent.thread.id
-    )?.target ?? null}
-    steerModifierLabel={board.state.steerModifierLabel}
-    threadId={board.handleAgentEvent.thread.id}
-    stackedAbove={board.unmirroredTraceStartTime.stackedAboveSlot('queued')}
-    onPreviewAttachment={board.studioTemporaryChatContext.openQueuedAttachment}
-    onSteer={() => void board.steerQueuedMessage.steerQueuedMessage()}
-    onSendQueued={(id) => void board.steerQueuedMessage.steerQueuedMessage(id)}
-    onEdit={board.steerQueuedMessage.editQueuedMessage}
-    onEditQueued={board.steerQueuedMessage.editQueuedMessage}
-    onDelete={board.steerQueuedMessage.deleteQueuedMessage}
-    onDeleteQueued={board.steerQueuedMessage.deleteQueuedMessage}
-    onDeleteAll={board.steerQueuedMessage.deleteAllQueuedMessages}
-    onReorder={board.steerQueuedMessage.moveQueuedMessage}
-    onAddStartAfter={() => (board.state.queuedStartAfterPickerOpen = true)}
-    onRemoveStartAfter={(dependency) =>
-      (board.steerQueuedMessage.queuedStartAfterPendingRemoval = dependency)}
-    onOpenStartAfter={(id) => void board.unmirroredTraceStartTime.openStartAfterThread(id)}
-    onPreloadStartAfter={board.unmirroredTraceStartTime.preloadStartAfterThread}
-  />
+  {#await loadCachedPanelModule('module:lib/components/threads/ComposerQueuedCard.svelte', () => import('../ComposerQueuedCard.svelte')) then { default: ComposerQueuedCard }}
+    <ComposerQueuedCard
+      text={board.steerQueuedMessage.queuedMessage}
+      hasContent={board.steerQueuedMessage.queuedHasContent}
+      attachments={board.steerQueuedMessage.queuedAttachments}
+      previewUrls={board.studioTemporaryChatContext.attachmentPreview.urls}
+      queue={board.unmirroredTraceStartTime.queuedRows}
+      promptReferences={board.steerQueuedMessage.queuedPromptReferences}
+      presentation={board.steerQueuedMessage.queuedPresentation}
+      startAfterThreads={board.steerQueuedMessage.queuedStartAfterThreads}
+      resourceWait={queuedResourceWait.for(
+        board.handleAgentEvent.thread.projectId,
+        board.handleAgentEvent.thread.id
+      )?.decision ?? null}
+      delivering={board.steerQueuedMessage.queuedDelivering}
+      resourceWaitTarget={queuedResourceWait.for(
+        board.handleAgentEvent.thread.projectId,
+        board.handleAgentEvent.thread.id
+      )?.target ?? null}
+      steerModifierLabel={board.state.steerModifierLabel}
+      threadId={board.handleAgentEvent.thread.id}
+      stackedAbove={board.unmirroredTraceStartTime.stackedAboveSlot('queued')}
+      onPreviewAttachment={board.studioTemporaryChatContext.openQueuedAttachment}
+      onSteer={() => void board.steerQueuedMessage.steerQueuedMessage()}
+      onSendQueued={(id) => void board.steerQueuedMessage.steerQueuedMessage(id)}
+      onEdit={board.steerQueuedMessage.editQueuedMessage}
+      onEditQueued={board.steerQueuedMessage.editQueuedMessage}
+      onDelete={board.steerQueuedMessage.deleteQueuedMessage}
+      onDeleteQueued={board.steerQueuedMessage.deleteQueuedMessage}
+      onDeleteAll={board.steerQueuedMessage.deleteAllQueuedMessages}
+      onReorder={board.steerQueuedMessage.moveQueuedMessage}
+      onAddStartAfter={() => (board.state.queuedStartAfterPickerOpen = true)}
+      onRemoveStartAfter={(dependency) =>
+        (board.steerQueuedMessage.queuedStartAfterPendingRemoval = dependency)}
+      onOpenStartAfter={(id) => void board.unmirroredTraceStartTime.openStartAfterThread(id)}
+      onPreloadStartAfter={board.unmirroredTraceStartTime.preloadStartAfterThread}
+    />
+  {/await}
 {/snippet}
 
 <!-- The bottom chrome takes the composer's own rung (z-40). A card here answers
@@ -133,6 +190,7 @@
   class="bottom-chrome relative z-40 {board.composerScope.centeredComposer
     ? 'flex min-h-0 flex-1 flex-col justify-center'
     : 'shrink-0'}"
+  {@attach composerBuilt}
 >
   {#if board.loadOlderMessages.userScrolledAway}
     <!-- Bottom-anchored chrome, so it exists only while the reader is away
@@ -221,7 +279,9 @@
             sourceLabel={item.task.workerName ?? item.worker.title}
             sourceDetail={item.task.title}
             retryLabel="Retry worker"
-            retrying={board.submitBrainstormDecision.assignmentWorkerRetryingId === item.worker.id}
+            retrying={board.submitBrainstormDecision.assignmentWorkerRetryingIds.has(
+              item.worker.id
+            )}
             stackedAbove={index > 0}
             joinsBelow
             threadId={board.handleAgentEvent.thread.id}
@@ -1014,6 +1074,7 @@
                 coordinatorTitle={board.currentWorkingTraceAttribution.coordinatorParentThread
                   ?.title}
                 stackedAbove={board.unmirroredTraceStartTime.stackedAboveSlot('locked')}
+                pawn={pawnControls}
                 onOpenCoordinator={board.currentWorkingTraceAttribution.openCoordinatorParent}
               />
             {:else if board.switchProject.assistantRecapInComposer && board.switchProject.assistantDraft}
@@ -1126,12 +1187,9 @@
                   usageRefreshing={board.contextUsage.accountUsageCache.refreshing}
                   harnessUsage={board.harnessUsage.harnessUsage}
                   accountLimit={board.contextUsage.shoeLimit}
-                  canCompact={supportsManualCompaction(
-                    board.loadOlderMessages.settings.harnessId,
-                    providerStore.providers
-                  ) && !board.switchProject.busy}
+                  canCompact={!board.switchProject.busy}
                   compacting={board.switchProject.compacting}
-                  onCompact={() => void board.switchProject.compactWork()}
+                  onCompact={() => void board.switchProject.checkpointWork()}
                   onActivateBankedReset={() => {
                     board.state.showBankedResetConfirm = true
                   }}

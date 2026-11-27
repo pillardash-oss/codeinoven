@@ -5,12 +5,13 @@ import CioBookmark from '@pdslng/cio-icon/CioBookmark.svelte'
 import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
 import CioEyeOff from '@pdslng/cio-icon/CioEyeOff.svelte'
 import CioFork from '@pdslng/cio-icon/CioFork.svelte'
-import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
 import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
 import CioPin from '@pdslng/cio-icon/CioPin.svelte'
 import CioPinOff from '@pdslng/cio-icon/CioPinOff.svelte'
 import CioSend from '@pdslng/cio-icon/CioSend.svelte'
+import CioCircle from '@pdslng/cio-icon/CioCircle.svelte'
 import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
+import { THREAD_GROUP_MARK } from '$lib/components/threads/thread-state-marks'
 import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
 import { copyText } from '$lib/copy-text'
 import { feature } from '$lib/feature-registry'
@@ -18,7 +19,11 @@ import { invoke } from '$lib/ipc.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { threadUnreadIntent } from '$lib/stores/thread-unread-intent'
 import { workspaceState } from '$lib/stores/workspace.svelte'
-import { canMarkThreadUnread } from '$shared/thread-status-policy'
+import {
+  canUpdateThreadStatus,
+  threadSettledOutcome,
+  type ThreadSettledOutcome
+} from '$shared/thread-status-policy'
 import { threadTracksReadStatus, type Thread } from '$shared/types'
 import { toast } from 'svelte-sonner'
 
@@ -125,21 +130,25 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
   }
 
   /**
-   * Flip a thread back to unread at the user's request. The intent is recorded
-   * before the backend write so the `thread:updated` broadcast that follows can
-   * never be auto-read away while the thread stays open (see `threadUnreadIntent`).
+   * Rewrite a settled thread's outcome from the user's menu.
+   *
+   * `unread` is recorded as an intent before the backend write so the
+   * `thread:updated` broadcast that follows can never be auto-read away while the
+   * thread stays open (see `threadUnreadIntent`); the other two outcomes drop any
+   * such intent, because the user has just said the row is read.
    */
-  async function markUnread(): Promise<void> {
+  async function updateStatus(outcome: ThreadSettledOutcome): Promise<void> {
     const thread = config.getThread()
-    if (!thread || !thread.read || !canMarkThreadUnread(thread.status)) return
-    threadUnreadIntent.mark(thread.id)
+    if (!thread || !canUpdateThreadStatus(thread.status)) return
+    if (outcome === 'unread') threadUnreadIntent.mark(thread.id)
+    else threadUnreadIntent.clear(thread.id)
     try {
-      const updated = await invoke('thread:markUnread', thread.projectId, thread.id)
+      const updated = await invoke('thread:setSettledOutcome', thread.projectId, thread.id, outcome)
       scopeState.updateThread(updated)
       workspaceState.updateThread(updated)
     } catch (error) {
-      threadUnreadIntent.clear(thread.id)
-      toast.error(error instanceof Error ? error.message : 'Could not mark the thread unread.')
+      if (outcome === 'unread') threadUnreadIntent.clear(thread.id)
+      toast.error(error instanceof Error ? error.message : 'Could not update the thread status.')
     }
   }
 
@@ -155,16 +164,62 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
     const showCopyIdItem = config.showCopyId?.() ?? false
     const showHandoffItem = (config.showHandoff?.() ?? false) && config.onHandoff !== undefined
     const bookmarkAvailable = (config.showBookmark?.() ?? false) && config.onBookmark !== undefined
-    // Only a settled thread may be pushed back to unread: a finished or errored
-    // run. Live work, a ready spec, and "Needs attention" are not the same as
-    // unread and are never offered here (see `canMarkThreadUnread`).
-    const canMarkUnread =
-      threadTracksReadStatus(thread) && thread.read && canMarkThreadUnread(thread.status)
+    // Only a settled thread has an outcome the user may rewrite: a finished run,
+    // a run they stopped, or a failed one. Live work, a ready spec and a thread
+    // parked on the user are states the app is still driving and are never
+    // offered here (see `canUpdateThreadStatus`).
+    //
+    // Pawns and other orchestration children are included: a pawn row is a real
+    // row on the delegation board with the same menu, and its failure is exactly
+    // something the user may want to settle. Unread alone stays out of reach for
+    // them, because such a row never presents a read state
+    // (`threadTracksReadStatus`); offering it would promise a dot nobody draws.
+    const tracksRead = threadTracksReadStatus(thread)
+    const settledOutcome = canUpdateThreadStatus(thread.status)
+      ? threadSettledOutcome(thread)
+      : null
+    // A row that does not track read has no unread reading: its finished run is
+    // simply done, and its mark says so.
+    const currentOutcome = settledOutcome === 'unread' && !tracksRead ? 'done' : settledOutcome
+    // The entries wear the inbox's own marks (`THREAD_GROUP_MARK`), the exact
+    // glyphs the Threads view paints on the Unread, Done and Errors group
+    // headers, so the menu and the list it acts on can never disagree.
+    const statusItems: MenuItem[] =
+      settledOutcome === null
+        ? []
+        : [
+            {
+              label: 'Update status',
+              icon: CioCircle,
+              children: [
+                ...(tracksRead
+                  ? [
+                      {
+                        label: 'Unread',
+                        icon: THREAD_GROUP_MARK.Unread.icon,
+                        selected: currentOutcome === 'unread',
+                        onClick: () => void updateStatus('unread')
+                      }
+                    ]
+                  : []),
+                {
+                  label: 'Done',
+                  icon: THREAD_GROUP_MARK.Done.icon,
+                  selected: currentOutcome === 'done',
+                  onClick: () => void updateStatus('done')
+                },
+                {
+                  label: 'Error',
+                  icon: THREAD_GROUP_MARK.Errors.icon,
+                  selected: currentOutcome === 'error',
+                  onClick: () => void updateStatus('error')
+                }
+              ]
+            }
+          ]
     return [
       ...(knowledgeThread ? [] : [{ label: 'Rename', icon: CioPencil, onClick: startRename }]),
-      ...(canMarkUnread
-        ? [{ label: 'Mark as unread', icon: CioMessage, onClick: () => void markUnread() }]
-        : []),
+      ...statusItems,
       ...(knowledgeThread
         ? [
             {

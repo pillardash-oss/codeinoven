@@ -55,6 +55,8 @@
   import {
     isImageSource,
     isPreviewableImageSource,
+    processMatchesSearch,
+    processSearchTokens,
     sourceFilterLabel,
     type ContextSection,
     type OriginFilter,
@@ -102,6 +104,7 @@
   let deleting = $state(false)
   let deleteError = $state('')
   let processes = $state<AgentRunningProcess[]>([])
+  let processSearchQuery = $state('')
   let processesLoading = $state(false)
   let processesRefreshing = $state(false)
   let processesError = $state('')
@@ -435,8 +438,13 @@
     }
   }
 
-  const threadProcesses = $derived(processes.filter((process) => process.scope === 'thread'))
-  const appProcesses = $derived(processes.filter((process) => process.scope === 'app'))
+  const processSearchTokenList = $derived(processSearchTokens(processSearchQuery))
+  /** Processes the query keeps, before the thread/app split below. */
+  const visibleProcesses = $derived(
+    processes.filter((process) => processMatchesSearch(process, processSearchTokenList))
+  )
+  const threadProcesses = $derived(visibleProcesses.filter((process) => process.scope === 'thread'))
+  const appProcesses = $derived(visibleProcesses.filter((process) => process.scope === 'app'))
 
   function openEditor(entry: AgentCapabilityEntry): void {
     editorTarget = { kind: 'native', entry }
@@ -506,6 +514,7 @@
     bind:originFilter
     bind:sourceFilter
     bind:searchQuery
+    bind:processSearchQuery
     sourceCount={sources.length}
     visibleSourceCount={filteredSources.length}
     {attachmentCount}
@@ -705,6 +714,21 @@
           description="Commands started by the agent will appear here while they are still running."
         >
           {#snippet icon()}<CioTerminal size={18} />{/snippet}
+        </SourcesPanelEmptyState>
+      {:else if visibleProcesses.length === 0}
+        <SourcesPanelEmptyState
+          title="No matching processes"
+          description={`No running process matches “${processSearchQuery.trim()}”.`}
+        >
+          {#snippet icon()}<CioSearch size={18} />{/snippet}
+          <button
+            type="button"
+            class="mt-3 border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
+            title="Clear the process search"
+            onclick={() => (processSearchQuery = '')}
+          >
+            Clear search
+          </button>
         </SourcesPanelEmptyState>
       {:else}
         {#if processesError}

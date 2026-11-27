@@ -10,6 +10,7 @@
  * application in `thread-messages-events.svelte.ts`.
  */
 import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
+import { perfSpan } from '$lib/perf-trace'
 import { ipcErrorMessage } from '$lib/ipc-errors'
 import { composeMarkAttachments } from '$lib/annotation-composite'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -43,6 +44,16 @@ import type {
 } from '$shared/types'
 
 export { THREAD_MESSAGE_PRELOAD_WINDOW }
+
+/**
+ * How many messages a hover hints with.
+ *
+ * A pointer crossing a row is intent, not a decision: the row is the candidate
+ * for the next slot and the user changes their mind by moving on. So the hint is
+ * deliberately small — the newest turn's rows and nothing else — and the rest of
+ * the window belongs to the open.
+ */
+const THREAD_MESSAGE_HINT_WINDOW = 4
 
 /**
  * Add the annotated pictures a message's media marks need.
@@ -139,18 +150,37 @@ function userMessagePresentation(message: AgentMessage): UserMessagePresentation
   return part?.type === 'user-presentation' ? part.presentation : undefined
 }
 
-/** One older page fetched to reach the newest turn's opening prompt. A long
- *  working trace spans dozens of rows (one row per step), so this is sized to
- *  cover a whole turn in one or two round trips instead of walking it twelve
- *  rows at a time from the raw tail window. */
-const TURN_ALIGNMENT_PAGE_SIZE = 100
-/** How many older pages a bounded load may add to reach that prompt. A turn
- *  longer than this is left to the reader's own paging rather than turning a
- *  navigation into an unbounded read. */
-const MAX_TURN_ALIGNMENT_PAGES = 4
+/**
+ * One older page fetched to reach the newest turn's opening prompt.
+ *
+ * The first version of this was a hundred rows, four pages deep: an open could
+ * therefore read, reconcile and deeply proxy more than four hundred messages
+ * before painting anything, which is the work that made a click feel like it
+ * hammered the machine. A turn that long is rare, and the reader's own paging
+ * reaches it in one gesture, so the alignment walk is now small enough to be
+ * affordable on every open and bounded so it can never become the whole cost.
+ */
+const TURN_ALIGNMENT_PAGE_SIZE = 24
+/**
+ * How many older pages a bounded load may add to reach that prompt.
+ *
+ * Two pages of `TURN_ALIGNMENT_PAGE_SIZE` plus the mounted window caps an open at
+ * roughly sixty messages. Past that the conversation is left to the reader's own
+ * paging rather than turning a navigation into an unbounded read.
+ */
+const MAX_TURN_ALIGNMENT_PAGES = 2
 
 class ThreadMessagesStore {
-  #loadPromises = new Map<string, Promise<void>>()
+  /**
+   * Loads in flight, with what each one was asked for.
+   *
+   * The hint flag is part of the key's value rather than an afterthought: a
+   * hover reads four messages, an open reads its aligned window, and they share
+   * one map. Without the flag an open that arrived while a hint was still
+   * flying joined the hint's promise and was satisfied by four messages, so the
+   * open read nothing and the conversation painted a tail it had not chosen.
+   */
+  #loadPromises = new Map<string, { promise: Promise<void>; hint: boolean }>()
   /** Rows an edit rewrote, waiting for the send that owns them. A send under one
    *  of these ids brings the row up to date in place instead of reusing it
    *  untouched, and never appends a second copy of the same prompt. */
@@ -266,7 +296,7 @@ class ThreadMessagesStore {
   }
 
   async waitForLoad(projectId: string, threadId: string): Promise<void> {
-    await this.#loadPromises.get(threadKey(projectId, threadId))
+    await this.#loadPromises.get(threadKey(projectId, threadId))?.promise
   }
 
   /** Last load error for the thread, if any. */
@@ -331,16 +361,30 @@ class ThreadMessagesStore {
   }
 
   /** Load the authoritative mirror and merge it with local optimistic state. */
-  async load(projectId: string, threadId: string, recentLimit?: number): Promise<void> {
+  async load(
+    projectId: string,
+    threadId: string,
+    recentLimit?: number,
+    /** A hint read: one small page, never extended back to a turn boundary. */
+    hint = false
+  ): Promise<void> {
     const key = threadKey(projectId, threadId)
     const existing = this.#loadPromises.get(key)
-    if (existing) return existing
-    const loadPromise = this.#load(projectId, threadId, recentLimit)
-    this.#loadPromises.set(key, loadPromise)
+    if (existing) {
+      // A hint is intent; an open is a decision. Only the open may be answered
+      // by the hint's page, and it never is: it waits for the hint to land and
+      // then takes its own aligned window. Two opens still share one read.
+      if (hint || !existing.hint) return existing.promise
+      await existing.promise.catch(() => {})
+      const startedMeanwhile = this.#loadPromises.get(key)
+      if (startedMeanwhile) return startedMeanwhile.promise
+    }
+    const loadPromise = this.#load(projectId, threadId, recentLimit, hint)
+    this.#loadPromises.set(key, { promise: loadPromise, hint })
     try {
       await loadPromise
     } finally {
-      if (this.#loadPromises.get(key) === loadPromise) this.#loadPromises.delete(key)
+      if (this.#loadPromises.get(key)?.promise === loadPromise) this.#loadPromises.delete(key)
     }
   }
 
@@ -355,7 +399,7 @@ class ThreadMessagesStore {
   async loadTemporary(projectId: string, conversationId: string): Promise<void> {
     const key = threadKey(projectId, conversationId)
     const existing = this.#loadPromises.get(key)
-    if (existing) return existing
+    if (existing) return existing.promise
     const loadPromise = (async (): Promise<void> => {
       const entry = this.cache.entry(projectId, conversationId)
       entry.loading = true
@@ -383,11 +427,11 @@ class ThreadMessagesStore {
         this.cache.notify(projectId, conversationId)
       }
     })()
-    this.#loadPromises.set(key, loadPromise)
+    this.#loadPromises.set(key, { promise: loadPromise, hint: false })
     try {
       await loadPromise
     } finally {
-      if (this.#loadPromises.get(key) === loadPromise) this.#loadPromises.delete(key)
+      if (this.#loadPromises.get(key)?.promise === loadPromise) this.#loadPromises.delete(key)
     }
   }
 
@@ -401,8 +445,25 @@ class ThreadMessagesStore {
     this.cache.seedMessage(projectId, conversationId, message)
   }
 
-  async #load(projectId: string, threadId: string, recentLimit?: number): Promise<void> {
+  async #load(
+    projectId: string,
+    threadId: string,
+    recentLimit?: number,
+    hint = false
+  ): Promise<void> {
     const entry = this.cache.entry(projectId, threadId)
+    // The conversation read is the operation a user actually waits on, so it is
+    // measured as a whole: the IPC call, the alignment pages, and the reconcile
+    // that makes the rows renderable. `window` separates a bounded tail read
+    // from an unbounded transcript read, and `attempt` shows a retry, which is
+    // the difference between a slow boot and a failed one.
+    const generation = this.#openGeneration
+    const span = perfSpan('thread.messages.load', {
+      projectId,
+      threadId,
+      window: recentLimit === undefined ? 'all' : recentLimit,
+      cached: this.cache.messages(projectId, threadId).length
+    })
     entry.loading = true
     entry.error = ''
     this.cache.notify(projectId, threadId)
@@ -428,18 +489,53 @@ class ThreadMessagesStore {
             // an unbounded provider transcript read and can freeze the renderer on
             // long sessions. Callers that explicitly need the provider transcript
             // must use load() without a limit.
-            const aligned = await this.#fetchTurnAlignedTail(projectId, threadId, recentLimit)
-            serverMessages = aligned.messages
-            entry.hasOlder = aligned.hasOlder
+            if (hint) {
+              // No alignment walk. Reaching back to the prompt that opens the
+              // newest turn can cost four more windows — hundreds of messages,
+              // reconciled and published — for a slot the pointer may leave
+              // without ever opening it. The open aligns; the hint does not.
+              const page = await invoke(
+                'thread:loadMessages',
+                projectId,
+                threadId,
+                undefined,
+                recentLimit
+              )
+              serverMessages = page.messages
+              entry.hasOlder = page.hasOlder
+            } else {
+              const aligned = await this.#fetchTurnAlignedTail(projectId, threadId, recentLimit)
+              serverMessages = aligned.messages
+              entry.hasOlder = aligned.hasOlder
+            }
+          }
+          // Another thread was opened while this read was in flight: the reader
+          // is looking at that one now, so this answer is dropped unfinished
+          // instead of reconciled, published and rendered off screen.
+          if (generation !== this.#openGeneration) {
+            span.end('abandoned', { messages: serverMessages.length, attempts: attempt + 1 })
+            return
           }
           this.reconcile(projectId, threadId, serverMessages)
           entry.loaded = true
           entry.error = ''
+          span.end('ok', {
+            messages: serverMessages.length,
+            attempts: attempt + 1,
+            hasOlder: entry.hasOlder
+          })
           return
         } catch (err) {
           entry.error = err instanceof Error ? err.message : 'Could not load messages.'
           this.cache.notify(projectId, threadId)
-          if (attempt > 0) return
+          if (attempt > 0) {
+            span.fail(err, { attempts: attempt + 1 })
+            return
+          }
+          if (generation !== this.#openGeneration) {
+            span.end('abandoned', { attempts: attempt + 1 })
+            return
+          }
           await new Promise((resolve) => setTimeout(resolve, 200))
           // A newer load replaced this one (or the thread was dropped); its own
           // outcome owns the entry now.
@@ -537,7 +633,50 @@ class ThreadMessagesStore {
   async preload(projectId: string, threadId: string): Promise<void> {
     const entry = this.cache.entry(projectId, threadId)
     if (entry.loaded) return
-    await this.load(projectId, threadId, THREAD_MESSAGE_PRELOAD_WINDOW)
+    await this.load(projectId, threadId, THREAD_MESSAGE_HINT_WINDOW, true)
+  }
+
+  /**
+   * Point the store at the transcript on screen, freezing the other slots.
+   *
+   * Called by the workspace when a thread is opened, and with `null` when the
+   * app falls back to an empty state, where nothing on screen may keep working.
+   */
+  setActive(projectId: string | null, threadId: string | null): void {
+    // A newer open supersedes whatever was still loading: the read in flight for
+    // the thread the user left is abandoned where its own work would land, so it
+    // can neither publish a transcript nobody is looking at nor spend the
+    // renderer reconciling one. The main-process read still finishes (an IPC call
+    // cannot be recalled), but nothing waits for it and nothing is done with it.
+    this.#openGeneration += 1
+    this.cache.setActive(projectId, threadId)
+  }
+
+  /**
+   * The open that owns the screen. A load records this when it starts and drops
+   * its work if another thread has been opened since.
+   */
+  #openGeneration = 0
+
+  /**
+   * Take a conversation off the stack of what is on screen, handing the live
+   * slot back to the surface below it.
+   *
+   * A temporary side chat uses this: it opens over the thread that spawned it,
+   * so closing it must make that thread live again instead of leaving it frozen.
+   */
+  releaseActive(projectId: string, threadId: string): void {
+    this.cache.releaseActive(projectId, threadId)
+  }
+
+  /** Whether this thread is the transcript currently on screen. */
+  isActive(projectId: string, threadId: string): boolean {
+    return this.cache.isActive(projectId, threadId)
+  }
+
+  /** Whether a thread's transcript is held frozen: in a slot, not on screen. */
+  isFrozen(projectId: string, threadId: string): boolean {
+    return this.cache.isFrozen(projectId, threadId)
   }
 
   /** Non-destructively merge server messages with the local cache. */
@@ -613,7 +752,8 @@ class ThreadMessagesStore {
     messageId: string,
     text: string,
     attachments: PromptAttachment[],
-    projectReferences: PromptProjectReference[]
+    projectReferences: PromptProjectReference[],
+    promptReferences: PromptReference[] = []
   ): AgentMessage | null {
     this.#editedMessageIds.add(messageId)
     return this.cache.applyEdit(projectId, threadId, messageId, (message) => {
@@ -621,6 +761,7 @@ class ThreadMessagesStore {
         id: message.id,
         text,
         attachments,
+        promptReferences,
         projectReferences,
         presentation: userMessagePresentation(message),
         createdAt: message.createdAt
@@ -630,8 +771,7 @@ class ThreadMessagesStore {
       return {
         ...edited,
         origin: message.origin,
-        visibility: message.visibility,
-        ...(message.references ? { references: message.references } : {})
+        visibility: message.visibility
       }
     })
   }

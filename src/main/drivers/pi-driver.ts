@@ -298,7 +298,7 @@ export class PiDriver extends PersistentCliDriver {
       observeHarnessProcess: (sessionId, child, command, projectPath) =>
         this.observeHarnessProcess(sessionId, child, command, projectPath),
       // A hosted session has no child of its own: the pooled Pi host runs its
-      // shell tool, and up to eight sessions share that one host pid, so it is
+      // shell tool, and every hosted session shares that one host pid, so it is
       // tracked app-wide (an undefined session) rather than as this thread's
       // root. A thread cleanup must never signal a host its siblings are still
       // running on, and a process an agent needs to stop by pid is started with

@@ -38,6 +38,7 @@ import type {
   ThreadSettings
 } from '../../../lib/types'
 import type { TurnStreamEvent } from '../turn-stream'
+import type { HeldSteerPayload } from './chat-engine-held-steer-merge'
 
 export interface PersistedProviderCatalog {
   schemaVersion: 4
@@ -179,7 +180,9 @@ export interface TemporaryChatSession {
  * turn still has a tool call in flight. The harness has NOT received it yet,
  * so the user can undo it. When the last in-flight tool ends the steer is
  * delivered mid-turn; when the whole turn idles first it is flushed as a
- * regular next-turn send. One record per active steer, keyed by session.
+ * regular next-turn send. One record per active steer, keyed by session; a
+ * second steer arriving while one is held folds into it (see
+ * `chat-engine-held-steer-merge`) instead of replacing it.
  */
 export interface HeldSteer {
   projectId: string
@@ -187,6 +190,8 @@ export interface HeldSteer {
   conversationId: string
   userMessageId: string
   kind: 'thread' | 'temporary'
+  /** What the user put into this steer, so a later steer can fold into it. */
+  payload: HeldSteerPayload
   /** Deliver the steer to the live turn now (tool window closed mid-turn). */
   deliverMidTurn: () => Promise<void>
   /** The turn ended before a delivery window opened   send as the next turn. */
@@ -614,6 +619,57 @@ export interface AssignmentAuditRepairManifest {
 export interface PersistedAuditAttempt {
   relativePath: string
   artifactPath: string
+}
+
+/** Which audit owns a progress log. */
+export type AuditProgressKind = 'independent' | 'assignment'
+
+/**
+ * One finished tool call of an audit turn, written while the turn streamed.
+ *
+ * This is the audit's position record: the mirror only holds a whole message
+ * once it is finalized, so a death mid-turn otherwise leaves nothing that says
+ * which checks had already run.
+ */
+export interface AuditProgressStep {
+  kind: 'step'
+  at: number
+  tool: string
+  /** Harness-agnostic action phrase ("Read a file"), never a raw tool id. */
+  action: string
+  subject: string
+  status: 'completed' | 'error' | 'aborted'
+}
+
+/** The first line of a progress log, naming the run it belongs to. */
+export interface AuditProgressHeader {
+  kind: 'run'
+  runId: string
+  auditKind: AuditProgressKind
+  threadId: string
+  startedAt: number
+}
+
+/** A progress log read back from disk, as a resume prompt consumes it. */
+export interface AuditProgressSummary {
+  runId: string
+  auditKind: AuditProgressKind
+  startedAt: number
+  steps: Omit<AuditProgressStep, 'kind'>[]
+  /** Where the log lives, so the prompt can point at the whole record. */
+  artifactPath: string
+}
+
+/** In-memory state of the run currently recording its own progress. */
+export interface ActiveAuditProgressRun {
+  projectId: string
+  coordinatorThreadId: string
+  threadId: string
+  runId: string
+  auditKind: AuditProgressKind
+  /** Tool part ids already written, so a repeated status update is not a step. */
+  recordedPartIds: Set<string>
+  steps: number
 }
 export interface VirtualTaskOptions {
   /**

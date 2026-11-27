@@ -708,10 +708,12 @@ export class ChatEngineProvidersAccounts {
       )
       return
     }
-    const retryScheduled = await this.host.units['runtime-connectivity'].scheduleAutomaticRetry(
+    const retryOutcome = await this.host.units['runtime-connectivity'].scheduleAutomaticRetry(
       sessionId,
       issue
     )
+    const retryScheduled = retryOutcome === 'scheduled'
+    const cooldownExhausted = retryOutcome === 'cooldown-exhausted'
     // Fallback: if scheduling did not produce a pending retry but the issue is
     // a retryable usage reset, still treat as paused so the thread does not
     // fall to failed and hide the will-retry state (ba9a... silent case).
@@ -727,6 +729,7 @@ export class ChatEngineProvidersAccounts {
     // listening for that. The wait never requires the failed turn to have been
     // retryable   the device, not the provider, owns whether it can run.
     const shouldStayPaused =
+      !cooldownExhausted &&
       !retryScheduled &&
       (issue.kind === 'network' || (isUsageResetWaitIssue(issue) && issue.retryable)) &&
       !(await this.host.threadManager.wasStoppedByUser(

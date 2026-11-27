@@ -28,13 +28,14 @@ import { ChatEngineMessagesLoad } from './chat-engine-messages-load'
 import { ChatEngineTranscripts } from './chat-engine-transcripts'
 import { ChatEngineMessagesWrite } from './chat-engine-messages-write'
 import { ChatEngineAssignment } from './chat-engine-assignment'
+import { ChatEngineAssignmentRun } from './chat-engine-assignment-run'
 import { ChatEngineAssistantAuthoring } from './chat-engine-assistant-authoring'
 import { ChatEngineThreadsDelete } from './chat-engine-threads-delete'
 import { ChatEngineTemporaryChats } from './chat-engine-temporary-chats'
 import { ChatEngineTurnsSteer } from './chat-engine-turns-steer'
 import { ChatEngineWorkStall } from './chat-engine-work-stall'
 import { ChatEngineCapacityContinue } from './chat-engine-capacity-continue'
-import { ChatEngineAssignmentRun } from './chat-engine-assignment-run'
+import { ChatEngineDelegationReports } from './chat-engine-delegation-reports'
 import { ChatEngineTurnsSendPrompt } from './chat-engine-turns-send-prompt'
 import { ChatEngineBrainstorm } from './chat-engine-brainstorm'
 import { ChatEngineUtilitiesGateway } from './chat-engine-utilities-gateway'
@@ -47,6 +48,8 @@ import { ChatEngineBrainstormGenerate } from './chat-engine-brainstorm-generate'
 import { ChatEngineSpecAuthoring } from './chat-engine-spec-authoring'
 import { ChatEngineAuditRun } from './chat-engine-audit-run'
 import { ChatEngineAuditReport } from './chat-engine-audit-report'
+import { ChatEngineAuditProgress } from './chat-engine-audit-progress'
+import { ChatEngineAuditWriteGuard } from './chat-engine-audit-write-guard'
 import { ChatEngineSpec } from './chat-engine-spec'
 import { ChatEngineMemory } from './chat-engine-memory'
 import { ChatEngineSpecLifecycle } from './chat-engine-spec-lifecycle'
@@ -94,6 +97,7 @@ export function buildChatEngineUnits(engine: ChatEngine) {
     transcripts: new ChatEngineTranscripts(engine),
     'messages-write': new ChatEngineMessagesWrite(engine),
     assignment: new ChatEngineAssignment(engine),
+    'assignment-run': new ChatEngineAssignmentRun(engine),
     'assistant-authoring': new ChatEngineAssistantAuthoring(engine),
     citations: new ChatEngineCitations(engine),
     'threads-delete': new ChatEngineThreadsDelete(engine),
@@ -101,7 +105,7 @@ export function buildChatEngineUnits(engine: ChatEngine) {
     'turns-steer': new ChatEngineTurnsSteer(engine),
     'work-stall': new ChatEngineWorkStall(engine),
     'capacity-continue': new ChatEngineCapacityContinue(engine),
-    'assignment-run': new ChatEngineAssignmentRun(engine),
+    'delegation-reports': new ChatEngineDelegationReports(engine),
     'turns-send-prompt': new ChatEngineTurnsSendPrompt(engine),
     brainstorm: new ChatEngineBrainstorm(engine),
     'utilities-gateway': new ChatEngineUtilitiesGateway(engine),
@@ -114,6 +118,8 @@ export function buildChatEngineUnits(engine: ChatEngine) {
     'spec-authoring': new ChatEngineSpecAuthoring(engine),
     'audit-run': new ChatEngineAuditRun(engine),
     'audit-report': new ChatEngineAuditReport(engine),
+    'audit-progress': new ChatEngineAuditProgress(engine),
+    'audit-write-guard': new ChatEngineAuditWriteGuard(engine),
     spec: new ChatEngineSpec(engine),
     memory: new ChatEngineMemory(engine),
     'spec-lifecycle': new ChatEngineSpecLifecycle(engine),

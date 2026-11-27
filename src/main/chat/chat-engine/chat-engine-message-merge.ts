@@ -124,6 +124,22 @@ export function withoutTransportParts(message: AgentMessage): AgentMessage {
   return presentable
 }
 
+/**
+ * Strip the wire payload from every message in a page.
+ *
+ * `transport_parts` is what the provider sent, kept so a session can be rebuilt
+ * and replayed. The renderer draws from `parts` and, measured over the whole
+ * renderer source, never reads `transportParts` once — so shipping it to the
+ * window bought nothing and cost a second copy of every message body in the heap
+ * the window keeps per thread. It is dropped at the IPC boundary, which is the
+ * only place that knows the reader is a view rather than a driver.
+ */
+export function withoutTransportPartsInPage<Page extends { messages: AgentMessage[] }>(
+  page: Page
+): Page {
+  return { ...page, messages: page.messages.map(withoutTransportParts) }
+}
+
 export function presentableMessages(
   messages: AgentMessage[],
   includeHiddenUserBoundaries = false

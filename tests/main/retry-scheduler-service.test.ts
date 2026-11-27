@@ -190,6 +190,49 @@ describe('RetrySchedulerService', () => {
     scheduler.stop()
   })
 
+  it('reserves a 1s, 3s, 5s, 10s, 30s, then 60s rate-limit cooldown and then stops', async () => {
+    const scheduler = new RetrySchedulerService(await storage())
+    await scheduler.start()
+    let now = Date.now()
+    const waits: number[] = []
+    for (let attempt = 1; attempt <= 6; attempt += 1) {
+      const reservation = scheduler.reserveRateLimitCooldown('thread-1', now)
+      expect(reservation?.attempt).toBe(attempt)
+      expect(reservation?.retryAt).toBe(
+        now + [1_000, 3_000, 5_000, 10_000, 30_000, 60_000][attempt - 1]
+      )
+      waits.push((reservation?.retryAt ?? 0) - now)
+      now = reservation?.retryAt ?? now
+    }
+    expect(waits).toEqual([1_000, 3_000, 5_000, 10_000, 30_000, 60_000])
+    expect(scheduler.reserveRateLimitCooldown('thread-1', now)).toBeUndefined()
+    scheduler.stop()
+  })
+
+  it('keeps a re-reported rate limit on its current cooldown instead of advancing it', async () => {
+    const scheduler = new RetrySchedulerService(await storage())
+    await scheduler.start()
+    const now = Date.now()
+    const first = scheduler.reserveRateLimitCooldown('thread-1', now)
+    const duplicate = scheduler.reserveRateLimitCooldown('thread-1', now + 500)
+    expect(duplicate).toEqual(first)
+    expect(duplicate?.attempt).toBe(1)
+    scheduler.stop()
+  })
+
+  it('starts a fresh rate-limit cooldown budget after the streak goes quiet or is cleared', async () => {
+    const scheduler = new RetrySchedulerService(await storage())
+    await scheduler.start()
+    const now = Date.now()
+    const first = scheduler.reserveRateLimitCooldown('thread-1', now)
+    const later = scheduler.reserveRateLimitCooldown('thread-1', now + 10 * 60_000)
+    expect(first?.attempt).toBe(1)
+    expect(later?.attempt).toBe(1)
+    scheduler.clearRateLimitCooldown('thread-1')
+    expect(scheduler.reserveRateLimitCooldown('thread-1', now + 10 * 60_000)?.attempt).toBe(1)
+    scheduler.stop()
+  })
+
   it('holds every connection wait while the device is offline and resumes them all when it returns', async () => {
     const scheduler = new RetrySchedulerService(await storage())
     await scheduler.start()

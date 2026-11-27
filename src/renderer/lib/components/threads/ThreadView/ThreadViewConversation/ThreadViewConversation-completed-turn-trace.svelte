@@ -58,6 +58,9 @@
   ovenAppearance={board.currentWorkingTraceAttribution.currentWorkingTraceAttribution
     .ovenAppearance}
   isFast={board.currentWorkingTraceAttribution.currentWorkingTraceAttribution.isFast}
+  onReaderClaimsViewport={groupThread
+    ? undefined
+    : () => board.loadOlderMessages.claimViewportForReading()}
   onOpenSubagent={board.unmirroredTraceStartTime.openSubagent}
   onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
   {formatOutput}

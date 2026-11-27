@@ -31,7 +31,6 @@ export class WorkspaceBrowserController {
 
   clearDataConfirmOpen = $state(false)
   clearDataProjectId = $state<string | null>(null)
-  clearing = $state(false)
   downloadsOpen = $state(false)
 
   constructor(options: WorkspaceBrowserOptions) {
@@ -198,6 +197,7 @@ export class WorkspaceBrowserController {
           return
         case 'clearData':
           this.requestDataClear()
+          return
       }
     } catch (error: unknown) {
       reportError(error, 'The browser menu could not be opened.')
@@ -212,24 +212,25 @@ export class WorkspaceBrowserController {
   }
 
   cancelDataClear(): void {
-    if (this.clearing) return
     this.clearDataConfirmOpen = false
     this.clearDataProjectId = null
   }
 
-  async clearData(): Promise<void> {
+  /**
+   * Dismiss the confirmation the moment the user confirms, then clear in the
+   * background. Clearing site data touches every jar's cookies and cache and
+   * can outlast a click by seconds; the dialog must never sit there holding
+   * the window while it finishes. A failure lands as a toast, and the panel is
+   * already back so the user can keep working.
+   */
+  clearData(): void {
     const projectId = this.clearDataProjectId
-    if (!projectId || this.clearing) return
-    this.clearing = true
-    try {
-      await invoke('browser:clearData', projectId)
-      this.clearDataConfirmOpen = false
-      this.clearDataProjectId = null
-    } catch (error) {
+    this.clearDataConfirmOpen = false
+    this.clearDataProjectId = null
+    if (!projectId) return
+    void invoke('browser:clearData', projectId).catch((error: unknown) => {
       reportError(error, 'Browser cookies and site data could not be cleared.')
-    } finally {
-      this.clearing = false
-    }
+    })
   }
 
   openDownloads(): void {

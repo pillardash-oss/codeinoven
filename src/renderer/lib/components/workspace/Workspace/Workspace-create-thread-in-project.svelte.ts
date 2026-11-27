@@ -3,6 +3,7 @@ import { markConversationPainted } from '$lib/conversation-painted'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 
 import { invoke, waitForFeatures } from '$lib/ipc.svelte'
+import { perfMarkNextPaint, perfSpan } from '$lib/perf-trace'
 import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
 import { reportError } from '$lib/stores/app-errors.svelte'
 import { assistants } from '$lib/stores/assistants.svelte'
@@ -39,6 +40,11 @@ import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { WorkspaceProjectDialogs } from '../WorkspaceProjectDialogs.svelte'
 import type { Workspace } from './Workspace-board.svelte'
 import { BoardUnit } from '$lib/components/board-unit'
+/** Resolve on the next macrotask, after this one's work has had its frame. */
+function nextTask(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
 /** One concern of the Workspace board. */
 export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
   constructor(root: Workspace) {
@@ -737,7 +743,20 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
     // Instant mount: create optimistic thread locally so the composer
     // paints on the same tick as the click   no IPC on the critical path.
     // Git branch and persistence hydrate async via the thread:update broadcast.
+    //
+    // Measured as two spans on purpose. The first ends when the composer has a
+    // thread to draw; the second covers the background persistence the user is
+    // not waiting for. Reporting them as one number would blame the click for
+    // work that finishes after the screen has already updated.
+    const createSpan = perfSpan('thread.create', {
+      projectId: project.id,
+      assistant: assistantId !== undefined,
+      scopeBucket: requestedBucketId !== undefined
+    })
+    // Marks inside the create span, because the span alone cannot say which of
+    // its stages the click was waiting on. Every one of them runs on the click.
     const optimisticId = this.root.markThreadReadAndApply.newOptimisticThreadId()
+    createSpan.mark('id')
     const optimisticThread = {
       id: optimisticId,
       projectId: project.id,
@@ -764,10 +783,21 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
     const thread = optimisticThread as unknown as typeof optimisticThread & {
       settings: typeof inheritedSettings
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    this.upsertThreadInList(thread as any)
+    createSpan.mark('thread')
+    // The list is not the click. A new thread reaches the sidebar as a row in a
+    // list of hundreds, and writing it here rebuilds that list's derivations in
+    // the same task that mounts the conversation, so the blank pane the user
+    // asked for waits behind the sidebar row nobody is looking at yet. The row
+    // lands in the task after the pane has had its frame; the conversation is
+    // already open and does not read this list to draw itself.
     threadMessages.seedEmpty(thread.projectId, thread.id)
-    this.root.switcherPanelTabs.sidebar.expandedFolders.add(project.id)
+    createSpan.mark('seed')
+    // Sidebar folder expansion is not on the first frame: the composer and the
+    // cleared conversation are what the click has to deliver, and a folder that
+    // is already open does not change by being told so one frame earlier.
+    scheduleDeferredWork('createThread:expandFolder', () => {
+      this.root.switcherPanelTabs.sidebar.expandedFolders.add(project.id)
+    })
     if (scopeBucketId) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       if (scopeBucketId) scopeState.updateThread(thread as any)
@@ -776,12 +806,27 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     workspaceState.openThread(thread as any, project)
+    createSpan.mark('open')
     // Empty-state creation (no existing thread was open): this new thread gets
     // the centered composer head start even if the project holds other threads.
     // Threads created from an existing thread never get the marker.
     if (!activeThread) workspaceState.markThreadFreshFromEmptyState(thread.id)
+    // The click is done when the pane exists, which is now. The span ends here so
+    // it measures the interaction; the paint mark starts here so it measures when
+    // the user could see it. Both used to include the sidebar write below, which
+    // is why neither could say which of them was slow.
+    createSpan.end('ok')
+    perfMarkNextPaint('thread.create.paint', { projectId: project.id })
+    // Yield once so the pane built above gets its own frame, then put the row in
+    // the sidebar list. One task, not one interaction: the row appears before a
+    // reader can move their eyes to it, and the click no longer pays for it.
+    await nextTask()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.upsertThreadInList(thread as any)
+    createSpan.mark('row')
     // Persist in background with the same stable id   no ID swap, branch
     // detection runs after the first thread:update broadcast, never blocking typing.
+    const persistSpan = perfSpan('thread.create.persist', { projectId: project.id })
     void invoke('thread:create', {
       id: optimisticId,
       projectId: project.id,
@@ -795,6 +840,7 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
       ...(gettingStarted ? { titleSource: 'manual' as const, assistantGettingStarted: true } : {})
     })
       .then((created) => {
+        persistSpan.end('ok')
         // Server confirms with same id; upsert the authoritative row (now with branch when ready)
         const confirmed = activeThread?.settings
           ? threadWithInheritedSettings(created, inheritedSettings)
@@ -813,6 +859,7 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
         // row that would not change.
       })
       .catch((error) => {
+        persistSpan.fail(error)
         // Creation failed   remove the optimistic thread so the UI does not strand on a phantom
         const idx = this.allThreads.findIndex((t) => t.id === optimisticId)
         if (idx !== -1) this.allThreads.splice(idx, 1)

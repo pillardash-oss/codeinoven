@@ -22,6 +22,10 @@ import {
   validateBoolean,
   validateEntityId
 } from './primitives'
+import {
+  THREAD_SETTLED_OUTCOMES,
+  type ThreadSettledOutcome
+} from '../../../lib/thread-status-policy'
 import { LOCAL_OVEN_ID } from '../../../lib/ovens'
 
 const THREAD_STATUSES = new Set<ThreadStatus>([
@@ -36,6 +40,7 @@ const THREAD_STATUSES = new Set<ThreadStatus>([
   'failed'
 ])
 const HISTORY_ROLES = new Set<HistoryRole>(['user', 'assistant', 'system', 'tool'])
+const THREAD_SETTLED_OUTCOME_SET = new Set<ThreadSettledOutcome>(THREAD_SETTLED_OUTCOMES)
 const CHECKLIST_ITEM_STATUSES = new Set<ChecklistItemStatus>([
   'pending',
   'in_progress',
@@ -158,6 +163,10 @@ export function validateBoundScope(value: unknown): BoundScopeRebind {
 
 export function validateThreadStatus(value: unknown): ThreadStatus {
   return assertEnum(value, THREAD_STATUSES, 'thread status')
+}
+
+export function validateThreadSettledOutcome(value: unknown): ThreadSettledOutcome {
+  return assertEnum(value, THREAD_SETTLED_OUTCOME_SET, 'thread settled outcome')
 }
 
 export function validateThreadTitleSource(value: unknown): ThreadTitleSource {

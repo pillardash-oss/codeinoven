@@ -1,6 +1,7 @@
 <script lang="ts">
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { SvelteMap } from 'svelte/reactivity'
+  import type { Attachment } from 'svelte/attachments'
   import type { ComposerShoeData } from '../chats/ComposerShoe.svelte'
   // The pickers and annotators below are reached by a gesture and are imported
   // where they are rendered. The five dialogs that take an `open` prop instead
@@ -26,7 +27,6 @@
   import { loadCachedPanelModule, PANEL_KEYS } from '$lib/lazy-panel'
   import { logRendererError } from '$lib/system/renderer-logger'
   import { invoke } from '$lib/ipc.svelte'
-  import { providerStore } from '$lib/stores/providers.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey } from '$lib/model-keys'
@@ -34,14 +34,16 @@
   import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import { hasSelectedStage } from '$shared/engines/engineering-lifecycle-engine'
   import { engineeringPendingMessage } from '$shared/engineering-generation'
-  import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { ANNOTATION_BUBBLE_SIZE } from '$lib/selection-anchors'
   import { createThreadView } from './ThreadView/ThreadView-board.svelte'
   import type { Props } from './ThreadView/ThreadView-types'
   import ThreadViewConversation from './ThreadView/ThreadViewConversation.svelte'
+  import ConversationSkeleton from './ThreadView/ConversationSkeleton.svelte'
   import ThreadViewComposer from './ThreadView/ThreadViewComposer.svelte'
   import ThreadParentLink from './ThreadParentLink.svelte'
   import { permissionLevelActions } from '$lib/actions'
+  import { tick } from 'svelte'
+  import { perfMark, perfSpan } from '$lib/perf-trace'
   import { isRemoteOvenId } from '$shared/ovens'
 
   let {
@@ -69,7 +71,8 @@
     composerPlaceholder,
     onOpenScopeView,
     active = true,
-    ownsReadingColumn = false
+    ownsReadingColumn = false,
+    onTranscriptReady
   }: Props = $props()
   const board = createThreadView(() => ({
     thread: threadProp,
@@ -99,6 +102,86 @@
     ownsReadingColumn
   }))
   board.submitBrainstormDecision.setReconcileReadySpec(() => reconcileReadySpecNow())
+
+  /**
+   * The thread whose transcript is allowed to build, once the shell has painted.
+   *
+   * The transcript is the expensive half of showing a thread: every message,
+   * trace row, diff and image of the read window is built in one pass, and doing
+   * that inside the click's own task held the pane's first frame behind it. That
+   * is what made opening a cold thread show nothing for about a second   the
+   * work was correct, it simply ran before the screen could change.
+   *
+   * So the shell paints first and the transcript hydrates in the task after that
+   * paint. A skeleton stands in for it inside the conversation's own container,
+   * so the column's width, gutters and bottom anchoring are the ones the
+   * messages will use and nothing moves when they replace it.
+   */
+  let hydratedThreadId = $state.raw<string | null>(null)
+  let conversationHydrated = $derived(hydratedThreadId === board.handleAgentEvent.thread.id)
+
+  // The two halves of showing a thread, timed apart.
+  //
+  // "Opening a thread takes a second" was never one number: the shell (header,
+  // composer, and the conversation's own empty container) has to be built before
+  // anything can be painted, and the transcript is built in the task after that
+  // paint. Measured as one span, a shell that paints in forty milliseconds and a
+  // transcript that takes three hundred read as the same slow click, and there
+  // is no way to tell which half to work on.
+  const threadIdForTrace = board.handleAgentEvent.thread.id
+  // An instant, so the trace can measure what happened between the click and the
+  // view that answers it: opening a thread settles in a few milliseconds, and the
+  // gap before this mark is the rest of the app reacting to the same selection.
+  perfMark('thread.view.init', { threadId: threadIdForTrace })
+  const shellSpan = perfSpan('thread.shell', { threadId: threadIdForTrace })
+
+  /**
+   * Mark a point in this template's own execution.
+   *
+   * Attachments run in the effect phase, after the whole tree is built, so a
+   * span that ends at one cannot say which part of the markup a slow mount spent
+   * its time in: the header, the conversation's placeholder and the composer all
+   * finish at the same instant. Rendered as an expression (it returns nothing),
+   * so the mark costs one call and leaves the DOM untouched.
+   */
+  function phase(name: string): void {
+    shellSpan.mark(name)
+  }
+
+  /**
+   * Mount the transcript once the shell is in the DOM.
+   *
+   * `tick()` is the shell's own statement that its state has been applied, and
+   * the task after it is the first moment the conversation can be built without
+   * being part of the flush that painted the shell. No frame callback anywhere in
+   * here: a window that is hidden or covered runs none, and a thread opened in
+   * that window must still get its conversation instead of a placeholder that
+   * waits for a paint.
+   */
+  function hydrateConversationAfterShell(threadId: string): Attachment<HTMLElement> {
+    return () => {
+      // The shell's build ends here, at the point its DOM exists.
+      shellSpan.end()
+      let cancelled = false
+      void (async () => {
+        await tick()
+        if (cancelled) return
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        if (cancelled) return
+        const transcriptSpan = perfSpan('thread.transcript', { threadId })
+        hydratedThreadId = threadId
+        // The transcript is built in the flush this assignment queues, so its
+        // own task is the first moment the work is done and measurable.
+        setTimeout(() => {
+          transcriptSpan.end()
+          onTranscriptReady?.()
+        }, 0)
+      })()
+      return () => {
+        cancelled = true
+      }
+    }
+  }
   let composerShoe = $derived.by((): ComposerShoeData => {
     const isNewThread = board.loadOlderMessages.messages.length === 0 && !board.switchProject.busy
     const identity = board.contextUsage.composerIdentity(board.handleAgentEvent.thread, isNewThread)
@@ -186,23 +269,32 @@
       )
     }
 
+    // A checkpoint, not a compaction: the session is closed and the thread
+    // continues in a fresh one, so the history is never summarized away and the
+    // earlier windows stay readable by id. Every harness can do it, which is why
+    // this carries no compaction-capability gate.
     actions.push({
-      id: 'command:compact',
-      title: 'Compact conversation',
-      description: 'Summarize older work to free context',
+      id: 'command:checkpoint',
+      title: '/checkpoint',
+      description:
+        'Close this session and continue in a fresh one; the full history stays readable',
       category: 'command',
       source: board.state.applicationActionSource,
-      keywords: ['summarize', 'context', 'tokens'],
-      ...(!supportsManualCompaction(
-        board.loadOlderMessages.settings.harnessId,
-        providerStore.providers
-      )
-        ? {
-            disabledReason: `${board.switchProject.providerName} does not support manual compaction`
-          }
-        : board.switchProject.busy
-          ? { disabledReason: 'Wait for the active run to finish' }
-          : {})
+      keywords: ['compact', 'context', 'tokens', 'free', 'fresh', 'session', 'summarize'],
+      slashCommand: true,
+      ...(board.switchProject.busy ? { disabledReason: 'Wait for the active run to finish' } : {})
+    })
+    // The old spelling keeps working and takes the same checkpoint: a typed
+    // `/compact` must never reach a harness that would rewrite the transcript.
+    actions.push({
+      id: 'command:compact',
+      title: '/compact',
+      description: 'Checkpoint this thread (the same as /checkpoint)',
+      category: 'command',
+      source: board.state.applicationActionSource,
+      keywords: ['checkpoint', 'context', 'tokens'],
+      slashCommand: true,
+      ...(board.switchProject.busy ? { disabledReason: 'Wait for the active run to finish' } : {})
     })
 
     // Quick chat is anchored at the last agent turn, so it only makes sense once
@@ -270,6 +362,10 @@
     }
 
     for (const command of board.switchProject.commands) {
+      // A harness's own `/compact` rewrites the transcript in place, which is
+      // exactly what a checkpoint replaces. It is not offered: `/checkpoint`
+      // (and its `/compact` alias) takes the app-owned path instead.
+      if (command.name === 'compact') continue
       actions.push({
         id: board.switchProject.actionId(command.id),
         title: `/${command.name}`,
@@ -1303,13 +1399,34 @@
       parentThreadId={board.currentWorkingTraceAttribution.coordinatorParentId ??
         board.handleAgentEvent.thread.dispatchOrigin?.initiatorThreadId}
     />
-    <ThreadViewConversation {board} />
+    {phase('top')}
+    {#if conversationHydrated}
+      <ThreadViewConversation {board} />
+    {:else}
+      <!-- The shell's stand-in, inside the scroller the transcript will use. -->
+      <div
+        class="conversation-scroll conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-20 {board
+          .composerScope.centeredComposer
+          ? 'hidden'
+          : ''}"
+        aria-hidden="true"
+        {@attach hydrateConversationAfterShell(board.handleAgentEvent.thread.id)}
+      >
+        <div
+          class="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6"
+        >
+          <ConversationSkeleton />
+        </div>
+      </div>
+    {/if}
 
     <!-- Bottom-anchored chrome. Everything pinned between the conversation and
          the window edge lives here so the scroll-to-latest button can float at
          the top of the whole stack: straddling an error card when one is shown
          and dropping back to its normal spot above the composer otherwise. -->
+    {phase('composer')}
     <ThreadViewComposer {board} {composerShoe} {activeActions} {compactionFold} />
+    {phase('end')}
   </div>
 </div>
 

@@ -52,13 +52,15 @@ export class GitStateQueries {
     if (!project || project.id === INBOX_PROJECT_ID) return
     if (project.source !== 'local' || project.changeTrackingMode !== 'git') return
     if (!project.path.trim()) return
-    const scopeBucketId = ovenRootKey(project.id) ?? thread?.scopeBucketId ?? null
     // A scope target is what Git cares about, not a thread. Switching between
     // two threads of the same project and scope changes nothing here, so this
     // returns before touching status: no read, no blank panel, no worktree
-    // discovery.
-    const targetChanged =
-      this.host.activeProjectId !== project.id || this.host.activeScopeBucketId !== scopeBucketId
+    // discovery. Read off the plain claim, not the reactive mirrors, because
+    // this runs from effects.
+    const targetChanged = !this.host.units['lifecycle'].isCurrentTarget(
+      project.id,
+      thread?.scopeBucketId ?? undefined
+    )
     // Claim the target synchronously so the panel can never show another
     // scope's state, then read the new one *after* the switch has painted.
     this.host.activate(project.id, thread?.scopeBucketId ?? undefined)

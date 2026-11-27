@@ -57,6 +57,24 @@ const INTEGRITY_MAX_WAIT_MS = 2 * 60 * 60 * 1000
 const ACTIVITY_POLL_MS = 5 * 1000
 
 /**
+ * How many read-only connections serve reads.
+ *
+ * A read is the only traffic that never conflicts with another read: SQLite in
+ * WAL keeps readers out of the writer's way, and none of them takes a lock the
+ * others want. One worker thread with one connection cannot express that — a
+ * statement already running cannot be preempted — so every read in the app was
+ * queued behind every other read, and a slow one (a usage rollup, a search page,
+ * a whole-project scan) made the next click wait for its turn.
+ *
+ * Three readers is the number the app needs: one for the transcript of the
+ * thread on screen, one for whatever a panel is filling in, and one left over so
+ * neither of those waits behind a long read somebody asked for from a menu. The
+ * writer keeps its own single connection, because SQLite serialises writes
+ * anyway and a second writer only buys lock contention.
+ */
+const READ_POOL_SIZE = 3
+
+/**
  * What this lane needs to know about the app around it to stay out of a person's
  * way. Deliberately two narrow facts rather than a service, so nothing heavier
  * than a predicate is imported into the database layer.
@@ -93,6 +111,10 @@ export interface DatabaseAsyncReadsOptions extends DatabaseActivitySignal {
 }
 
 export class DatabaseAsyncReads {
+  /** The read connections, in the order reads are handed out. */
+  private readers: DatabaseWorker[] = []
+  /** Where the next read goes: round-robin, so no single reader becomes the queue. */
+  private nextReader = 0
   private worker: DatabaseWorker | null = null
   private integrityTimer: ReturnType<typeof setTimeout> | null = null
   private readonly path: string
@@ -144,22 +166,44 @@ export class DatabaseAsyncReads {
    */
   start(): void {
     if (this.path === ':memory:' || this.worker) return
-    const worker = new DatabaseWorker(
-      {
-        dbPath: this.path,
-        backupDir: join(dirname(this.path), 'backups'),
-        // No maintenance passes: this lane reads, and its whole point is to never
-        // be busy with anything but the reads routed to it.
-        maintenanceEnabled: false,
-        ...DATABASE_WORKER_DEFAULTS,
-        readOnly: true
-      },
-      Logger,
-      this.workerFactory
-    )
-    this.worker = worker
-    worker.start()
+    for (let index = 0; index < READ_POOL_SIZE; index += 1) {
+      const reader = new DatabaseWorker(
+        {
+          dbPath: this.path,
+          backupDir: join(dirname(this.path), 'backups'),
+          // No maintenance passes: these connections read, and their whole point
+          // is to never be busy with anything but the reads routed to them.
+          maintenanceEnabled: false,
+          ...DATABASE_WORKER_DEFAULTS,
+          readOnly: true
+        },
+        Logger,
+        this.workerFactory
+      )
+      reader.start()
+      this.readers.push(reader)
+    }
+    // The first reader doubles as the lane's own worker for the integrity probe,
+    // which is scheduled to run when nothing else is happening anyway.
+    this.worker = this.readers[0] ?? null
     this.scheduleIntegrityProbe(this.firstDelayMs)
+  }
+
+  /**
+   * A read connection, handed out round-robin.
+   *
+   * Preferring the least-loaded reader would mean tracking every call's lifetime
+   * here, and the queue is not visible from this side. Round-robin is enough for
+   * the property that matters: two reads asked for at the same moment land on
+   * different connections, so neither waits for the other, and a long read only
+   * ever holds one reader.
+   */
+  getReadWorker(): DatabaseWorker | null {
+    const running = this.readers.filter((reader) => reader.isRunning())
+    if (running.length === 0) return null
+    const reader = running[this.nextReader % running.length] ?? null
+    this.nextReader = (this.nextReader + 1) % Math.max(1, running.length)
+    return reader
   }
 
   /**
@@ -277,12 +321,9 @@ export class DatabaseAsyncReads {
   async stop(): Promise<void> {
     if (this.integrityTimer) clearTimeout(this.integrityTimer)
     this.integrityTimer = null
-    const worker = this.worker
-    if (!worker?.isRunning()) {
-      this.worker = null
-      return
-    }
+    const readers = this.readers
+    this.readers = []
     this.worker = null
-    await worker.shutdown()
+    await Promise.all(readers.map((reader) => (reader.isRunning() ? reader.shutdown() : undefined)))
   }
 }

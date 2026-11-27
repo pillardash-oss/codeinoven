@@ -170,6 +170,21 @@
     checkpointId?: string | null
     checkpointPaths?: string[]
     onToggle?: (open: boolean, userOpened: boolean, userFolded: boolean) => void
+    /**
+     * Tell the conversation the reader took the viewport by working inside this
+     * trace.
+     *
+     * A trace body is not height-bounded inside the transcript, so its rows grow
+     * the transcript itself: opening a tool call there resizes the scroller, and
+     * a tail follower that is still engaged re-anchors the reader to the bottom
+     * on that very resize   and again on every step the run appends afterwards.
+     * The card they opened slides off the top of the screen each time.
+     *
+     * The reader's gesture is what moves the viewport out of the reading band,
+     * so the caller that owns the scroller hears about it here and hands the
+     * viewport to them instead of following the tail.
+     */
+    onReaderClaimsViewport?: () => void
     onOpenSubagent?: (part: Extract<AgentPart, { type: 'subagent' }>) => void
     onCiteFile?: (path: string, line?: number) => void
     /** Rewrites a chain's output before it is drawn. A conversation whose text
@@ -221,6 +236,7 @@
     checkpointId = null,
     checkpointPaths = [],
     onToggle,
+    onReaderClaimsViewport,
     onOpenSubagent,
     onCiteFile,
     formatOutput
@@ -499,6 +515,19 @@
     workingTraceStartTime(visibleParts, startTime ?? traceSpan?.start)
   )
 
+  /**
+   * True while the turn this trace belongs to is still in progress.
+   *
+   * This is the trace's own claim about the work, and the header's orb reads it:
+   * a trace the run is still feeding is not settled, whatever its clock is doing.
+   * It used to read the live-session flag instead, so a trace restored from the
+   * durable fold (the run is busy but the live session has not confirmed it yet,
+   * or the trace was re-mounted while the turn kept running) showed the settled
+   * wrench beside the composer's "working" line and a step count that kept
+   * climbing. An orb next to work is never a lie; a wrench next to it is.
+   */
+  const traceInProgress = $derived(busy)
+
   /** True only while a live session is streaming this trace. A restored trace
    *  (busy with the saved-activity note) is historical: its durations are
    *  frozen snapshots, never live wall-clock counts. */
@@ -580,6 +609,24 @@
   }
 
   /**
+   * The reader took the viewport by working inside this trace   they opened a
+   * tool call, a reasoning block, a chain, the trace body itself.
+   *
+   * Their own gesture is what resizes the transcript, so the tail follower must
+   * stop reading that growth as work arriving at the bottom of a reader who is
+   * still there. A height-bounded reply body stops following its own tail, and
+   * the conversation that owns the transcript scroller is told to hand the
+   * viewport over: from here the fold, the tail follower and the steps that keep
+   * arriving are all corrections for a reader who is no longer at the bottom,
+   * and every one of them would slide the block they just opened off the top of
+   * the screen.
+   */
+  function claimReaderViewport(): void {
+    followingTail = false
+    onReaderClaimsViewport?.()
+  }
+
+  /**
    * The reader worked inside this trace   they opened a tool call, a reasoning
    * block, a chain. From that moment the trace is theirs: the idle blip a
    * harness reports between steps, and the settle at the end of the turn, must
@@ -590,6 +637,7 @@
    * expanded went with it   again on the next step.
    */
   function markReaderInteraction(): void {
+    claimReaderViewport()
     if (isOpen && userOpened) return
     setFold(true, true, false)
   }
@@ -645,6 +693,10 @@
     event.preventDefault()
     if (isOpen) foldToHeader()
     const nextOpen = !isOpen
+    // Opening the body is the reader's own gesture like any other, so it takes
+    // the viewport: the body mounting below the header is growth the reader
+    // asked for, not work arriving at a tail they are still following.
+    if (nextOpen) claimReaderViewport()
     setFold(nextOpen, nextOpen, !nextOpen)
   }
 
@@ -725,7 +777,7 @@
   >
     <WorkingTraceSummary
       open={isOpen}
-      live={liveActivity}
+      live={traceInProgress}
       count={stepCount}
       durationSeconds={totalDurationSeconds}
       {hasCompaction}

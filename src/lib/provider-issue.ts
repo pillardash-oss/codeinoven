@@ -51,6 +51,33 @@ export const TRANSIENT_PROVIDER_RETRY_MS = 60 * 1_000
 export const TRANSIENT_PROVIDER_RETRY_MAX_MS = 15 * 60 * 1_000
 
 /**
+ * Cooldown schedule for a rate limit the provider did not attach a retry time
+ * to. An immediate retry hammers an account that is already refusing work, so
+ * each consecutive failure waits longer: 1s, 3s, 5s, 10s, 30s, then a final
+ * minute. After the last step the app stops retrying and leaves the thread on
+ * its failure card for a deliberate manual retry.
+ *
+ * The whole streak is short by design: a real rate limit clears in seconds to a
+ * minute, and a wait the provider never scheduled must never become an hour-long
+ * blind cooldown.
+ */
+export const RATE_LIMIT_COOLDOWN_SCHEDULE_MS = [
+  1_000, 3_000, 5_000, 10_000, 30_000, 60_000
+] as const
+
+/** Number of automatic cooldown retries allowed before the app stops. */
+export const RATE_LIMIT_COOLDOWN_MAX_ATTEMPTS = RATE_LIMIT_COOLDOWN_SCHEDULE_MS.length
+
+/**
+ * Wait before the given (1-based) consecutive cooldown retry, or `undefined`
+ * once the schedule is exhausted and the app must stop retrying.
+ */
+export function rateLimitCooldownMs(attempt: number): number | undefined {
+  if (!Number.isInteger(attempt) || attempt < 1) return undefined
+  return RATE_LIMIT_COOLDOWN_SCHEDULE_MS[attempt - 1]
+}
+
+/**
  * Provider errors frequently arrive as a driver-formatted string wrapping a raw
  * JSON error body, e.g. `429: {"message":"You've reached your weekly usage
  * limit...","type":"rate_limit_error","code":"RATE_LIMITED"}`. Surfacing that
@@ -196,6 +223,7 @@ export function isUsageLimitNoticeText(text: string): boolean {
     lead.includes('usage limit') ||
     lead.includes('rate limit') ||
     lead.includes('session limit') ||
+    isWindowLimitPhrase(lead) ||
     lead.includes('quota') ||
     lead.includes('too many requests') ||
     lead.includes('limit reached') ||
@@ -236,6 +264,129 @@ export function parseUsageResetAt(message: string, now = Date.now()): number | u
 }
 
 /**
+ * A reset stated as a wall-clock time, e.g. "resets 6am (Africa/Lagos)".
+ *
+ * Claude Code words a cap this way, and the shape carries two traps. The minutes
+ * are optional (it writes "6am", not "6:00am"), so a `H:MM`-only pattern never
+ * matched the weekly window. And the trailing parenthesis names the zone the
+ * clock is stated in: reading "6am" with `setHours` on a machine in another
+ * zone parks the retry hours off, so the wall clock is resolved in the named
+ * zone when the platform knows it and only falls back to the machine zone when
+ * it does not.
+ */
+export function parseClockResetAt(message: string, now = Date.now()): number | undefined {
+  const match =
+    /\bresets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b(?:\s*\(\s*([A-Za-z][A-Za-z0-9_+\-/]*)\s*\))?/iu.exec(
+      message
+    )
+  if (!match) return undefined
+  const hour = Number(match[1])
+  const minute = Number(match[2] ?? 0)
+  if (hour < 1 || hour > 12 || minute < 0 || minute > 59) return undefined
+  const meridiem = match[3]?.toLowerCase()
+  // Noon and midnight are the two values `% 12` alone gets wrong.
+  const hour24 = (hour % 12) + (meridiem === 'pm' ? 12 : 0)
+  const zone = match[4]
+  return nextDailyResetAt(hour24, minute, zone, now)
+}
+
+/** Milliseconds in a wall-clock reading, resolved in `zone` (machine zone when absent). */
+function zonedWallClock(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  zone: string | undefined
+): number {
+  const wall = Date.UTC(year, month - 1, day, hour, minute, 0, 0)
+  // The offset belongs to the instant, not the wall clock, so read it twice:
+  // once at the naive guess and once at the instant that guess lands on. The
+  // second read is what survives the hour a DST switch removes or repeats.
+  const guess = wall - zoneOffsetMs(wall, zone)
+  return wall - zoneOffsetMs(guess, zone)
+}
+
+/** Offset of `zone` at `epoch`, in milliseconds east of UTC. */
+function zoneOffsetMs(epoch: number, zone: string | undefined): number {
+  const parts = zoneClockParts(epoch, zone)
+  return (
+    Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second) - epoch
+  )
+}
+
+interface ZoneClockParts {
+  year: number
+  month: number
+  day: number
+  hour: number
+  minute: number
+  second: number
+}
+
+function zoneClockParts(epoch: number, zone: string | undefined): ZoneClockParts {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    ...(zone ? { timeZone: zone } : {}),
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23'
+  })
+  const read = (type: Intl.DateTimeFormatPartTypes): number => {
+    const value = formatter.formatToParts(new Date(epoch)).find((part) => part.type === type)?.value
+    return Number(value ?? 0)
+  }
+  return {
+    year: read('year'),
+    month: read('month'),
+    day: read('day'),
+    hour: read('hour'),
+    minute: read('minute'),
+    second: read('second')
+  }
+}
+
+/** True when the platform resolves `zone` as an IANA time zone. */
+function isKnownZone(zone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: zone })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The next time `hour:minute` comes round in `zone` (or the machine zone).
+ *
+ * A cap states the clock time it resets at, not a date, and the reset is by
+ * definition still ahead: today's occurrence that has already passed means
+ * tomorrow.
+ */
+function nextDailyResetAt(
+  hour: number,
+  minute: number,
+  zone: string | undefined,
+  now: number
+): number {
+  const resolvedZone = zone && isKnownZone(zone) ? zone : undefined
+  if (!resolvedZone) {
+    const reset = new Date(now)
+    reset.setHours(hour, minute, 0, 0)
+    if (reset.getTime() <= now) reset.setDate(reset.getDate() + 1)
+    return reset.getTime()
+  }
+  const today = zoneClockParts(now, resolvedZone)
+  const candidate = zonedWallClock(today.year, today.month, today.day, hour, minute, resolvedZone)
+  if (candidate > now) return candidate
+  // Let `Date.UTC` roll the day over: month and year ends need no handling.
+  return zonedWallClock(today.year, today.month, today.day + 1, hour, minute, resolvedZone)
+}
+
+/**
  * Whether a failure says the scope's managed checkout is missing or unhealthy.
  * No provider is involved in that, so it is neither a provider outage nor
  * something Change or Retry can fix: the fix is repairing the worktree.
@@ -243,6 +394,26 @@ export function parseUsageResetAt(message: string, now = Date.now()): number | u
 export function isScopeRootFailure(message: string): boolean {
   const normalized = message.toLowerCase()
   return normalized.includes('managed scope root') || normalized.includes('managed checkout')
+}
+
+/**
+ * Window-scoped usage-cap phrasing, e.g. "weekly limit", "5-hour limit".
+ *
+ * Providers do not agree on what to call a cap. Claude Code names the seven-day
+ * window "You've hit your weekly limit" and its session window "5-hour limit",
+ * and neither sentence contains the words "usage limit" or "session limit".
+ * Without these window adjectives the notice classified as `unknown`, the
+ * completed message carried no issue, and the turn's non-zero exit code became
+ * the failure the user was shown. The window word must sit immediately before
+ * `limit`, so agent prose that mentions a week or an hour next to an unrelated
+ * limit never matches.
+ */
+const WINDOW_LIMIT_PATTERN =
+  /\b(?:(?:five|5)[\s-]?hours?|(?:twenty[\s-]?four|24)[\s-]?hours?|hourly|daily|weekly|monthly|yearly|annual)[\s-]?limit\b/u
+
+/** True when the text names a window-scoped cap ("weekly limit", "5-hour limit"). */
+export function isWindowLimitPhrase(text: string): boolean {
+  return WINDOW_LIMIT_PATTERN.test(text.toLowerCase())
 }
 
 /**
@@ -280,6 +451,7 @@ export function classifyProviderIssue(
     normalized.includes('quota') ||
     normalized.includes('usage limit') ||
     normalized.includes('session limit') ||
+    isWindowLimitPhrase(normalized) ||
     normalized.includes('exhausted') ||
     normalized.includes('window exceeded')
   ) {

@@ -56,7 +56,7 @@ export interface CioCoreToolsExtensionOptions {
   /** Present exclusively for the app-bundled Pi runtime. */
   sensitiveFilePolicyPath?: string
   sensitiveSecretRoot?: string
-  /** One-shot sessions (title generation, grading, lessons) run pure text
+  /** One-shot sessions (title generation, summaries, lessons) run pure text
    *  prompts: the extension then registers no gateway or interactive tools
    *  and skips the permission gate entirely, so the model request carries
    *  only pi's own built-ins plus the status/usage/compaction plumbing. */

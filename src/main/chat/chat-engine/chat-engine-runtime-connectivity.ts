@@ -20,7 +20,7 @@ import {
   parseUsageResetAt,
   TRANSIENT_PROVIDER_RETRY_MS
 } from '../../../lib/provider-issue'
-import type { SessionInfo } from './chat-engine-types'
+import type { ChildSessionInfo, SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
 import {
   CONNECTION_LOSS_GRACE_MS,
@@ -29,7 +29,15 @@ import {
   USAGE_RESET_FALLBACK_RETRY_MS
 } from './chat-engine-constants'
 import { probeSessionLiveness } from './chat-engine-pure'
+import { retryResumesOwnThread } from './chat-engine-retry-eligibility'
 import type { ChatEngine } from '../chat-engine'
+
+/**
+ * Outcome of scheduling an automatic provider retry. `cooldown-exhausted` means
+ * a rate limit with no provider retry time has used every step of the app's
+ * cooldown schedule, so the caller must leave the failure terminal.
+ */
+export type AutomaticRetrySchedule = 'scheduled' | 'refused' | 'cooldown-exhausted'
 
 /** ChatEngine runtime-connectivity: one concern, moved verbatim from the composition root. */
 export class ChatEngineRuntimeConnectivity {
@@ -290,15 +298,32 @@ export class ChatEngineRuntimeConnectivity {
    * including harnesses that schedule their own provider retries (OpenCode): a
    * native resume emits `working` and clears the record, while the persisted
    * record keeps the wait alive (and re-runs the thread) across app restarts.
-   * Internal/child sessions are skipped. Issues without a usable reset time are
+   * A nested sub-agent is skipped because its session belongs to the parent's
+   * turn; a pawn (a child session that owns its own thread) is scheduled like
+   * any other thread. A rate limit with no usable reset time is retried on the
+   * app's short cooldown schedule; other issues without a usable reset time are
    * retained for manual recovery rather than discarded.
    */
-  async scheduleAutomaticRetry(sessionId: string, issue: AgentProviderIssue): Promise<boolean> {
+  async scheduleAutomaticRetry(
+    sessionId: string,
+    issue: AgentProviderIssue
+  ): Promise<AutomaticRetrySchedule> {
     const scheduler = this.host.state.retryScheduler
-    if (!scheduler) return false
+    if (!scheduler) return 'refused'
     const info = this.host.sessionRegistry.get(sessionId)
-    if (!info || info.ephemeral === true || this.host.state.childSessionOwners.has(sessionId))
-      return false
+    const childOwner = this.host.state.childSessionOwners.get(sessionId)
+    if (!info) {
+      // A nested sub-agent has no registered session of its own; it still gets
+      // the app's retry when the failure is clearly transient, so the parent is
+      // not told a worker died while it is about to run again.
+      if (!childOwner || childOwner.parentSessionId === undefined) return 'refused'
+      return this.scheduleNestedSubagentRetry(sessionId, issue, childOwner)
+    }
+    // A nested sub-agent shares its parent's thread and turn, so a wait parked
+    // on its session would resume the parent. A pawn is a child session that
+    // owns its own thread, and it takes the same retry as any other thread.
+    if (info.ephemeral === true || !retryResumesOwnThread(childOwner, info.threadId))
+      return 'refused'
     // An assistant task whose assistant carries fallback models moves onto the
     // next model and re-runs at once. The fallback exists so a failed model
     // never stops the assistant, so it is applied before any reset wait.
@@ -310,7 +335,7 @@ export class ChatEngineRuntimeConnectivity {
         issue
       ))
     )
-      return true
+      return 'scheduled'
     // A provider with an explicit retry deadline has declared that the issue
     // is safe to retry later. Account usage windows explain quota/rate-limit
     // failures only: a provider-load 429 ("overloaded", "server_error") or a
@@ -325,7 +350,7 @@ export class ChatEngineRuntimeConnectivity {
       !transientUnavailable &&
       !(issue.retryable && issue.retryAt !== undefined)
     ) {
-      return false
+      return 'refused'
     }
     const driver = this.host.units['turns-dispatch'].driverForRuntime(info.driverId, info.accountId)
     // A device connection failure outlives the driver it killed: that is
@@ -335,15 +360,17 @@ export class ChatEngineRuntimeConnectivity {
     // thread's own settings like any other send, so no driver is needed to arm
     // it. Every other kind still needs its driver: both the reset time it
     // waits on and the resume come from it.
-    if (!driver && issue.kind !== 'network') return false
+    if (!driver && issue.kind !== 'network') return 'refused'
     // Allow the failed turn to finish tearing down before admitting a continuation.
     let retryAt: number | undefined
+    let cooldownAttempt: number | undefined
+    let retryCooldown = false
     if (issue.kind === 'network') retryAt = Date.now() + 3_000
     else if (transientUnavailable) retryAt = Date.now() + TRANSIENT_PROVIDER_RETRY_MS
     else {
       retryAt = issue.retryAt
       if (retryAt === undefined) {
-        if (!driver) return false
+        if (!driver) return 'refused'
         // Some harnesses surface a usage reset without attaching it to the error
         // (e.g. Codex reports windows via account/rateLimits/read, OpenCode Go via
         // its account endpoint)   ask the provider-scoped account telemetry for
@@ -352,6 +379,47 @@ export class ChatEngineRuntimeConnectivity {
       }
     }
     const usageResetWait = isUsageResetWaitIssue(issue)
+    if (retryAt === undefined && issue.kind === 'rate_limit') {
+      // A rate limit with no provider-supplied retry time is retried on the
+      // app's own cooldown schedule (1s, 3s, 5s, 10s, 30s, 60s). Retrying at
+      // once only hammers an account that is already refusing work, and the
+      // old blind hour-long fallback parked a short limit far too long.
+      const reservation = scheduler.reserveRateLimitCooldown(info.threadId)
+      if (!reservation) {
+        // The schedule is spent. Stop auto-retrying and leave the thread on a
+        // visible failure card so the user decides when to try again.
+        scheduler.clear(sessionId)
+        updateRetryWakeWindow(sessionId, null)
+        if (!(await this.host.threadManager.wasStoppedByUser(info.projectId, info.threadId))) {
+          const exhaustedIssue: AgentProviderIssue = {
+            ...issue,
+            retryable: false,
+            retryAt: undefined,
+            autoResumeAt: undefined
+          }
+          this.host.sessionStatuses.set(sessionId, { state: 'error', issue: exhaustedIssue })
+          this.host.broadcast({
+            type: 'session.status',
+            sessionId,
+            status: { state: 'error', issue: exhaustedIssue }
+          })
+          await this.host.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
+            read: false,
+            error: issue.message,
+            errorDetail: issue.rawError
+          })
+        }
+        Logger.info('Rate-limit auto-retry stopped: cooldown schedule exhausted', {
+          projectId: info.projectId,
+          threadId: info.threadId,
+          sessionId
+        })
+        return 'cooldown-exhausted'
+      }
+      retryAt = reservation.retryAt
+      cooldownAttempt = reservation.attempt
+      retryCooldown = true
+    }
     if (retryAt === undefined && usageResetWait) {
       // A usage-reset wait with no derivable reset time (the provider gave no
       // parseable date, or gave one already in the past) must still get a
@@ -363,12 +431,17 @@ export class ChatEngineRuntimeConnectivity {
     const resetAt = retryAt
     // Only a provider window needs the rollover grace: firing exactly on the
     // reset second races the window rollover. A transient outage already got
-    // its own short backoff and must not be pushed past it.
-    if (retryAt !== undefined && (issue.kind === 'quota' || issue.kind === 'rate_limit')) {
+    // its own short backoff and the app's rate-limit cooldown is deliberate to
+    // the second, so neither is pushed past its deadline.
+    if (
+      retryAt !== undefined &&
+      !retryCooldown &&
+      (issue.kind === 'quota' || issue.kind === 'rate_limit')
+    ) {
       retryAt += RETRY_FIRE_GRACE_MS
     }
     const hasRetryAt = typeof retryAt === 'number' && Number.isFinite(retryAt)
-    if (!hasRetryAt && !usageResetWait) return false
+    if (!hasRetryAt && !usageResetWait) return 'refused'
     // A deliberate user stop is never overwritten by a new wait. This is the
     // re-arm path that survived the Stop click: the abort cleared the session
     // that was tracked, but the SAME failure re-reported under a successor
@@ -380,7 +453,7 @@ export class ChatEngineRuntimeConnectivity {
         sessionId,
         issueKind: issue.kind
       })
-      return false
+      return 'refused'
     }
     await this.host.threadManager.setStatus(info.projectId, info.threadId, 'working-paused', {
       read: false
@@ -394,6 +467,9 @@ export class ChatEngineRuntimeConnectivity {
       // the runtime that produced the failure.
       harnessId: info.driverId,
       ...(hasRetryAt ? { retryAt, resetAt } : {}),
+      ...(retryCooldown && cooldownAttempt !== undefined
+        ? { retryCooldown: true, cooldownAttempt }
+        : {}),
       issueKind: issue.kind,
       issueMessage: issue.message,
       ...(issue.rawError === undefined ? {} : { rawError: issue.rawError }),
@@ -404,23 +480,81 @@ export class ChatEngineRuntimeConnectivity {
       // the wait OFF the ledger and leave the thread on the visible warning
       // card; with auto-retry on this also marks the thread failed so it is
       // never silently revived. A manual Retry stays available.
+      if (retryCooldown) scheduler.clearRateLimitCooldown(info.threadId)
       await this.host.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
         read: false,
         error: issue.message,
         errorDetail: issue.rawError
       })
-      return false
+      return 'refused'
     }
     const current = this.host.sessionStatuses.get(sessionId)
     if (current?.state === 'waiting' || current?.state === 'error') {
       const status: AgentSessionStatus = {
         ...current,
-        issue: { ...current.issue, retryAt: resetAt, autoResumeAt: retryAt }
+        issue: {
+          ...current.issue,
+          retryAt: resetAt,
+          autoResumeAt: retryAt,
+          ...(retryCooldown ? { retryCooldown: true } : {})
+        }
       }
       this.host.sessionStatuses.set(sessionId, status)
       this.host.broadcast({ type: 'session.status', sessionId, status })
     }
-    return true
+    return 'scheduled'
+  }
+
+  /**
+   * Park a nested sub-agent's transient failure and resume that child session
+   * later. The parent thread is never paused: the harness owns that turn, so
+   * this only keeps the worker alive and stops its failure being final.
+   * `continueScheduledThread` resumes it through `retryChildSession`.
+   */
+  private async scheduleNestedSubagentRetry(
+    sessionId: string,
+    issue: AgentProviderIssue,
+    owner: ChildSessionInfo
+  ): Promise<AutomaticRetrySchedule> {
+    const scheduler = this.host.state.retryScheduler
+    if (!scheduler) return 'refused'
+    const transient = issue.kind === 'network' || isUsageResetWaitIssue(issue)
+    if (!transient) return 'refused'
+    if (await this.host.threadManager.wasStoppedByUser(owner.projectId, owner.threadId))
+      return 'refused'
+    let retryAt = issue.retryAt
+    let cooldownAttempt: number | undefined
+    let retryCooldown = false
+    if (retryAt === undefined && issue.kind === 'rate_limit') {
+      // The child's own session is the streak key: sibling sub-agents under the
+      // same parent must not share one cooldown budget.
+      const reservation = scheduler.reserveRateLimitCooldown(sessionId)
+      if (!reservation) return 'cooldown-exhausted'
+      retryAt = reservation.retryAt
+      cooldownAttempt = reservation.attempt
+      retryCooldown = true
+    } else if (retryAt === undefined) {
+      retryAt = Date.now() + (issue.kind === 'network' ? 3_000 : TRANSIENT_PROVIDER_RETRY_MS)
+    }
+    const tracked = await scheduler.track({
+      sessionId,
+      projectId: owner.projectId,
+      threadId: owner.threadId,
+      harnessId: owner.driverId,
+      retryAt,
+      resetAt: issue.retryAt ?? retryAt,
+      ...(retryCooldown && cooldownAttempt !== undefined
+        ? { retryCooldown: true, cooldownAttempt }
+        : {}),
+      issueKind: issue.kind,
+      issueMessage: issue.message,
+      ...(issue.rawError === undefined ? {} : { rawError: issue.rawError })
+    })
+    if (!tracked) {
+      if (retryCooldown) scheduler.clearRateLimitCooldown(sessionId)
+      return 'refused'
+    }
+    return 'scheduled'
   }
 
   /**

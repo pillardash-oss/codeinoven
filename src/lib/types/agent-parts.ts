@@ -199,6 +199,14 @@ export interface AgentSubagentActivity {
   assignmentDraft?: boolean
   output?: string
   error?: string
+  /**
+   * When the app will retry this worker's own session after a transient
+   * failure. The parent's card counts this down instead of declaring the worker
+   * dead while the app is about to run it again.
+   */
+  retryAt?: number
+  /** True when `retryAt` is the app's rate-limit cooldown, not a provider reset. */
+  retryCooldown?: boolean
   /** Project-relative paths the sub-agent's file tools edited or wrote. */
   files?: string[]
   /**

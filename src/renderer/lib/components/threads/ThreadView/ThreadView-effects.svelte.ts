@@ -776,21 +776,27 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       }
     })
 
-    // A thread opens where the reader needs to start reading.
+    // A thread opens at the tail   the live bottom, which is where the
+    // conversation actually is.
     //
-    // A live turn opens at the live bottom, which is where its output is
-    // arriving. A settled one opens at its newest prompt: the message the user
-    // sent and the answer it produced are what the screen is for, and dropping
-    // them above the fold so the first thing on screen is the turn's
-    // file-changes card inverts the whole conversation. A saved pixel offset is
+    // It used to open on the newest prompt instead, so that the message the
+    // reader sent stayed on screen. That traded one bad first frame for a worse
+    // one: a settled turn's answer is routinely many screens long, so the prompt
+    // at the top of the viewport put the FIRST lines of the final output on
+    // screen and left the rest of it   and everything after it   below the fold.
+    // Every open meant scrolling to the end of the answer to see what it said.
+    //
+    // The tail keeps the reader where the conversation left off: the end of the
+    // newest answer is on screen whatever its length, and a run's own cards and
+    // receipt stay under it where they already were. A saved pixel offset is
     // stale the moment the conversation grows, so it is never restored. This
     // runs once per thread (the view is remounted per thread switch); later
     // arrivals are followed by the resize observer below.
     $effect(() => {
       // Reading the mounted window here is the dependency that re-runs this
       // effect as the reveal publishes batches; the restore must wait for the
-      // whole window, otherwise it anchors on a partial tail and the prompt
-      // arrives above the viewport a few frames later.
+      // whole window, otherwise it settles on a partial tail and the newest
+      // messages land above the viewport a few frames later.
       void this.root.composerScope.visibleMessages.length
       if (
         !this.root.sources.loaded ||
@@ -806,55 +812,23 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
         )
       )
         return
-      const scrollToTurnPrompt = (attempt: number): void => {
+      const settleAtTail = (): void => {
         const el = this.root.loadOlderMessages.scrollEl
         if (!el || this.root.unmirroredTraceStartTime.scrollRestored) return
-        // Anchor on the message that opens the newest turn, by id. The first
-        // mounted message is normally the same element, but only while the
-        // window still starts there: a history page that mounted above it puts
-        // an OLD message first in the document, and anchoring on that one is
-        // how a thread opened in the middle of its history instead of at the
-        // prompt the reader came to read.
-        const startIndex = this.root.buildSpecActionPrompt.latestTurnInfo.startIndex
-        const newestPromptId =
-          startIndex >= 0 ? this.root.loadOlderMessages.messages[startIndex]?.id : undefined
-        const newestPrompt = newestPromptId
-          ? document.getElementById(`msg-${newestPromptId}`)
-          : null
-        const prompt = newestPrompt ?? el.querySelector<HTMLElement>('[id^="msg-"]')
-        if (prompt) {
-          const top =
-            prompt.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop
-          el.scrollTo({ top: Math.max(0, top), behavior: 'auto' })
-          // Pin the viewport to the prompt. Content below keeps growing (a
-          // settling trace, markdown, images, a live turn), and the tail
-          // follower would otherwise drag the reader to the newest pixel and
-          // hide the message they opened the thread to read. A send releases
-          // this pin by calling `scrollToLatest`.
-          this.root.loadOlderMessages.userScrolledAway = true
-          this.root.unmirroredTraceStartTime.scrollRestored = true
-          return
-        }
-        // The transcript mounts its window on the frame after the load flag
-        // flips; a short bounded retry anchors it instead of falling back to
-        // the tail and hiding the prompt.
-        if (attempt < 4) {
-          requestAnimationFrame(() => scrollToTurnPrompt(attempt + 1))
-          return
-        }
         el.scrollTo({ top: el.scrollHeight, behavior: 'auto' })
+        // Attached, not pinned: what is still finding its height below (markdown,
+        // pictures, a settling trace, a live turn) keeps the tail, so the reader
+        // lands on the end of the answer and stays there instead of being left
+        // part way up it. A send re-takes the tail through `scrollToLatest`, and
+        // the reader's first upward scroll detaches them as usual.
         this.root.loadOlderMessages.userScrolledAway = false
         // Flag the restore *after* the scroll actually ran: setting it in the
         // effect body would poison this callback's own `scrollRestored` guard
         // (the body runs synchronously, before `tick()` resolves) and the
-        // snap-to-bottom would never fire.
+        // settle would never fire.
         this.root.unmirroredTraceStartTime.scrollRestored = true
       }
-      void tick().then(() => {
-        const el = this.root.loadOlderMessages.scrollEl
-        if (!el || this.root.unmirroredTraceStartTime.scrollRestored) return
-        scrollToTurnPrompt(0)
-      })
+      void tick().then(settleAtTail)
     })
 
     // Follow the live tail without ever fighting the reader. Whenever the

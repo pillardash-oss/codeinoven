@@ -241,8 +241,8 @@ export function auxiliaryBlockUntil(
  *
  * An account-level limit fails identically for every queued background job, so
  * without this memory a blocked account pays a fresh harness process for title,
- * grading, lesson, heartbeat, and cheap-model runs alike, once per job, until
- * its window reopens: Codex's usage-limit failures repeated on every grading row
+ * summary, lesson, heartbeat, and cheap-model runs alike, once per job, until
+ * its window reopens: Codex's usage-limit failures repeated on every queued row
  * for hours because the reset time the provider reported was parsed and then
  * discarded.
  */

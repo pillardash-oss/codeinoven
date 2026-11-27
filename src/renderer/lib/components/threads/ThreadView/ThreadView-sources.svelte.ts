@@ -321,6 +321,10 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
   private assignmentDraftFailureDurable = $derived.by((): string => {
     const thread = this.root.handleAgentEvent.thread
     if (thread.status !== 'failed' || !thread.lastError) return ''
+    // A coordinated thread (a pawn, worker or auditor) is never an Assignment
+    // draft: its own card carries its failure, and this card's Retry continues a
+    // draft session it does not have.
+    if (thread.userInputLocked === true) return ''
     if (this.root.loadOlderMessages.settings.loopMode === true) return ''
     if (this.root.submitBrainstormDecision.spec !== null) return ''
     if (this.root.submitSpecDecision.assignment !== null) return ''
@@ -337,10 +341,22 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
       : this.assignmentDraftError || this.assignmentDraftFailureDurable
   )
 
-  /** Close the failed-draft card without dropping the failing run's session. */
+  /**
+   * Close the failed-draft card.
+   *
+   * The card stands for the thread's `failed` status, so dismissing it has to
+   * clear that status too. Hiding the card in this view alone left the thread row
+   * wearing an error the user had just acknowledged, until another run settled
+   * over it. `dismissSessionError` is the same reset the provider error card uses:
+   * it drops the cached session error and returns the thread to `completed`.
+   *
+   * Hiding the card locally is unconditional. A backend reset that fails must not
+   * leave the user trapped behind a card they already dismissed.
+   */
   dismissAssignmentDraftFailure(): void {
     this.assignmentDraftFailureDismissed = true
     this.assignmentDraftError = ''
+    void this.root.composerScope.dismissSessionError()
   }
 
   /** True while the retry of a failed draft is being started. */

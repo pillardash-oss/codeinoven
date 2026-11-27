@@ -316,7 +316,7 @@ export class ChatEngineTurns {
     threadHarnessId: string
     threadId?: string
     projectId?: string
-    /** Explicit working directory; grading runs outside any thread. */
+    /** Explicit working directory; a search summary runs outside any thread. */
     projectPath?: string
   }): Promise<AuxiliaryRoute | null> {
     const config = await this.host.storage.getConfig()
@@ -468,7 +468,7 @@ export class ChatEngineTurns {
 
     let projectPath = project.path
     // A hidden inbox project has no folder of its own. Its project-level work
-    // (quota reads, grading judges, heartbeats) shares this neutral root, while
+    // (quota reads, summaries, heartbeats) shares this neutral root, while
     // each chat thread resolves to `chats-cwd/<threadId>/` through
     // `resolveThreadPath` so conversations never share a directory.
     if (!projectPath && project.hidden && project.id === INBOX_PROJECT_ID) {
@@ -884,6 +884,12 @@ export class ChatEngineTurns {
       if (event.status.state !== 'idle' || currentStatus?.state !== 'error') {
         this.host.sessionStatuses.set(event.sessionId, event.status)
       }
+      // An idle that is not a live retry wait means the last turn finished on
+      // its own, so its rate-limit cooldown streak is over and the next rate
+      // limit starts from a fresh one-second wait.
+      if (event.status.state === 'idle' && eventOwner) {
+        this.host.state.retryScheduler?.clearRateLimitCooldown(eventOwner.threadId)
+      }
       if (
         event.status.state === 'waiting' &&
         eventOwner &&
@@ -1276,6 +1282,21 @@ export class ChatEngineTurns {
           this.host.units['runtime-connectivity'].enterRetryWait(
             event.sessionId,
             issue,
+            event.error
+          )
+        } else if (
+          issue.kind === 'unknown' &&
+          this.host.units['turns-dispatch'].isAutomaticRetryWaitActive(event.sessionId)
+        ) {
+          // An errored completion the app could not classify must not tear down
+          // a usage-reset wait another record already established. A harness can
+          // report the same cap twice (a structured limit event, then this plain
+          // text record) and this text is often the one phrasing the app does
+          // not recognise. Tearing the wait down here cleared the state that
+          // swallows the teardown noise which follows, so the non-zero exit
+          // replaced the limit card with a bare "process exited" failure.
+          Logger.dev(
+            'Ignored unclassified errored completion trailing an active usage-reset wait:',
             event.error
           )
         } else {

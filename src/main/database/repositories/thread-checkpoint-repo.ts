@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Database } from '../database'
+import { MESSAGE_LINEAGE_CTE, MESSAGE_LINEAGE_FROM } from './agent-message-repo'
 import type { ThreadCheckpoint, ThreadCheckpointKind } from '../../../lib/types'
 
 /**
@@ -240,16 +241,26 @@ export class ThreadCheckpointRepo {
     return row ? rowToCheckpoint(row) : undefined
   }
 
-  /** The last mirrored message a closing session saw, for the boundary marker. */
+  /**
+   * The last message the closing session saw, for the boundary marker.
+   *
+   * "Saw" is the transcript the conversation screen shows, which for a fork
+   * includes the inherited rows up to the point it was cut at. The shape comes
+   * from the shared lineage builder rather than being spelled out here: its
+   * `OR EXISTS` predicate form cost a scan of every message row in the database
+   * to answer one loudest-row question.
+   */
   async boundaryViaWorker(
     threadId: string
   ): Promise<{ id: string; createdAt: number } | undefined> {
     const result = await this.db.queryViaWorker(
-      `SELECT id, created_at FROM agent_messages
-        WHERE thread_id = ? AND session_id IS NULL
-          AND visibility IN ('conversation', 'working_trace')
-        ORDER BY created_at DESC, id DESC LIMIT 1`,
-      [threadId],
+      `${MESSAGE_LINEAGE_CTE}
+       SELECT agent_messages.id AS id, agent_messages.created_at AS created_at
+       ${MESSAGE_LINEAGE_FROM}
+        AND session_id IS NULL
+        AND visibility IN ('conversation', 'working_trace')
+        ORDER BY agent_messages.created_at DESC, agent_messages.id DESC LIMIT 1`,
+      [threadId, threadId],
       1
     )
     if (!result.ok) return undefined

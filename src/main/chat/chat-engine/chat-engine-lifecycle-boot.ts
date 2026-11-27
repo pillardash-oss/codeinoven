@@ -1,6 +1,10 @@
 import { trustedIpcMain as ipcMain } from '../../ipc/trusted-ipc-main'
 import { Logger } from '../../system/logger'
-import { validateBoundedString, validateEntityId } from '../../ipc/ipc-validation'
+import {
+  validateBoundedString,
+  validateEntityId,
+  validateThreadSettings
+} from '../../ipc/ipc-validation'
 import { instanceEventBus } from '../../system/instance-event-bus'
 import { validateMcpProbeTarget } from '../../utilities/mcp-probe-input'
 import type {
@@ -58,6 +62,11 @@ export class ChatEngineLifecycleBoot {
     )
     ipcMain.handle('agent:compact', (_, projectId: string, threadId: string) =>
       this.host.compactSession(projectId, threadId)
+    )
+    // The user's checkpoint, from `/checkpoint` (and its `/compact` alias): the
+    // session closes and a successor continues the thread.
+    ipcMain.handle('agent:checkpoint', (_, projectId: string, threadId: string) =>
+      this.host.checkpointSession(projectId, threadId)
     )
     ipcMain.handle('agent:listProviders', (_, projectId: string) =>
       this.host.listProviders(projectId)
@@ -237,7 +246,8 @@ export class ChatEngineLifecycleBoot {
           throw new TypeError('Message limit must be an integer between 1 and 100')
         }
         const messages = await this.host.loadMessages(projectId, threadId)
-        return limit === undefined ? messages : messages.slice(-limit)
+        const page = limit === undefined ? messages : messages.slice(-limit)
+        return page.map(withoutTransportParts)
       }
     )
     ipcMain.handle(
@@ -272,8 +282,27 @@ export class ChatEngineLifecycleBoot {
     )
     ipcMain.handle(
       'agent:retryChildSession',
-      (_, projectId: string, threadId: string, sessionId: string) =>
-        this.host.retryChildSession(projectId, threadId, sessionId)
+      (_, projectId: string, threadId: string, sessionId: string) => {
+        // A deliberate retry is a fresh try, not another step of the cooldown
+        // the automatic retry was walking.
+        this.host.state.retryScheduler?.clearRateLimitCooldown(sessionId)
+        return this.host.retryChildSession(projectId, threadId, sessionId)
+      }
+    )
+    ipcMain.handle(
+      'agent:retryPawnRun',
+      (_, projectId: string, threadId: string, picked?: unknown) =>
+        this.host.retryPawnRun(
+          projectId,
+          threadId,
+          picked === undefined ? undefined : validateThreadSettings(picked)
+        )
+    )
+    ipcMain.handle('agent:getPawnRunState', (_, projectId: string, threadId: string) =>
+      this.host.pawnRunState(projectId, threadId)
+    )
+    ipcMain.handle('agent:repairPawnRuns', (_, projectId: string, spawnerThreadId: string) =>
+      this.host.repairStrandedPawnRuns(projectId, spawnerThreadId)
     )
     ipcMain.handle(
       'agent:retryAssignmentWorker',
@@ -826,6 +855,13 @@ export class ChatEngineLifecycleBoot {
     this.host.units['lifecycle-shutdown'].syncIdleReaper()
     void this.host.restoreCoordinatorHandoffQueues().catch((error) =>
       Logger.error('Coordinator handoff queue recovery failed', {
+        error: rawErrorMessage(error)
+      })
+    )
+    // Reports queued while the parent was busy outlive the process that filed
+    // them: a quit must never be what loses a finished pawn's news.
+    void this.host.units['delegation-reports'].restoreQueues().catch((error) =>
+      Logger.error('Delegated report queue recovery failed', {
         error: rawErrorMessage(error)
       })
     )

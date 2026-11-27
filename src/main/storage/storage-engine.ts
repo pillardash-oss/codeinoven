@@ -80,7 +80,6 @@ import {
   DEFAULT_BROWSER_SEARCH_ENGINE_ID,
   sanitizeCustomSearchEngines
 } from '../../lib/browser-search-engines'
-import { MAX_DESIGN_ASSIGNMENTS, isUsableDesignAssignment } from '../../lib/design-assignments'
 import { MAX_MODEL_PROFILES, isUsableModelProfile } from '../../lib/model-profiles'
 import { DEFAULT_SPEECH_SETTINGS } from '../../lib/speech/types'
 import { normalizeVisionModelId, visionModelRecordMatches } from '../../lib/image-descriptor'
@@ -113,9 +112,7 @@ const DEFAULT_CONFIG: AppConfig = {
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: {},
   auxiliaryAgents: {},
-  design: { assignments: [] },
   modelProfiles: [],
-  mediaGeneration: { providerId: null },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
   autoInstallUpdates: true,
@@ -386,25 +383,12 @@ export class StorageEngine {
         ...(config?.agentDefaults ?? {})
       },
       auxiliaryAgents: { ...(config?.auxiliaryAgents ?? {}) },
-      // Assignments are read straight off the config file, so the array is
-      // filtered here too: only a complete selection on a valid id survives, and
-      // a hand-edited entry can never reach a model the user did not name.
-      design: {
-        assignments: (Array.isArray(config?.design?.assignments) ? config.design.assignments : [])
-          .filter(isUsableDesignAssignment)
-          .slice(0, MAX_DESIGN_ASSIGNMENTS)
-      },
       // Same tolerance as assignments: a profile missing a harness, a provider, or
       // a model could only be applied to somewhere the user never chose, so it is
       // dropped on read rather than offered as a broken row.
       modelProfiles: (Array.isArray(config?.modelProfiles) ? config.modelProfiles : [])
         .filter(isUsableModelProfile)
         .slice(0, MAX_MODEL_PROFILES),
-      // A provider id a future version wrote is passed through as-is so the
-      // choice is not silently erased; only a missing field falls back.
-      mediaGeneration: {
-        providerId: config?.mediaGeneration?.providerId ?? DEFAULT_CONFIG.mediaGeneration.providerId
-      },
       // Read tolerantly, so a hand-edited entry list arrives as a working app
       // rather than as a failed start.
       memory: {

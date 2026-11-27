@@ -5,36 +5,36 @@ import type {
 } from '../../../lib/types'
 import {
   classifyProviderIssue,
+  isWindowLimitPhrase,
+  parseClockResetAt,
   parseUsageResetAt,
   presentProviderError
 } from '../../../lib/provider-issue'
 
 /** Claude Code limit notices, result failures, and API retry classification. */
 
+/**
+ * The reset time a Claude Code limit notice states, e.g. "resets 6am
+ * (Africa/Lagos)". The shared parser owns the wording and the zone: Claude omits
+ * the minutes and names the clock's zone, and both used to be lost here.
+ */
 export function claudeSessionLimitResetAt(message: string, now = Date.now()): number | undefined {
-  const match = message.match(/\bresets\s+(\d{1,2}):(\d{2})\s*(am|pm)\b/iu)
-  if (!match) return undefined
-  const parsedHour = Number(match[1])
-  const minute = Number(match[2])
-  if (parsedHour < 1 || parsedHour > 12 || minute < 0 || minute > 59) return undefined
-  const meridiem = match[3]?.toLowerCase()
-  const hour = (parsedHour % 12) + (meridiem === 'pm' ? 12 : 0)
-  const reset = new Date(now)
-  reset.setHours(hour, minute, 0, 0)
-  if (reset.getTime() <= now) reset.setDate(reset.getDate() + 1)
-  return reset.getTime()
+  return parseClockResetAt(message, now)
 }
 
 export function claudeSessionLimitIssue(
   error: string | undefined,
   rateLimits: AgentRateLimitWindow[]
 ): AgentProviderIssue | undefined {
-  if (
-    !error ||
-    !/(?:you(?:'|’)ve|you have) hit your session limit|session limit reached/iu.test(error)
-  ) {
-    return undefined
-  }
+  if (!error) return undefined
+  // Claude Code words the same refused turn two ways: "You've hit your session
+  // limit" for the five-hour window and "You've hit your weekly limit" for the
+  // seven-day one. Only the first phrasing was recognised here, so a weekly cap
+  // reached its `result` record with no issue at all and the turn fell through
+  // to the generic process-exit failure.
+  const reachedSessionLimit =
+    /(?:you(?:'|’)ve|you have) hit your session limit|session limit reached/iu.test(error)
+  if (!reachedSessionLimit && !isWindowLimitPhrase(error)) return undefined
   const retryAt =
     rateLimits.find((limit) => limit.resetsAt !== undefined)?.resetsAt ??
     claudeSessionLimitResetAt(error)

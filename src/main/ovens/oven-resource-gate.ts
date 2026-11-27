@@ -22,11 +22,22 @@ import {
 } from '../../lib/resource-admission'
 import type { OvenProbe } from '../../lib/ovens'
 import { Logger } from '../system/logger'
+import { DEADLINE_EXCEEDED, withDeadline } from '../../lib/with-deadline'
 import type { OvenRegistry } from './oven-registry'
 import type { OvenService } from './oven-service'
 
 /** How long one Oven's admission reading is reused before another probe. */
 const OVEN_ADMISSION_TTL_MS = 10_000
+
+/**
+ * How long an SSH probe may take before the gate answers without it.
+ *
+ * A probe crosses the network to another machine, so it can stall for as long as
+ * the network feels like it. The reading is a courtesy to that machine, never a
+ * reason to hold a user's message: past this deadline the gate fails open, which
+ * is exactly what it already does when the probe reports an error.
+ */
+const OVEN_PROBE_TIMEOUT_MS = 3_000
 
 /** A user turn that may not start on an Oven yet, carrying the reading. */
 export class OvenHoldError extends Error {
@@ -101,8 +112,20 @@ export class OvenResourceGate {
     if (cached && Date.now() - cached.at <= OVEN_ADMISSION_TTL_MS) return cached.decision
     let decision: AdmissionDecision
     try {
-      const probe = await this.service.probe(ovenId)
-      decision = decideOvenAdmission(sampleFrom(probe))
+      const probe = await withDeadline(this.service.probe(ovenId), OVEN_PROBE_TIMEOUT_MS)
+      decision =
+        probe === DEADLINE_EXCEEDED
+          ? decideOvenAdmission({
+              memoryAvailableBytes: null,
+              totalMemoryBytes: 0,
+              activeRuns: 0
+            })
+          : decideOvenAdmission(sampleFrom(probe))
+      if (probe === DEADLINE_EXCEEDED) {
+        // Not cached: a probe that timed out says nothing about this Oven, and
+        // remembering "room" would hide a genuinely full machine for a whole TTL.
+        return decision
+      }
     } catch (error) {
       Logger.dev('Oven gate: probe failed, failing open', { ovenId, error: String(error) })
       decision = decideOvenAdmission({

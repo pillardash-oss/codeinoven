@@ -19,7 +19,7 @@ export interface ThinkingPreset {
 /**
  * Auxiliary model assignments keyed by the harness a thread runs on. The value
  * names the harness, account, provider, and model that runs that harness's
- * auxiliary work (thread titles, memory proposals, turn grading). A value may
+ * auxiliary work (thread titles, memory proposals, search summaries). A value may
  * name a different harness than its key, so one local Pi model can serve every
  * harness. An absent entry means the harness keeps its own price-optimized
  * candidate list.

@@ -597,6 +597,21 @@ the application menu's "Close Window" and closed the app; without the second it
 did nothing at all. Repeated presses empty the strip, and the view drops to its
 empty state when the last tab goes.
 
+### New tab on the new-thread chord
+
+A browser reserves both the chord that opens a tab and the chord the rest of the
+app uses to start a thread, so inside a browser a press of either has to open a
+tab. `browser-new-tab` therefore carries `mod+t` and `mod+n` in the keymap, and
+the browser claims both in `before-input-event`. Claiming `mod+n` is what stops it
+travelling back to the app as a page-key replay of `nav-new-thread`: the
+reserved-chord table in `appShortcutChords` drops every chord the browser already
+answers, so the chord never reaches the renderer's new-thread handler from a page
+or from the browser chrome. The action is forwarded as `new-tab`, which the strip
+owns, so the tab joins the container the key was pressed in (a thread's sidebar
+browser, the full screen overlay, or the global browser) rather than whichever
+strip happens to be on screen. With no browser holding the keyboard, `mod+n`
+keeps its app meaning and starts a new thread.
+
 ### Bookmarks
 
 A bookmark is the user's own record rather than something the browser observed, so

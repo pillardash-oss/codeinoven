@@ -1027,21 +1027,10 @@ export class DesignService {
   }
 
   /**
-   * A thread's persisted authored-work kind, or null when it is in no session.
-   *
-   * Read from the thread row, which is written the moment the thread enters a
-   * session (the tag at turn start, a preview into a work root). Nothing scans
-   * messages: the fact is stored when it happens and read back by id.
-   */
-  async authoredWorkKindFor(threadId: string): Promise<AuthoredWorkKind | null> {
-    return (await this.threads.getViaWorker(threadId))?.authoredWorkKind ?? null
-  }
-
-  /**
    * Mirror a recorded work kind onto the thread row.
    *
-   * The row is what the sidebar draws its markers from, and what the expert card
-   * and media generation read the session from, so the folder record alone is not
+   * The row is what the sidebar draws its markers from, and what the preview
+   * reads the session from, so the folder record alone is not
    * enough. The write adds the kind to the thread's durable set as well as naming
    * the session it is in now, and the set is what comes back to be announced.
    * Best-effort: the folder record has already landed, and a failed mirror must

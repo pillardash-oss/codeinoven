@@ -30,7 +30,6 @@ import { UtilityRuntimeService } from '../../utilities/utility-runtime-service'
 import { UtilityRegistryService } from '../../utilities/utility-registry-service'
 import { AgentSecretService } from '../../utilities/agent-secret-service'
 import { CapabilityDiscoveryService } from '../../agents/capability-discovery-service'
-import type { ExpertSettingsService } from '../../design/expert-settings-service'
 import { McpConnectionTestService } from '../../utilities/mcp-connection-test-service'
 import { McpOAuthService } from '../../utilities/mcp-oauth/mcp-oauth-service'
 import { BaseUrlProviderService } from '../../providers/base-url-provider-service'
@@ -64,6 +63,7 @@ import { GeneratedArtifactService } from '../generated-artifact-service'
 import { GenerationClock } from '../../../lib/usage-rate'
 import type {
   ActiveAssignmentDraftSession,
+  ActiveAuditProgressRun,
   ActiveBrainstormConversationTurn,
   ActiveBrainstormSession,
   ActiveInitialSpecSession,
@@ -339,6 +339,13 @@ export class ChatEngineState {
   /** Sessions owned by stopped Assignments stay quarantined until an explicit Resume. */
   stoppedAssignmentSessions = new Set<string>()
 
+  /**
+   * Audit runs currently recording their own progress, keyed by auditor thread.
+   * The entry exists only while an audit turn runs; the durable record is the
+   * JSONL log the unit appends to, which outlives a crash.
+   */
+  readonly auditProgressRuns = new Map<string, ActiveAuditProgressRun>()
+
   /** Consecutive no-op coordinator continuations per Assignment (stall guard). */
   assignmentContinuationStalls = new Map<string, number>()
 
@@ -522,6 +529,19 @@ export class ChatEngineState {
 
   /** Serializes durable child-to-coordinator queue reads and writes per Sr. Engineer thread. */
   readonly coordinatorHandoffQueueLocks = new Map<string, Promise<void>>()
+
+  /**
+   * Serializes the delegated-report queue's reads and writes per parent thread,
+   * so ten pawns finishing together cannot overwrite each other's report.
+   */
+  readonly delegationReportQueueLocks = new Map<string, Promise<void>>()
+
+  /**
+   * One in-flight delivery per parent thread. It resolves to whether the drain
+   * delivered a batch, so an idle signal can tell "the parent was woken with
+   * news" from "nothing was waiting".
+   */
+  readonly delegationReportDrains = new Map<string, Promise<boolean>>()
 
   /**
    * Prevents concurrent idle signals from dispatching the same queued handoff
@@ -788,14 +808,6 @@ export class ChatEngineState {
   accountRegistry!: HarnessAccountRegistry
 
   utilityOrchestration!: UtilityOrchestrationService
-
-  /**
-   * What each thread decided about the experts its design or video session may
-   * use. Wired by the service graph after the window exists; until then a
-   * delegation reads the config directly, which is what this app did before a
-   * thread could answer for itself.
-   */
-  expertSettings: ExpertSettingsService | null = null
 
   usageRepo!: HarnessUsageRepo
 

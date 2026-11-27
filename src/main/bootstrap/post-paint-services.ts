@@ -970,19 +970,15 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // to it after a restart) and serves the coordinator's open and thumbnail
   // actions. Both capabilities record every preview through it, so the user's
   // design or composition is not lost when the window that showed it closes.
-  // Twelve modules build the design, media, video and display surfaces below.
+  // Ten modules build the design, media, video and display surfaces below.
   // Their construction is ordered; their module loads are not, so the loads run
-  // as one batch instead of twelve awaited chunk reads threaded through the
-  // graph. The batch is a fixed twelve, so it adds no fan-out risk.
+  // as one batch instead of ten awaited chunk reads threaded through the
+  // graph. The batch is a fixed ten, so it adds no fan-out risk.
   const [
     { DesignService },
     { ScreenBoardService },
-    { ExpertSettingsService },
     { createDesignPreviewExecutor },
     { createDesignMediaExecutor },
-    { MediaGenerationService },
-    { createMediaGenerationExecutor },
-    { registerMediaGenerationIpc },
     { createVideoPreviewExecutor },
     { VideoStudioService },
     { registerDisplayIpc },
@@ -990,12 +986,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   ] = await Promise.all([
     import('../design/design-service'),
     import('../design/screen-board-service'),
-    import('../design/expert-settings-service'),
     import('../preview/design-preview-executor'),
     import('../design/design-media-executor'),
-    import('../media/media-generation-service'),
-    import('../media/media-generation-executor'),
-    import('../media/media-generation-ipc'),
     import('../video/video-preview-executor'),
     import('../video/video-studio-service'),
     import('../display/display-ipc'),
@@ -1080,18 +1072,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   ipcMain.handle('design:screenBoardPlace', (_event, projectId, directory, groupId, entries) =>
     screenBoards.place(projectId, directory, groupId, entries)
   )
-  // What each thread decided about the experts its design or video session may
-  // delegate to. One service answers it, because the playbook that names the
-  // experts and the `delegate` operation that would run one have to agree: a
-  // thread the user muted must be neither described as staffed nor allowed to
-  // delegate, and two derivations is how those two answers drift apart.
-  const expertSettings = new ExpertSettingsService({
-    database,
-    config: () => storage.getConfig(),
-    sessionKind: async (_projectId, threadId) => designService.authoredWorkKindFor(threadId)
-  })
-  expertSettings.registerIpc()
-  state.chatEngine.setExpertSettings(expertSettings)
   // A tab is recognised from the page it is showing rather than from a record of who
   // opened it, so a design the agent opened itself and a tab the renderer restored
   // after a restart are designs too, and a tab that navigated away stops being one.
@@ -1122,26 +1102,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // capability can bring a generated image, video or sound file into the project
   // as a file the design references by relative path.
   state.chatEngine.setDesignMediaExecutor(createDesignMediaExecutor({ database }))
-  // The engine the app was missing: it turns the prompt an agent writes into a
-  // picture, a clip or a track, using the model the user assigned to that craft
-  // and the provider token the user stored. The bytes land through the same
-  // saver above, so generated media has one writer and one set of ceilings.
-  const mediaGeneration = new MediaGenerationService({
-    config: () => storage.getConfig(),
-    vault
-  })
-  state.chatEngine.setMediaGenerationExecutor(
-    createMediaGenerationExecutor({
-      database,
-      config: () => storage.getConfig(),
-      service: mediaGeneration,
-      // `generate` is one operation on two capabilities, so which folder a file
-      // lands in when the caller names none follows the thread's session. The
-      // board answers the same question the same way, so the two cannot disagree.
-      sessionKind: async (_projectId, threadId) => designService.authoredWorkKindFor(threadId)
-    })
-  )
-  registerMediaGenerationIpc(mediaGeneration)
   // The video capability composes the same two services: the loopback static
   // host that serves a composition folder and the thread's browser tab that
   // shows it. `capture` adds the frame render and the screenshot on top of the
@@ -1564,6 +1524,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         await state.chatEngine?.refreshAcpHarnesses()
         await state.chatEngine?.invalidateProviderCatalogs()
         void state.providerConnection?.checkAll(true).catch(() => undefined)
+      },
+      onAgentSignedIn: async (harnessId) => {
+        // The agent process that served catalogs and turns predates the new
+        // credentials, so it has to be replaced before anything is re-probed.
+        await state.chatEngine?.restartAcpAgent(harnessId)
       },
       ensureDrivers: async () => {
         await state.chatEngine?.refreshAcpHarnesses()

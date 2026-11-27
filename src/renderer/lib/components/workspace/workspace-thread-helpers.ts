@@ -8,11 +8,8 @@ import {
   type ThreadSearchResult,
   type ThreadStatus
 } from '$shared/types'
-import {
-  coordinatorHasActiveDelegates,
-  coordinatorHasUnreadWorkers,
-  isOrchestrationChildThread
-} from '$shared/types'
+import { coordinatorHasUnreadWorkers, isOrchestrationChildThread } from '$shared/types'
+import { delegatesWorking } from '$lib/thread-delegate-activity'
 import type { ThreadGroup } from '$lib/stores/thread-grouping.svelte'
 import { threadGroupingState } from '$lib/stores/thread-grouping.svelte'
 import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
@@ -213,7 +210,5 @@ export function mergeThreadSearchBatches(
  * work in progress.
  */
 export function threadHasVisibleWork(thread: Thread): boolean {
-  return (
-    isThreadLiveWorking(thread) || coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
-  )
+  return isThreadLiveWorking(thread) || delegatesWorking(thread, scopeState.allScopeThreads)
 }

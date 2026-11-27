@@ -4,6 +4,7 @@
   import AssistantIcon from '../icons/cio/AssistantIcon.svelte'
   import type { AgentPart } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
+  import { createSubscriber } from 'svelte/reactivity'
   import {
     subagentModelLabel,
     subagentStatusLabel,
@@ -50,6 +51,21 @@
   })
 
   const elapsed = $derived(clock.seconds(start, end))
+  const subscribeToClock = createSubscriber((update) => {
+    const timer = window.setInterval(update, 1_000)
+    return () => window.clearInterval(timer)
+  })
+  /** A parked worker counts down to the retry the app scheduled for it. */
+  const now = $derived.by(() => {
+    if (activity.retryAt === undefined) return Date.now()
+    subscribeToClock()
+    return Date.now()
+  })
+  const retryInSeconds = $derived(
+    activity.retryAt === undefined
+      ? undefined
+      : Math.max(0, Math.ceil((activity.retryAt - now) / 1_000))
+  )
 
   /** The run duration as `m:ss`, the reading the head chip shows. */
   function elapsedClock(seconds: number): string {
@@ -60,6 +76,16 @@
 
   /** A live run reads `Running m:ss`; a settled one is frozen at its total. */
   const chip = $derived.by<CardChipData>(() => {
+    if (retryInSeconds !== undefined) {
+      if (retryInSeconds === 0) return { text: 'Retrying', tone: 'paused' }
+      return {
+        text:
+          activity.retryCooldown === true
+            ? `Retry cooldown: ${retryInSeconds}`
+            : `Retry in ${retryInSeconds}s`,
+        tone: 'paused'
+      }
+    }
     if (!start) return { text: subagentStatusLabel(status), tone: 'paused' }
     const total = elapsedClock(elapsed)
     return clock.ticking ? { text: `Running ${total}` } : { text: total }

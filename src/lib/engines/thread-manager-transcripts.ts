@@ -80,6 +80,48 @@ export class ThreadTranscriptStore {
     private readonly agentMessageRepo: AgentMessageRepo
   ) {}
 
+  /**
+   * Whether a thread's transcript inherits its parent's rows, per thread.
+   *
+   * A fork reads its own rows plus its ancestors'; every other thread is a plain
+   * indexed read by thread id. That choice has to be made on every page read, and
+   * it must not be made by asking the fallback repository, whose only way to
+   * answer is a synchronous read on the main thread (the one thing a message page
+   * may never do). So the answer is one bounded worker probe, kept here: the
+   * first page of a thread pays it, every later page and every refresh of the
+   * same thread does not.
+   *
+   * Cached in both directions on purpose. A fork's checkpoint row is written by
+   * the fork that creates the thread, before the thread exists for anyone to
+   * read, so a cached "no" cannot go stale for a thread that later becomes a
+   * fork.
+   */
+  private readonly parentTranscripts = new Map<string, boolean>()
+
+  /** Most threads whose shape is remembered; the oldest answer goes first. */
+  private static readonly PARENT_TRANSCRIPT_CACHE_LIMIT = 200
+
+  private async inheritsHistory(threadId: string): Promise<boolean> {
+    const cached = this.parentTranscripts.get(threadId)
+    if (cached !== undefined) return cached
+    const result = await this.db.queryViaWorker(
+      `SELECT 1 AS one FROM thread_checkpoints
+        WHERE thread_id = ? AND kind = 'fork' AND parent_thread_id IS NOT NULL
+        LIMIT 1`,
+      [threadId],
+      1
+    )
+    // A worker that cannot answer is not a reason to hide a fork's history: the
+    // lineage shape is the safe answer, and it is unpriced only for a fork.
+    const inherits = result.ok ? result.rows.length > 0 : true
+    if (this.parentTranscripts.size >= ThreadTranscriptStore.PARENT_TRANSCRIPT_CACHE_LIMIT) {
+      const oldest = this.parentTranscripts.keys().next().value
+      if (oldest !== undefined) this.parentTranscripts.delete(oldest)
+    }
+    this.parentTranscripts.set(threadId, inherits)
+    return inherits
+  }
+
   private userMessageHistoryCacheKey(projectId: string, threadId: string): string {
     return `${projectId}:${threadId}`
   }
@@ -165,7 +207,8 @@ export class ThreadTranscriptStore {
   /** Load the mirrored agent conversation, or an empty list when absent. */
   async loadMessages(threadId: string): Promise<AgentMessage[]> {
     const page = await this.pagedAgentMessages((after) => buildLoadByThreadPageSql(threadId, after))
-    if (!page.ok) return this.agentMessageRepo.loadByThread(threadId)
+    if (!page.ok)
+      return this.agentMessageRepo.loadByThread(threadId, await this.inheritsHistory(threadId))
     return page.messages
   }
 
@@ -175,14 +218,22 @@ export class ThreadTranscriptStore {
     before: ThreadMessageCursor | undefined,
     limit: number
   ): Promise<ThreadMessagePage> {
-    const built = buildLoadPageSql(threadId, before)
+    // The fork clause is chosen here, once per thread. It is the difference
+    // between a tail page costing an indexed read and costing a scan of every
+    // message row in the database (see `buildLoadPageSql`).
+    const built = buildLoadPageSql(threadId, before, await this.inheritsHistory(threadId))
     const result = await this.db.queryMessagesViaWorker(built.sql, built.params, limit + 1)
     if (result.ok) {
       const hasOlder = result.messages.length > limit
       const pageMessages = hasOlder ? result.messages.slice(0, limit) : result.messages
       return { messages: pageMessages.reverse(), hasOlder }
     }
-    return this.agentMessageRepo.loadPageByThread(threadId, before, limit)
+    return this.agentMessageRepo.loadPageByThread(
+      threadId,
+      before,
+      limit,
+      await this.inheritsHistory(threadId)
+    )
   }
 
   /** Load a contiguous mirrored window centered on an arbitrary message id. */
@@ -209,8 +260,12 @@ export class ThreadTranscriptStore {
 
   /** Load every parent-session record, including hidden transport-only prompts. */
   async loadMessageRecords(threadId: string): Promise<AgentMessage[]> {
+    // This runs on every turn (the mirror is merged with the driver's transcript
+    // before a send), so the fork clause is chosen here too: a thread that
+    // inherits nothing must not pay for the lineage read.
+    const inherits = await this.inheritsHistory(threadId)
     const page = await this.pagedAgentMessages(
-      (after) => buildLoadAllPageSql(threadId, after),
+      (after) => buildLoadAllPageSql(threadId, after, inherits),
       true
     )
     if (!page.ok) return this.agentMessageRepo.loadAllByThread(threadId)

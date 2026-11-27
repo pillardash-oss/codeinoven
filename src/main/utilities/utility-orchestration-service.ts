@@ -22,7 +22,6 @@ import type { OvenUtilityTurnUtility } from '../../lib/oven-utility-host'
 import { type EngineeringToolOperation } from '../../lib/engineering-tools'
 import { type CuaSnapshotView } from '../../lib/cua-driver'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
-import type { ExpertSettingsService } from '../design/expert-settings-service'
 import { type McpClient } from '../agents/mcp-stdio-client'
 import { type ImageDescriptorExecutor } from '../providers/image-descriptor-provider'
 import { type UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
@@ -641,13 +640,9 @@ export class UtilityOrchestrationService {
   /** App-owned follow-up capability: schedules and cancels this thread's wakes. */
   followUpExecutor: FollowUpExecutor | null = null
   designPreviewExecutor: DesignCapabilityExecutor | null = null
-  designAssignmentExecutor: DesignCapabilityExecutor | null = null
   designMediaExecutor: DesignCapabilityExecutor | null = null
-  mediaGenerationExecutor: DesignCapabilityExecutor | null = null
   videoPreviewExecutor: VideoCapabilityExecutor | null = null
   videoCaptureExecutor: VideoCapabilityExecutor | null = null
-  /** The thread-scoped expert policy, shared with the design delegation executor. */
-  expertSettings: ExpertSettingsService | null = null
   scopeToolExecutor: ScopeToolExecutor | null = null
   secretRequestExecutor: SecretRequestExecutor | null = null
   sessionEnvironmentExecutor: SessionEnvironmentExecutor | null = null
@@ -730,17 +725,8 @@ export class UtilityOrchestrationService {
   setAuthoredWorkSessionRecorder(recorder: AuthoredWorkSessionRecorder | null): void {
     return this.units['orchestration'].setAuthoredWorkSessionRecorder(recorder)
   }
-  setExpertSettings(settings: ExpertSettingsService | null): void {
-    return this.units['orchestration'].setExpertSettings(settings)
-  }
-  setDesignAssignmentExecutor(executor: DesignCapabilityExecutor | null): void {
-    return this.units['executors'].setDesignAssignmentExecutor(executor)
-  }
   setDesignMediaExecutor(executor: DesignCapabilityExecutor | null): void {
     return this.units['executors'].setDesignMediaExecutor(executor)
-  }
-  setMediaGenerationExecutor(executor: DesignCapabilityExecutor | null): void {
-    return this.units['executors'].setMediaGenerationExecutor(executor)
   }
   setVideoPreviewExecutor(executor: VideoCapabilityExecutor | null): void {
     return this.units['executors'].setVideoPreviewExecutor(executor)

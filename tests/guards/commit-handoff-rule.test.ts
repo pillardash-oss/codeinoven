@@ -51,6 +51,38 @@ describe('commit handoff rule', () => {
     expect(prompt).toContain('If no agent in the chain is allowed to commit')
   })
 
+  it('names the class every agent runs as, so a commit obligation is never misapplied', () => {
+    // An agent once read "the primary agent commits the files you report" and
+    // concluded it was the reporter, even though it was the primary: no rule
+    // told it which side of the handoff it stood on. Each contract now opens by
+    // naming itself, and the two identities never agree.
+    expect(DEFAULT_AGENT_BEHAVIOR_PROMPT).toContain('You are the primary agent of this thread')
+    expect(WORKER_AGENT_BEHAVIOR_PROMPT).toContain(
+      'You are a delegated worker, not the primary agent'
+    )
+    expect(WORKER_AGENT_BEHAVIOR_PROMPT).not.toContain('You are the primary agent')
+    expect(PAWN_AGENT_CONTRACT).toContain('You are a pawn agent working on your own thread')
+    // A pawn thread is the one class that reads the primary's rules and still
+    // does not commit, so the primary's opener has to name that exception
+    // instead of leaving the pawn with two contradicting instructions.
+    expect(DEFAULT_AGENT_BEHAVIOR_PROMPT).toContain(
+      'The one agent this does not describe is a pawn thread'
+    )
+  })
+
+  it('does not let a verified change end the run uncommitted', () => {
+    // The failure this locks: a turn that finished on "fix verified, three
+    // states render correctly" and ended there, with no commit step and no
+    // sentence about the paths git status still listed. "Verified" is a check
+    // result, and the prompt has to say so where the agent reads its own
+    // definition of done, not only in a rule about claiming a hash.
+    const prompt = DEFAULT_AGENT_BEHAVIOR_PROMPT
+    expect(prompt).toContain('the commit is still ahead of you and the turn is not over')
+    expect(prompt).toContain('approval to land it')
+    expect(prompt).toContain('ask whether to commit it')
+    expect(prompt).toContain('or named path by path as deliberately left uncommitted')
+  })
+
   it('makes a worker hand its changed paths up as uncommitted', () => {
     const prompt = WORKER_AGENT_BEHAVIOR_PROMPT
     expect(prompt).toContain('Your report is the handoff')

@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   classifyProviderIssue,
   isUsageLimitNoticeText,
-  isUsageResetWaitIssue
+  isUsageResetWaitIssue,
+  parseClockResetAt,
+  RATE_LIMIT_COOLDOWN_MAX_ATTEMPTS,
+  rateLimitCooldownMs
 } from '../../src/lib/provider-issue'
 import type { AgentProviderIssue } from '../../src/lib/types'
 
@@ -33,10 +36,42 @@ describe('isUsageResetWaitIssue', () => {
   })
 })
 
+describe('rateLimitCooldownMs', () => {
+  it('backs off 1s, 3s, 5s, 10s, 30s, then 60s', () => {
+    expect([1, 2, 3, 4, 5, 6].map((attempt) => rateLimitCooldownMs(attempt))).toEqual([
+      1_000, 3_000, 5_000, 10_000, 30_000, 60_000
+    ])
+  })
+
+  it('stops after the sixth retry instead of hammering the provider forever', () => {
+    expect(RATE_LIMIT_COOLDOWN_MAX_ATTEMPTS).toBe(6)
+    expect(rateLimitCooldownMs(7)).toBeUndefined()
+    expect(rateLimitCooldownMs(0)).toBeUndefined()
+    expect(rateLimitCooldownMs(1.5)).toBeUndefined()
+  })
+})
+
 describe('classifyProviderIssue usage-limit detection', () => {
   it('classifies usage-limit wording as quota', () => {
     expect(classifyProviderIssue('You have hit your usage limit')).toBe('quota')
     expect(classifyProviderIssue('Your quota is exhausted')).toBe('quota')
+  })
+
+  it('classifies window-scoped cap wording as quota', () => {
+    // The exact notice Claude Code sent when the reported failure was the
+    // process exit code instead of the weekly cap.
+    expect(classifyProviderIssue("You've hit your weekly limit · resets 6am (Africa/Lagos)")).toBe(
+      'quota'
+    )
+    expect(classifyProviderIssue("You've hit your 5-hour limit")).toBe('quota')
+    expect(classifyProviderIssue('You have hit your five hour limit')).toBe('quota')
+    expect(classifyProviderIssue('five hours limit reached')).toBe('quota')
+    expect(classifyProviderIssue('Your daily limit resets at midnight')).toBe('quota')
+    expect(classifyProviderIssue('monthly_limit_reached')).toBe('quota')
+  })
+
+  it('leaves a window word that does not describe the cap unclassified', () => {
+    expect(classifyProviderIssue('The weekly report shows a limit on imports')).toBe('unknown')
   })
 
   it('classifies machine-style underscore/hyphen limit strings as quota', () => {
@@ -49,6 +84,55 @@ describe('classifyProviderIssue usage-limit detection', () => {
   it('classifies rate-limit wording and 429 status as rate_limit', () => {
     expect(classifyProviderIssue('Rate limit exceeded', 429)).toBe('rate_limit')
     expect(classifyProviderIssue('Too many requests')).toBe('rate_limit')
+  })
+})
+
+describe('parseClockResetAt', () => {
+  // 06:16 UTC on Nov 27 is 07:16 in Africa/Lagos, so today's 6am there has
+  // already passed and the next occurrence is the 28th at 05:00 UTC.
+  const now = Date.parse('2026-11-27T06:16:40Z')
+
+  function localReset(hour: number, minute: number): number {
+    const reset = new Date(now)
+    reset.setHours(hour, minute, 0, 0)
+    if (reset.getTime() <= now) reset.setDate(reset.getDate() + 1)
+    return reset.getTime()
+  }
+
+  it("parses the weekly cap notice's zone-less-minutes clock in the zone it names", () => {
+    expect(parseClockResetAt("You've hit your weekly limit · resets 6am (Africa/Lagos)", now)).toBe(
+      Date.parse('2026-11-28T05:00:00Z')
+    )
+  })
+
+  it('keeps minutes when the notice states them', () => {
+    expect(
+      parseClockResetAt("You've hit your 5-hour limit · resets 6:05pm (Africa/Lagos)", now)
+    ).toBe(Date.parse('2026-11-27T17:05:00Z'))
+  })
+
+  it('reads midnight and noon as 12 rather than 0', () => {
+    expect(parseClockResetAt('resets 12am (Africa/Lagos)', now)).toBe(
+      Date.parse('2026-11-27T23:00:00Z')
+    )
+    expect(parseClockResetAt('resets 12pm (Africa/Lagos)', now)).toBe(
+      Date.parse('2026-11-27T11:00:00Z')
+    )
+  })
+
+  it('resolves the wall clock in the machine zone when the notice names none', () => {
+    expect(parseClockResetAt('resets 6am', now)).toBe(localReset(6, 0))
+    expect(parseClockResetAt('resets at 6:30am', now)).toBe(localReset(6, 30))
+  })
+
+  it('falls back to the machine zone when the named zone is unknown', () => {
+    expect(parseClockResetAt('resets 6am (Not/AZone)', now)).toBe(localReset(6, 0))
+  })
+
+  it('ignores text without a clock time or with an impossible one', () => {
+    expect(parseClockResetAt("You've hit your weekly limit", now)).toBeUndefined()
+    expect(parseClockResetAt('resets 13pm', now)).toBeUndefined()
+    expect(parseClockResetAt('resets 6:75am', now)).toBeUndefined()
   })
 })
 
@@ -70,9 +154,9 @@ describe('isUsageLimitNoticeText', () => {
     const markdownAnswer =
       '**Root cause:** the usage limit was hit mid-turn.\n\n- The card rendered a countdown\n- No scheduler record was tracked'
     expect(isUsageLimitNoticeText(markdownAnswer)).toBe(false)
-    expect(isUsageLimitNoticeText('## Usage limit reached\n\nSee the [docs](https://example.com).')).toBe(
-      false
-    )
+    expect(
+      isUsageLimitNoticeText('## Usage limit reached\n\nSee the [docs](https://example.com).')
+    ).toBe(false)
   })
 
   it('rejects text whose limit phrasing only appears mid-prose', () => {
@@ -89,6 +173,19 @@ describe('isUsageLimitNoticeText', () => {
 
   it('accepts notices whose lead phrasing sits in a longer opening line', () => {
     expect(isUsageLimitNoticeText("You've reached your usage limit for this window")).toBe(true)
+  })
+
+  it('accepts window-scoped cap notices', () => {
+    expect(isUsageLimitNoticeText("You've hit your weekly limit · resets 6am (Africa/Lagos)")).toBe(
+      true
+    )
+    expect(isUsageLimitNoticeText('5-hour limit reached. Resets in 1hr 53min.')).toBe(true)
+    expect(isUsageLimitNoticeText('You have hit your five hour limit')).toBe(true)
+    expect(isUsageLimitNoticeText('Weekly limit reached. Resets Monday.')).toBe(true)
+  })
+
+  it('rejects a window word that does not describe the cap', () => {
+    expect(isUsageLimitNoticeText('The weekly report explains the import limit')).toBe(false)
   })
 
   it('rejects empty input', () => {

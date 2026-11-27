@@ -262,3 +262,51 @@ describe('GitState target-scoped status', () => {
     expect(statusCalls()).toBe(1)
   })
 })
+
+describe('GitState target holds', () => {
+  afterEach(() => {
+    invoke.mockReset()
+    gitState.deactivate()
+  })
+
+  it('keeps a held checkout when the header releases that target', async () => {
+    mockInvokeForRefresh()
+    const release = gitState.holdTarget('project-1')
+    await gitState.refresh('project-1')
+    expect(gitState.branches.length).toBeGreaterThan(0)
+
+    // The header's release, fired when the selected thread has no Git context of
+    // its own: a Git surface is still showing this checkout, so it wins.
+    gitState.deactivate()
+    expect(gitState.activeProjectId).toBe('project-1')
+    expect(gitState.branches.map((branch) => branch.name)).toEqual(['main', 'feature/x'])
+
+    release()
+    gitState.deactivate()
+    expect(gitState.activeProjectId).toBeNull()
+    expect(gitState.branches).toEqual([])
+  })
+
+  it('counts one hold per surface, so a closed one cannot release the other', () => {
+    const releasePanel = gitState.holdTarget('project-1')
+    const releaseSheet = gitState.holdTarget('project-1')
+
+    releasePanel()
+    gitState.deactivate()
+    expect(gitState.activeProjectId).toBe('project-1')
+
+    releaseSheet()
+    gitState.deactivate()
+    expect(gitState.activeProjectId).toBeNull()
+  })
+
+  it('claims a target once, however many surfaces hold it', () => {
+    gitState.holdTarget('project-1')
+    const generation = gitState.activationGeneration
+    gitState.holdTarget('project-1')
+    gitState.activate('project-1')
+    // Re-claiming the same checkout must not invalidate what the surfaces on it
+    // are rendering.
+    expect(gitState.activationGeneration).toBe(generation)
+  })
+})

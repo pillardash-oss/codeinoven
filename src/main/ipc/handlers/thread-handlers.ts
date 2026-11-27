@@ -2,6 +2,7 @@ import { unarchivedThreadSql } from '../../../lib/archives'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { join } from 'path'
 import { Logger } from '../../system/logger'
+import { withoutTransportPartsInPage } from '../../chat/chat-engine/chat-engine-message-merge'
 import { sendToRenderer } from '../renderer-delivery'
 import { settleThreadBranch } from '../../chat/thread-branch-service'
 import { threadScratchDirectory } from '../../../lib/thread-storage-paths'
@@ -289,11 +290,13 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
         }
         const safeProjectId = validateEntityId(projectId, 'Project ID')
         const safeThreadId = validateEntityId(threadId, 'Thread ID')
-        return threadManager.loadMessagePage(
-          safeProjectId,
-          safeThreadId,
-          safeBefore,
-          validateBoundedInteger(limit, 'Message page limit', 1, 100)
+        return withoutTransportPartsInPage(
+          await threadManager.loadMessagePage(
+            safeProjectId,
+            safeThreadId,
+            safeBefore,
+            validateBoundedInteger(limit, 'Message page limit', 1, 100)
+          )
         )
       }
     )

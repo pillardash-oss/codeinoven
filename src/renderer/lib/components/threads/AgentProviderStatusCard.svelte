@@ -192,6 +192,18 @@
   }
 
   /**
+   * The card's retry reading. A provider reset counts down as "Retry in …";
+   * the app's own rate-limit backoff says what it actually is, so the user can
+   * tell a deliberate short cooldown apart from a provider window.
+   */
+  function retryCountdown(at: number): string {
+    if (issue.retryCooldown === true) {
+      return `Retry cooldown: ${Math.max(0, Math.ceil((at - now) / 1_000))}`
+    }
+    return `Retry in ${relativeRetryTime(at)}`
+  }
+
+  /**
    * The head's reading is the state the card is honestly in. A scheduled resume
    * shows the real deadline the card already computes; otherwise the state gets
    * its own word, urgent when it is a failure the user has to act on.
@@ -200,14 +212,14 @@
     if (queued) return { text: 'Queued', tone: 'paused' }
     if (waiting) {
       return autoRetryEnabled && resumeAt !== undefined
-        ? { text: `Retry in ${relativeRetryTime(resumeAt)}` }
+        ? { text: retryCountdown(resumeAt) }
         : { text: 'Waiting', tone: 'paused' }
     }
     if (issue.kind === 'authentication') return { text: 'Authentication', tone: 'urgent' }
     if (issue.kind === 'network') return { text: 'Network', tone: 'urgent' }
     if (issue.retryAt !== undefined) {
       const at = autoRetryEnabled && resumeAt !== undefined ? resumeAt : issue.retryAt
-      if (now < at) return { text: `Retry in ${relativeRetryTime(at)}`, tone: 'urgent' }
+      if (now < at) return { text: retryCountdown(at), tone: 'urgent' }
     }
     return { text: 'Stopped', tone: 'urgent' }
   })

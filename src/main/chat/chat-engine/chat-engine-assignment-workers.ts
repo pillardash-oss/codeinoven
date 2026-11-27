@@ -25,7 +25,7 @@ import type {
   ThreadSettings
 } from '../../../lib/types'
 import { workerReportsToCoordinator } from '../../../lib/types'
-import { classifyProviderIssue } from '../../../lib/provider-issue'
+import { classifyProviderIssue, isUsageResetWaitIssue } from '../../../lib/provider-issue'
 import { messageId as createMessageId } from '../../../lib/id'
 import type {
   AssignmentApiCapability,
@@ -367,6 +367,9 @@ export class ChatEngineAssignmentWorkers {
     }
 
     const failureSummary = task.report.summary
+    // A deliberate retry is a fresh try, not another step of the provider's
+    // cooldown streak.
+    this.host.state.retryScheduler?.clearRateLimitCooldown(workerThreadId)
     await this.host.sendPrompt(
       projectId,
       workerThreadId,
@@ -432,6 +435,65 @@ export class ChatEngineAssignmentWorkers {
     this.host.units['turns-sessions'].clearSessionWatchdog(sessionId)
     this.host.sessionStatuses.set(sessionId, { state: 'idle' })
     this.host.broadcast({ type: 'session.status', sessionId, status: { state: 'idle' } })
+  }
+
+  /**
+   * Keep a nested sub-agent alive across a clearly transient failure.
+   *
+   * The parent's card must not read as a death while the app is about to run
+   * the worker again, so the failure is parked on the same cooldown schedule a
+   * thread uses and the card carries the deadline. Only rate limits, provider
+   * load and connection waits qualify; a sign-in or billing verdict is a real
+   * answer for the parent and is left alone.
+   */
+  private observeSubagentRetry(
+    sessionId: string,
+    owner: ChildSessionInfo,
+    event: Extract<SessionAgentEvent, { type: 'message.part.updated' }>,
+    driverId: string
+  ): void {
+    if (event.part.type !== 'subagent') return
+    const part = event.part
+    const activity = part.activity
+    if (activity.status === 'completed' || activity.status === 'aborted') {
+      this.host.state.retryScheduler?.clearRateLimitCooldown(sessionId)
+      return
+    }
+    if (activity.status !== 'error' || owner.parentSessionId === undefined) return
+    const message = activity.error?.trim() || 'The sub-agent failed.'
+    const issue: AgentProviderIssue = {
+      kind: classifyProviderIssue(message),
+      message,
+      ...(activity.error === undefined ? {} : { rawError: activity.error }),
+      harnessId: activity.harnessId ?? driverId,
+      retryable: true
+    }
+    if (!isUsageResetWaitIssue(issue) && issue.kind !== 'network') return
+    void this.host.units['runtime-connectivity']
+      .scheduleAutomaticRetry(sessionId, issue)
+      .then((outcome) => {
+        const record =
+          outcome === 'scheduled'
+            ? this.host.state.retryScheduler?.getPendingRetry(sessionId)
+            : undefined
+        if (record?.retryAt === undefined) {
+          // The schedule is spent: let the settled error card stand.
+          if (outcome === 'cooldown-exhausted') this.host.broadcast(event)
+          return
+        }
+        this.host.broadcast({
+          ...event,
+          part: {
+            ...part,
+            activity: {
+              ...part.activity,
+              retryAt: record.retryAt,
+              ...(record.retryCooldown === true ? { retryCooldown: true } : {})
+            }
+          }
+        })
+      })
+      .catch((error) => Logger.dev('Sub-agent rate-limit retry could not be scheduled:', error))
   }
 
   captureChildSession(
@@ -1256,6 +1318,7 @@ export class ChatEngineAssignmentWorkers {
           parentSessionId: registeredParent ? event.sessionId : inheritedOwner?.parentSessionId
         }
         this.host.state.childSessionOwners.set(childSessionId, owner)
+        this.observeSubagentRetry(childSessionId, owner, event, driverId)
         // The worker's file-tool paths are the only reliable attribution for
         // sub-agent edits: the child's CLI session can be disposed before any
         // transcript capture runs, so claim them the moment they are reported.
@@ -1368,6 +1431,31 @@ export class ChatEngineAssignmentWorkers {
    */
   runPawnTool(input: Record<string, unknown>, context: PawnToolContext): Promise<unknown> {
     return this.pawns.runPawnTool(input, context)
+  }
+
+  /** Run a pawn again from its own thread, on the model picked in its card. */
+  retryPawnRun(projectId: string, threadId: string, picked?: ThreadSettings): Promise<void> {
+    return this.pawns.retryPawnRun(projectId, threadId, picked)
+  }
+
+  /** Whether the open pawn is running, and the failure it ended on when not. */
+  pawnRunState(
+    projectId: string,
+    threadId: string
+  ): Promise<{ pawn: boolean; running: boolean; failure: string | null }> {
+    return this.pawns.pawnRunState(projectId, threadId)
+  }
+
+  /**
+   * Write the true end of every pawn run a crash left hanging.
+   *
+   * A process that died mid-run never published its pawns' outcomes, so their
+   * cards still claim they are working while the app revives them as interrupted
+   * (which the board groups as done). This settles each one from its own
+   * transcript.
+   */
+  repairStrandedPawnRuns(projectId: string, spawnerThreadId: string): Promise<void> {
+    return this.pawns.repairStrandedPawnRuns(projectId, spawnerThreadId)
   }
 
   runningPawnThreads(projectId: string, spawnerThreadId: string): Promise<Thread[]> {

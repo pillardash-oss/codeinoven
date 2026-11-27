@@ -493,13 +493,16 @@ export function isThreadAwaitingUser(thread: Thread): boolean {
 }
 
 /**
- * Whether a thread participates in read/unread tracking. Every regular thread
- * does. Among orchestration children only a worker whose reporting the user
- * switched off does: a reporting worker hands its finished task back to the
- * Sr. Engineer, so the Assignment lifecycle (reported, auditing, rework) is its
- * indicator and it never carries a read state. Auditors are silent the same
- * way. The coordinator panel chip and the aggregated coordinator row read a
- * non-reporting worker's read state from here.
+ * Whether a thread participates in read/unread tracking.
+ *
+ * Every regular thread does. Among orchestration children only a worker whose
+ * reporting the user switched off does: that worker is the one the user works
+ * with directly, so its finished work is theirs to read, and the mark rolls up
+ * onto the Sr. Engineer's row (see {@link coordinatorHasUnreadWorkers}) rather
+ * than staying a rail icon. A reporting worker hands its finished task back to
+ * the Sr. Engineer, so the Assignment lifecycle (reported, auditing, rework) is
+ * its indicator and it never carries a read state. Auditors and pawns report into
+ * the cycle or run that owns them and stay silent the same way.
  */
 export function threadTracksReadStatus(thread: Thread): boolean {
   if (!isOrchestrationChildThread(thread)) return true

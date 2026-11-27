@@ -3,6 +3,7 @@ import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import { validateEntityId } from '../../ipc/ipc-validation'
 import type {
   AgentMessage,
+  Thread,
   TurnStreamPartsChange,
   TurnStreamPartsPage,
   TurnStreamPartsQuery,
@@ -95,6 +96,11 @@ export class ChatEngineMessagesLoad {
       this.host.units['utilities-tools'].applyToolStamps(thread.sessionId, messages)
       this.host.units['misc'].applyGenerationStamps(thread.sessionId, messages)
       const mirror = await this.host.threadManager.loadMessageRecords(projectId, threadId)
+      // The thread's own session rows are its conversation when the session
+      // belongs to this very thread. A pawn runs on a thread of its own, and its
+      // transcript is mirrored under that session id for the spawner's card, so
+      // the thread's own page never held it: the pawn's view opened empty.
+      const ownTurns = await this.ownSessionTurns(thread)
       this.host.state.outboundMessageIdsBySession.set(
         thread.sessionId,
         new Set(mirror.filter((message) => message.role === 'user').map((message) => message.id))
@@ -117,6 +123,7 @@ export class ChatEngineMessagesLoad {
         ),
         mirror
       )
+      if (ownTurns.length > 0) merged = mergeAgentMessages(merged, ownTurns)
       const artifactProjectPath = await this.host.units['turns'].resolveProjectPath(projectId)
       const synchronized = await this.host.state.generatedArtifactService.synchronize(
         thread,
@@ -146,7 +153,10 @@ export class ChatEngineMessagesLoad {
           if (synchronized.changed) {
             await this.host.threadManager.upsertMessages(projectId, threadId, synchronized.messages)
           }
-          return synchronized.messages
+          return presentableMessages(
+            mergeAgentMessages(synchronized.messages, await this.ownSessionTurns(thread)),
+            isDedicatedAssignmentAuditorThread(thread)
+          )
         } catch (repairError) {
           Logger.error('Structured-output session replacement failed', repairError)
         }
@@ -168,8 +178,32 @@ export class ChatEngineMessagesLoad {
       if (synchronized.changed) {
         await this.host.threadManager.upsertMessages(projectId, threadId, synchronized.messages)
       }
-      return synchronized.messages
+      return presentableMessages(
+        mergeAgentMessages(synchronized.messages, await this.ownSessionTurns(thread)),
+        isDedicatedAssignmentAuditorThread(thread)
+      )
     }
+  }
+
+  /**
+   * The turns a session mirrored onto the thread that owns it.
+   *
+   * A child session's transcript is persisted under its session id, which is how
+   * the spawner's card reads it, and the thread's own conversation page excludes
+   * those rows. When the session belongs to this very thread   a pawn runs on a
+   * thread of its own   they are its conversation, so they are read back here and
+   * marked as such instead of leaving the view empty.
+   */
+  private async ownSessionTurns(thread: Thread): Promise<AgentMessage[]> {
+    if (!thread.sessionId) return []
+    const rows = await this.host.threadManager
+      .loadSubagentMessages(thread.projectId, thread.id, thread.sessionId)
+      .catch(() => [])
+    return rows.map((message) =>
+      message.visibility === undefined || message.visibility === 'conversation'
+        ? message
+        : { ...message, visibility: 'conversation' as const }
+    )
   }
 
   /**

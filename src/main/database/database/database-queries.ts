@@ -6,6 +6,7 @@ import {
   mapUserMessageRows,
   type ProviderDeltaSyncResult
 } from '../repositories/agent-message-repo'
+import { isLockContention } from './database-lock-contention'
 import { raceWorkerQuery, runLocalBoundedQuery } from './database-sql-fallbacks'
 import type { QueryLane, WorkerLane } from '../database-worker'
 
@@ -19,6 +20,12 @@ function backgroundOrInteractive(lane: QueryLane | undefined): WorkerLane | unde
 export interface DatabaseQueriesHost {
   /** The running maintenance worker, or null when this database has none. */
   getWorker(): DatabaseWorker | null
+  /**
+   * A read connection from the read pool, or null when this database has none
+   * (an in-memory test database). Reads routed here cannot occupy the connection
+   * a click is waiting on, and they do not queue behind each other either.
+   */
+  getReadWorker(): DatabaseWorker | null
   /**
    * The async lane's own worker and read connection, or null when this database
    * has none (an in-memory test database). Reads routed here cannot occupy the
@@ -49,6 +56,18 @@ export class DatabaseQueries {
 
   constructor(host: DatabaseQueriesHost) {
     this.host = host
+  }
+
+  /**
+   * The connection a read may use: a pool reader when there is one, the
+   * maintenance worker otherwise.
+   *
+   * Reads are the only traffic that never conflicts with another read, so they
+   * are handed a connection of their own instead of joining the writer's queue.
+   */
+  private readWorker(): DatabaseWorker | null {
+    const reader = this.host.getReadWorker()
+    return reader?.isRunning() ? reader : this.host.getWorker()
   }
 
   /**
@@ -91,10 +110,23 @@ export class DatabaseQueries {
     // cannot make a click wait. It asks for the interactive queue of ITS worker,
     // which is a single queue: there is nothing on that thread to be behind.
     const asyncWorker = lane === 'async' ? this.host.getAsyncWorker() : null
-    const worker = asyncWorker?.isRunning() ? asyncWorker : this.host.getWorker()
+    // Reads go to the read pool, not to the writer: a read never conflicts with
+    // another read, and the writer's queue is where a maintenance pass can hold
+    // one for as long as it takes.
+    const readWorker = asyncWorker === null ? this.host.getReadWorker() : null
+    const worker = asyncWorker?.isRunning()
+      ? asyncWorker
+      : readWorker?.isRunning()
+        ? readWorker
+        : this.host.getWorker()
     if (worker?.isRunning()) {
       const response = await raceWorkerQuery(
-        worker.query(sql, params, maxRows, asyncWorker ? 'interactive' : backgroundOrInteractive(lane)),
+        worker.query(
+          sql,
+          params,
+          maxRows,
+          asyncWorker ? 'interactive' : backgroundOrInteractive(lane)
+        ),
         options.deadlineMs
       )
       if (response === null)
@@ -108,7 +140,7 @@ export class DatabaseQueries {
       if (response.ok) {
         return { ok: true, rows: response.rows ?? [], truncated: response.truncated ?? false }
       }
-      if (options.allowPrimaryFallback === false)
+      if (options.allowPrimaryFallback === false || isLockContention(response.error))
         return {
           ok: false,
           rows: [],
@@ -140,7 +172,7 @@ export class DatabaseQueries {
     maxRows: number,
     includeTransport = false
   ): Promise<{ ok: boolean; messages: AgentMessage[]; truncated: boolean; error?: string }> {
-    const worker = this.host.getWorker()
+    const worker = this.readWorker()
     if (worker?.isRunning()) {
       const response = await worker.queryMessages(sql, params, maxRows, includeTransport)
       if (response.ok) {
@@ -150,6 +182,8 @@ export class DatabaseQueries {
           truncated: response.truncated ?? false
         }
       }
+      if (isLockContention(response.error))
+        return { ok: false, messages: [], truncated: false, error: response.error }
       if (response.error) {
         Logger.error(
           'Database worker query-messages failed; falling back to primary connection',
@@ -172,7 +206,7 @@ export class DatabaseQueries {
     params: unknown[],
     maxRows: number
   ): Promise<{ ok: boolean; messages: UserMessageSummary[]; truncated: boolean; error?: string }> {
-    const worker = this.host.getWorker()
+    const worker = this.readWorker()
     if (worker?.isRunning()) {
       const response = await worker.queryUserMessages(sql, params, maxRows)
       if (response.ok) {
@@ -182,6 +216,8 @@ export class DatabaseQueries {
           truncated: response.truncated ?? false
         }
       }
+      if (isLockContention(response.error))
+        return { ok: false, messages: [], truncated: false, error: response.error }
       if (response.error) {
         Logger.error(
           'Database worker query-user-messages failed; falling back to primary connection',
@@ -213,7 +249,7 @@ export class DatabaseQueries {
     failed: string[]
     error?: string
   }> {
-    const worker = this.host.getWorker()
+    const worker = this.readWorker()
     if (!worker?.isRunning()) {
       return { ok: false, summaries: [], failed: [], error: 'no maintenance worker' }
     }
@@ -241,6 +277,8 @@ export class DatabaseQueries {
       if (response.ok && response.result) {
         return response.result
       }
+      // The caller already treats a thrown sync as a failed reconciliation.
+      if (isLockContention(response.error)) throw new Error(response.error)
       if (response.error) {
         Logger.error(
           'Database worker delta sync failed; falling back to primary connection',

@@ -1,8 +1,7 @@
 import type { AgentDefaultsConfig, AuxiliaryAgentConfig } from './agent'
 import type { CioCleanupCategoryId } from './cio-cleanup'
-import type { AgentModelSelection, InferenceMode, PermissionLevel, ThinkingLevel } from './common'
+import type { InferenceMode, PermissionLevel, ThinkingLevel } from './common'
 import type { GitPullPreference, PrMergeMethod } from './git'
-import type { MediaProviderId } from '../media-generation'
 import type { BrowserSearchEngine } from '../browser-search-engines'
 
 export interface WorkflowStage {
@@ -230,54 +229,6 @@ export const DEFAULT_IN_APP_NOTIFICATION_SOUND: InAppNotificationSoundSettings =
 }
 
 /**
- * What a design assignment produces, which is what decides how a session
- * reaches it.
- *
- * `text` work is answered by the assigned model itself. A media output names the
- * model the user wants for that media, because not every model generates a
- * picture or a clip, and the ones that do are usually picked for exactly that.
- */
-export type DesignAssignmentOutput = 'text' | 'image' | 'video' | 'audio'
-
-/**
- * One named piece of design work and the model the user assigned to it.
- *
- * The model is the user's choice and is never chosen by the app or by an agent
- * working in a design session: an assignment with no model is inert rather than
- * routed somewhere plausible.
- */
-export interface DesignAssignment {
-  /** Stable handle an agent names in a tool call, e.g. `image-generation`. */
-  id: string
-  /** Human name shown in settings, e.g. `Image generation`. */
-  label: string
-  /**
-   * What the work produces. A stored assignment written before this field
-   * existed has none, which reads as `text`.
-   */
-  produces?: DesignAssignmentOutput
-  /** Standing guidance handed to the assigned model with every call. */
-  instructions?: string
-  /**
-   * The harness model that does this work. Required for a text craft, and absent
-   * for a media craft, which names a generated-media model instead.
-   */
-  selection?: AgentModelSelection
-  /**
-   * The generation model that produces this craft's asset, in the configured
-   * provider's own spelling (`black-forest-labs/flux-1.1-pro`). Required for a
-   * media craft, and absent for a text craft.
-   */
-  mediaModel?: string
-}
-
-/** Design work the user routed to a model of their own choosing. */
-export interface DesignConfig {
-  /** User-authored assignments. Empty means nothing is delegated anywhere. */
-  assignments: DesignAssignment[]
-}
-
-/**
  * A named preset for how a conversation runs: which harness and model, how hard
  * it thinks, how fast it answers, and how much it is allowed to touch.
  *
@@ -307,19 +258,6 @@ export interface ModelProfile {
   accountId?: string
   /** Context-window override in tokens; null restores the harness default. */
   contextWindow?: number | null
-}
-
-/**
- * The backend that turns a prompt into an image, a clip or a track.
- *
- * One provider at a time, because one aggregator token already reaches many
- * models: the user's real choice is the model they assign to each craft, which
- * lives on the design assignment rather than here. The token itself is kept in
- * the secure vault and never in this config.
- */
-export interface MediaGenerationConfig {
-  /** The backend the app calls, or null while the user has not chosen one. */
-  providerId: MediaProviderId | null
 }
 
 /**
@@ -438,12 +376,8 @@ export interface AppConfig {
   agentDefaults: AgentDefaultsConfig
   /** Model each harness uses for auxiliary work, keyed by the harness a thread runs on. */
   auxiliaryAgents: AuxiliaryAgentConfig
-  /** Model the user assigned to each named design assignment (images, copy, video). */
-  design: DesignConfig
   /** Named presets the user can apply from the model picker to shape a whole run. */
   modelProfiles: ModelProfile[]
-  /** Backend that generates images, clips and sound for a design or a composition. */
-  mediaGeneration: MediaGenerationConfig
   /** Editable default behavior prompt for project Engineering implementation turns. */
   agentBehaviorPrompt: string
   /** Automatically download available updates in the background. */
@@ -628,9 +562,7 @@ export type AppConfigPatch = Partial<
     | 'memory'
     | 'agentDefaults'
     | 'auxiliaryAgents'
-    | 'design'
     | 'modelProfiles'
-    | 'mediaGeneration'
     | 'agentBehaviorPrompt'
     | 'autoDownloadUpdates'
     | 'autoInstallUpdates'

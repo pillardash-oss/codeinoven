@@ -5,7 +5,7 @@
  * boot, the extension load and a provider registry read per thread. This
  * supervisor starts a single host instead, hands it every session, and keeps the
  * mapping the rest of main needs: which host owns which session, and how to move
- * one when a host fills up or dies.
+ * one when a host dies.
  *
  * The transport is injected so the supervisor can be driven by a real utility
  * process in the app and by a test double everywhere else. It owns four rules
@@ -15,9 +15,12 @@
  * spending a whole core on its own sessions may open a temporary host whose
  * sessions are drained back into the primary once that host has room again.
  *
- * One host stays the goal, because it is the cheapest arrangement in RAM. A
- * second host is a loan taken against the primary host's own CPU, never the
- * machine's: another process cannot free a CPU that some other program is using.
+ * One host stays the goal, because it is the cheapest arrangement in RAM, and
+ * nothing in that arrangement is capped: the primary carries every session the
+ * app has, however many that is. A second host is a loan taken against the
+ * primary host's own CPU, never the machine's (another process cannot free a CPU
+ * some other program is using) and never the session count (a session costs one
+ * heap either way, and the host it runs on is the one already loaded).
  */
 import { SessionOwnership, resumeRequest, type TransferableSession } from './pi-session-transfer'
 import {
@@ -63,14 +66,6 @@ export interface HostCreateRequest {
 export interface SupervisorOptions {
   /** Requests that never answer are failed instead of hanging a caller forever. */
   requestTimeoutMs?: number
-  /**
-   * Sessions one host may hold before the next one lands on a second host.
-   *
-   * This is the app's soft cap: a process that already carries as many sessions
-   * as one process should is the one case where a second host is opened without
-   * any CPU reading at all.
-   */
-  maxSessionsPerHost?: number
   /**
    * The primary host's own CPU use, as a percentage of one core, over a short
    * window. This is what decides whether new work lands on a second process.
@@ -124,7 +119,6 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
 export class PiHostSupervisor {
   readonly #spawn: HostSpawner
   readonly #timeoutMs: number
-  readonly #maxSessionsPerHost: number
   readonly #readHostCpu: ((pid: number) => number | null) | null
   readonly #readPressure: (() => Promise<AdmissionDecision>) | null
   readonly #rebalanceIntervalMs: number
@@ -164,7 +158,6 @@ export class PiHostSupervisor {
   constructor(spawn: HostSpawner, options: SupervisorOptions = {}) {
     this.#spawn = spawn
     this.#timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
-    this.#maxSessionsPerHost = Math.max(1, options.maxSessionsPerHost ?? 8)
     this.#readHostCpu = options.readHostCpu ?? null
     this.#readPressure = options.readPressure ?? null
     this.#rebalanceIntervalMs = Math.max(250, options.rebalanceIntervalMs ?? 5_000)
@@ -240,13 +233,13 @@ export class PiHostSupervisor {
   }
 
   /**
-   * Create a session, on the primary host while that host has room and on a
-   * temporary host while it is saturated.
+   * Create a session, on the primary host unless that host is saturated and a
+   * temporary one is warranted.
    *
-   * One host keeps RAM low, so a second process is opened only for a reason a
-   * second process can fix: this host's own CPU is a whole core busy, or it
-   * already carries the sessions one process should. The machine being busy is
-   * not one of those reasons.
+   * One host keeps RAM low, so a second process is opened only for the one
+   * reason a second process can fix: this host's own CPU is a whole core busy.
+   * Neither how many sessions it carries nor how busy the machine is decides
+   * that.
    */
   async createSession(request: HostCreateRequest): Promise<HostSessionState> {
     const primary = this.#ensurePrimary()
@@ -272,13 +265,13 @@ export class PiHostSupervisor {
           ...(parentSessionId === undefined ? {} : { parentSessionId })
         })
       )
-      // A session that landed off the primary is a loan taken against that
-      // host's own CPU, so the rejoin check starts now and stops when the loan
-      // is repaid.
-      if (host.id !== primary.id) this.#armRebalance()
       return state
     } catch (error) {
       this.#ownership.release(request.sessionId, host.id)
+      // The host this create asked for holds nothing now: a process started for
+      // a session that never landed is one more Pi host in the task manager,
+      // and no other path ever stops an empty one.
+      this.#stopHostIfEmpty(host.id)
       throw error
     }
   }
@@ -307,7 +300,10 @@ export class PiHostSupervisor {
    * it, so two hosts never write one transcript. The target is always a new
    * process, because a move that stays on the same process is not a move. A
    * temporary host drains the other way, into the primary, through the same
-   * release-then-claim pair (see {@link rebalance}).
+   * release-then-claim pair (see {@link rebalance}), but a move never hands a
+   * session back out of the host it was moved to: the target is that session's
+   * home, and the supervisor adopts it as the primary rather than opening yet
+   * another process beside it.
    */
   async moveToNewHost(sessionId: string): Promise<HostSessionState> {
     const known = this.#sessions.get(sessionId)
@@ -320,7 +316,13 @@ export class PiHostSupervisor {
     await this.#releaseFrom(source, sessionId)
     const target = this.#spawnHost()
     try {
-      return await this.#resumeOn(target, sessionId, record)
+      const state = await this.#resumeOn(target, sessionId, record)
+      // The move empties its source first, so the spawn above may have seen no
+      // primary at all and armed nothing. The process it just made is the app's
+      // only host in that case, and the check has to exist for it: the tick
+      // adopts it as the primary rather than leaving the app without one.
+      if (target.id !== this.#primaryId) this.#armRebalance()
+      return state
     } catch (error) {
       // This process exists only for the move, so a failed resume leaves nothing
       // worth keeping. The primary is not this move's to stop, and rebalance
@@ -352,18 +354,20 @@ export class PiHostSupervisor {
    */
   async rebalance(): Promise<void> {
     if (this.#rebalancing) return
-    const primary = this.#primary()
-    const donors = this.#secondaries()
-    if (primary === null || donors.length === 0) {
+    if (this.#secondaries().length === 0) {
       this.#disarmRebalance()
       return
     }
     this.#rebalancing = true
     try {
+      // A primary that exited took its sessions with it, and the hosts left are
+      // the app's only home: the oldest is adopted instead of a third process
+      // being opened beside it, which turns the rest of this tick into a plain
+      // drain into that host.
+      const primary = this.#ensurePrimary()
       if (!hostHasRoom(this.#hostCpu(primary))) return
-      for (const donor of donors) {
+      for (const donor of this.#secondaries()) {
         for (const sessionId of this.#sessionsOn(donor.id)) {
-          if (this.#sessionsOn(primary.id).length >= this.#maxSessionsPerHost) return
           if (!this.#hosts.has(donor.id)) break
           const record = this.#sessions.get(sessionId)
           if (record === undefined) continue
@@ -383,6 +387,9 @@ export class PiHostSupervisor {
       }
     } finally {
       this.#rebalancing = false
+      // A drain is also the moment a host with nothing left on it goes: the loan
+      // is repaid, and an empty process is a Pi host the app has no work for.
+      this.#stopEmptySecondaries()
       if (this.#secondaries().length === 0) this.#disarmRebalance()
     }
   }
@@ -501,21 +508,19 @@ export class PiHostSupervisor {
   /**
    * Where a new session lands.
    *
-   * A second process is opened for exactly two reasons: this host is spending a
-   * whole core on its own sessions, so its event loop is what new work would
-   * queue behind, or it already carries the sessions one process should carry.
-   * The machine's CPU is not a reason, because offloading a session from a host
-   * that is idle moves no work off whatever is pinning the machine; it only adds
-   * a second process to it. The device reading is allowed to refuse the spawn
-   * when memory cannot carry one, and to nothing else.
+   * The primary carries every session the app has; how many that is never moves
+   * a session off it. A second process is opened for one reason alone: this host
+   * is spending a whole core on its own sessions, so its event loop is what new
+   * work would queue behind. The machine's CPU is not a reason, because
+   * offloading a session from a host that is idle moves no work off whatever is
+   * pinning the machine; it only adds a second process to it. The device reading
+   * is allowed to refuse the spawn when memory cannot carry one, and to nothing
+   * else.
    */
   async #hostForNewSession(primary: LiveHost): Promise<LiveHost> {
-    if (hostIsSaturated(this.#hostCpu(primary))) {
-      if (await this.#deviceRefusesNewProcess()) return primary
-      return this.#temporaryWithRoom()
-    }
-    if (this.#sessionsOn(primary.id).length < this.#maxSessionsPerHost) return primary
-    return this.#temporaryWithRoom()
+    if (!hostIsSaturated(this.#hostCpu(primary))) return primary
+    if (await this.#deviceRefusesNewProcess()) return primary
+    return this.#temporary()
   }
 
   /**
@@ -542,12 +547,14 @@ export class PiHostSupervisor {
     return decision !== null && holdsAdmission(decision)
   }
 
-  /** A temporary host with room, started only when none has any. */
-  #temporaryWithRoom(): LiveHost {
-    for (const host of this.#secondaries()) {
-      if (this.#sessionsOn(host.id).length < this.#maxSessionsPerHost) return host
-    }
-    return this.#spawnHost()
+  /**
+   * The one temporary host, started only when none is running.
+   *
+   * A loan is a single process: another one relieves nothing the first already
+   * relieved, and every extra host is another heap for the same machine.
+   */
+  #temporary(): LiveHost {
+    return this.#secondaries()[0] ?? this.#spawnHost()
   }
 
   /** The device reading, or null when no sampler is wired or it cannot answer. */
@@ -665,9 +672,25 @@ export class PiHostSupervisor {
     return sessionIds
   }
 
+  /**
+   * The primary host, adopted when one already runs and started only when none
+   * does.
+   *
+   * A process that is already up is always the cheaper home. After a move the
+   * session's new host is the only one left, and spawning a second process
+   * beside it left the app carrying two hosts for good, one of them holding a
+   * session nothing would ever drain. Adopting the oldest live host keeps the
+   * app at one process whatever order the moves arrived in.
+   */
   #ensurePrimary(): LiveHost {
     const primary = this.#primary()
     if (primary !== null) return primary
+    const oldest = this.#hosts.values().next().value
+    if (oldest !== undefined) {
+      this.#primaryId = oldest.id
+      this.#hostsChanged()
+      return oldest
+    }
     const host = this.#spawnHost()
     this.#primaryId = host.id
     return host
@@ -684,6 +707,12 @@ export class PiHostSupervisor {
     transport.onLine((line) => this.#consume(host, line))
     transport.onExit(() => this.#onExit(host))
     this.#hosts.set(host.id, host)
+    // Every host that is not the primary is a loan in one form or another, and a
+    // loan is only safe while something watches to take it back. Arming at the
+    // spawn rather than at the call sites is what keeps a host opened by a move
+    // supervised: the drain used to exist only for hosts a session had already
+    // landed on, so a move's process was never drained by anything.
+    if (this.#primaryId !== null && this.#primaryId !== host.id) this.#armRebalance()
     this.#hostsChanged()
     return host
   }
@@ -807,6 +836,26 @@ export class PiHostSupervisor {
     if (waiting === undefined) return
     host.waiting.delete(response.id)
     waiting.resolve(response)
+  }
+
+  /**
+   * Stop a host that holds nothing and that no session is being landed on.
+   *
+   * Empty is both halves: no mounted session, and no claimed one, because a
+   * create claims its host before the session is mounted and stopping that host
+   * would kill the create in flight. Nothing else in the supervisor stops an
+   * empty host: a drain empties a host by moving its sessions out, so a host
+   * that started empty stays resident for the life of the app.
+   */
+  #stopHostIfEmpty(hostId: string): void {
+    if (this.#sessionsOn(hostId).length > 0) return
+    if (this.#ownership.ownedBy(hostId).length > 0) return
+    this.#stopHost(hostId)
+  }
+
+  /** Stop every temporary host that came up empty, leaving the primary alone. */
+  #stopEmptySecondaries(): void {
+    for (const host of this.#secondaries()) this.#stopHostIfEmpty(host.id)
   }
 
   /** Stop one host, answering with the sessions it had to drop. */

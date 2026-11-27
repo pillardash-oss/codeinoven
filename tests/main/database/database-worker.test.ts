@@ -439,6 +439,19 @@ describe('DatabaseWorker production wrapper', () => {
     const row = db.get<{ id: string }>('SELECT id FROM projects WHERE id = ?', 'p-restore')
     expect(row?.id).toBe('p-restore')
 
+    // The read lane stopped for the swap and came back on the restored file, so
+    // no reader is left serving the pre-restore inode (and, on Windows, no
+    // read-only handle blocks the sidecar unlink in the first place).
+    expect(db.hasReadLane()).toBe(true)
+    const laneRead = await db.queryViaWorker(
+      'SELECT id FROM projects WHERE id = ?',
+      ['p-restore'],
+      1,
+      { lane: 'async' }
+    )
+    expect(laneRead.ok).toBe(true)
+    expect(laneRead.rows[0]?.id).toBe('p-restore')
+
     // The maintenance worker was retained and still serves post-restore integrity.
     const integrity = await db.integrityCheck(true)
     expect(integrity.ok).toBe(true)

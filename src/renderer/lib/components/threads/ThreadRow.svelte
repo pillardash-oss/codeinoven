@@ -22,6 +22,7 @@
     threadHoverPopoverStyle
   } from '$lib/components/shared/thread-hover-popover-layout'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
+  import { threadRowPress } from '$lib/thread-row-press.svelte'
   import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
   import {
     threadUsesEngineeringTooling,
@@ -77,11 +78,11 @@
   import { resolveModelProvider } from '$shared/provider-identity'
   import type { Thread } from '$shared/types'
   import {
-    coordinatorHasActiveDelegates,
     coordinatorHasUnreadWorkers,
     DEFAULT_SCOPE_BUCKET_ID,
     isOrchestrationChildThread
   } from '$shared/types'
+  import { delegatesWorking } from '$lib/thread-delegate-activity'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
   import { dispatchBadgeFor } from './thread-dispatch-badge'
 
@@ -281,6 +282,18 @@
     preloadThreadConversation(thread)
   }
 
+  /**
+   * Drop the press mark once the click that follows this release has run.
+   *
+   * `pointerup` is dispatched before `click`, and the click is what opens the
+   * thread: clearing on the release itself would unlight the row for the whole
+   * flush the open spends building the conversation, and the row would blink
+   * between the two. A task's delay lands after both.
+   */
+  function settlePressRelease(threadId: string): void {
+    setTimeout(() => threadRowPress.release(threadId), 0)
+  }
+
   /** Distinct harnesses used in this thread's session, newest first. */
   let harnessIds = $derived.by((): string[] => {
     // Defensive dedupe: a harness may appear more than once in the source data
@@ -478,30 +491,40 @@
   let primarySettledAt = $derived(agentRuns.settledAt(thread.projectId, thread.id))
 
   /** Aggregate child activity onto the Sr. Engineer row   the public source of truth. */
-  let delegatedWorkActive = $derived(
-    coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
-  )
+  let delegatedWorkActive = $derived(delegatesWorking(thread, scopeState.allScopeThreads))
 
-  /** Whether the agent is producing work right now. The one live-working rule
-   *  (`isThreadLiveWorking`) keeps a thread parked on the user out of this, so a
-   *  permission, question, or secret card never reads as work in progress   its
-   *  status is the authority until the user answers. */
-  let isWorking = $derived(isThreadLiveWorking(thread) || delegatedWorkActive)
+  /** Whether this thread's own turn is producing work right now. The one
+   *  live-working rule (`isThreadLiveWorking`) keeps a thread parked on the user
+   *  out of this, so a permission, question, or secret card never reads as work in
+   *  progress   its status is the authority until the user answers. */
+  let ownWorking = $derived(isThreadLiveWorking(thread))
+
+  /** Whether the row is live at all: its own turn, or the workers it dispatched.
+   *  A Sr. Engineer row stays live while its workers run, even with its own turn
+   *  parked between dispatches. */
+  let isWorking = $derived(ownWorking || delegatedWorkActive)
   let isRetryPaused = $derived(thread.status === 'working-paused')
   /** Another CodeInOven instance owns this thread's in-flight turn, so its live
    *  output and its stop control are there rather than here. */
   let isForeignRun = $derived(foreignRuns.isForeign(thread.projectId, thread.id))
 
-  /** Whether this turn is standing still on delegated work: an inline spawn, or a
-   *  status/output read called with `wait: true`, is still in flight. The row keeps
-   *  saying the thread is live, but with a held spine and the robot above it, so a
-   *  parent waiting on a worker never reads as a parent thinking.
+  /** Whether this thread is standing still on delegated work: an inline spawn, or
+   *  a status/output read called with `wait: true`, is still in flight, or the
+   *  thread's own turn is not running while the workers it dispatched still are.
+   *  The row keeps saying the thread is live, but with a held spine and the robot
+   *  above it, so a parent waiting on a worker never reads as a parent thinking.
    *
-   *  Only the turn's own transcript answers this, so a run owned by another
-   *  instance keeps its window mark: this window streams no parts for it and could
-   *  only guess. */
+   *  The first half is answered by the turn's own transcript, so a run owned by
+   *  another instance keeps its window mark: this window streams no parts for it
+   *  and could only guess. The second half is answered by the workers themselves,
+   *  which are threads of this window, so a Sr. Engineer parked between dispatches
+   *  wears the wait rather than the climbing spine of work it is not doing. */
   let waitsOnSubagents = $derived(
-    isWorking && !isForeignRun && threadMessages.waitsOnSubagents(thread.projectId, thread.id)
+    isWorking &&
+      !isForeignRun &&
+      (ownWorking
+        ? threadMessages.waitsOnSubagents(thread.projectId, thread.id)
+        : delegatedWorkActive)
   )
   /** Whether the row wears the working mark on its own account.
    *
@@ -644,7 +667,7 @@
       if (!effectiveRead && primarySettledAt > temporaryChatUnreadAt) return 'unread'
       return 'temporary-unread'
     }
-    if (isWorking && waitsOnSubagents) return 'waiting-subagents'
+    if (waitsOnSubagents) return 'waiting-subagents'
     if (isWorking) return 'working'
     // The confirmed terminal state wins over the busy flag so a finished turn
     // flips straight to done/unread instead of lingering on the spinner.
@@ -800,14 +823,33 @@
    *  sidebar. It is written as an inline style, the same way the scope chip draws
    *  its mixed border, rather than as an arbitrary utility class: this keeps the
    *  colour honest against the theme tokens and adds no class the build has to
-   *  discover. It never pulses. */
-  let rowTintStyle = $derived(
-    threadState === 'approval'
-      ? 'background: color-mix(in srgb, var(--color-warning) 8%, transparent);'
-      : threadState === 'error'
-        ? 'background: color-mix(in srgb, var(--color-danger) 8%, transparent);'
-        : ''
-  )
+   *  discover. It never pulses.
+   *
+   *  The tint mixes over the ground the row already has, never over nothing: an
+   *  inline background beats the `bg-selected` class, so a failed row that is the
+   *  thread the user has open used to lose its selection fill to the danger cast
+   *  and read like every other failed row. Mixed over the selected ground, the
+   *  row carries both facts: the state keeps its hue and the selection keeps its
+   *  fill. */
+  /**
+   * Whether the row reads as the open thread.
+   *
+   * The press counts too: the pointer going down is the user's own action, and
+   * the row it lands on must light in that frame instead of waiting for the
+   * conversation it opens to be built. See `threadRowPress`.
+   */
+  const lit = $derived(selected || (!picker && threadRowPress.id === thread.id))
+
+  let rowTintStyle = $derived.by(() => {
+    const ground = lit ? 'var(--color-selected)' : 'transparent'
+    if (threadState === 'approval') {
+      return `background: color-mix(in srgb, var(--color-warning) 8%, ${ground});`
+    }
+    if (threadState === 'error') {
+      return `background: color-mix(in srgb, var(--color-danger) 8%, ${ground});`
+    }
+    return ''
+  })
 
   /** Title colour, shared by every row layout. */
   /** The origin badge an orchestrated dispatch wears, above its title. */
@@ -1216,11 +1258,9 @@
         </span>
       {/if}
       {#if pickerBadge}
-        <StatusPill
-          ><span class={selected ? 'text-accent' : undefined}>{pickerBadge}</span></StatusPill
-        >
+        <StatusPill><span class={lit ? 'text-accent' : undefined}>{pickerBadge}</span></StatusPill>
       {/if}
-      {#if selected}
+      {#if lit}
         <CioCheck size={13} class="shrink-0 text-primary" />
       {/if}
     </span>
@@ -1319,13 +1359,19 @@
       : 'opacity-0'}"
   ></div>
   <button
-    class="relative flex w-full flex-col text-left transition-colors {rowLayoutClass} {selected
-      ? 'bg-selected'
+    class="relative flex w-full flex-col text-left transition-colors {rowLayoutClass} {lit
+      ? 'bg-selected ring-1 ring-border-strong ring-inset'
       : 'hover:bg-elevated'}"
     style={rowTintStyle}
     title={displayTitle}
-    aria-current={selected ? 'true' : undefined}
-    onpointerdown={() => preloadThread()}
+    aria-current={lit ? 'true' : undefined}
+    onpointerdown={() => {
+      threadRowPress.press(thread.id)
+      preloadThread()
+    }}
+    onpointerup={() => settlePressRelease(thread.id)}
+    onpointercancel={() => settlePressRelease(thread.id)}
+    onpointerleave={() => settlePressRelease(thread.id)}
     onclick={() => {
       popover.hide()
       onOpen(thread)
@@ -1816,6 +1862,7 @@
         <ThreadHoverPopover
           {thread}
           {isWorking}
+          {waitsOnSubagents}
           {isRetryPaused}
           {stageLabel}
           threadState={secondaryStatus === 'scheduled' ? 'scheduled' : threadState}

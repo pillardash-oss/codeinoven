@@ -41,6 +41,11 @@ export interface AgentProviderIssue {
   retryAt?: number
   /** App admission deadline, including the provider reset buffer. */
   autoResumeAt?: number
+  /**
+   * True when `retryAt` is the app's own rate-limit cooldown rather than a
+   * provider-reported reset, so the card can name it a cooldown countdown.
+   */
+  retryCooldown?: boolean
   attempt?: number
   statusCode?: number
 }
@@ -380,6 +385,15 @@ export type AgentEvent =
       type: 'steer.discarded'
       sessionId: string
       userMessageId: string
+    }
+  | {
+      /** A second steer arrived while an earlier one was still held, so the
+       *  earlier message was folded into the newer one. `userMessageId` is the
+       *  surviving row and `text` is what it now says. */
+      type: 'steer.merged'
+      sessionId: string
+      userMessageId: string
+      text: string
     }
 
 /**

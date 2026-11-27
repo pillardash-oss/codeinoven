@@ -667,6 +667,20 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
       )
     }
     let handedOff = false
+    const { projectId, id } = this.thread
+    const turnUserMessageId = userMessageId ?? stagedMessageId ?? messageId()
+    // The click is the work. Everything between here and the dispatch is a
+    // round-trip the reader must not have to watch go idle: the device gate, the
+    // Engineering lookups, the PRD workflow, and, after a provider or account
+    // switch, binding and spawning a whole new harness. Sending used to mark the
+    // run busy only after those, so the row kept the previous turn's settled
+    // status and read done for as long as the machine took to answer. Busy is
+    // set here, and every path that does not start a turn restores the state it
+    // found in `finally` below.
+    const busyBeforeSend = agentRuns.isBusy(projectId, id)
+    let turnBegun = false
+    agentRuns.setBusy(projectId, id, true, turnUserMessageId)
+    agentRuns.beginDispatch(projectId, id)
     try {
       // The device can hold a turn this thread is ready to start. Parking the send
       // is the protection: the queue card names the device reading, and the gate
@@ -836,17 +850,12 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
       this.errorMessage = ''
       this.providerStatus = null
 
-      // Use a stable UUIDv7 for the optimistic message and the persisted mirror
-      // message so they merge cleanly across thread switches. Mark the run busy
-      // before waiting for a slow first connection so the initial send is
-      // acknowledged immediately and cannot be submitted again. An edit brings
-      // its own id (the row it rewrote) so the transcript keeps that message
-      // instead of gaining a second copy of the same prompt.
-      const turnUserMessageId = userMessageId ?? stagedMessageId ?? messageId()
-      const { projectId, id } = this.thread
+      // The turn this send owns was already marked busy at the click; this is
+      // the point it becomes the local turn the session reports against, so a
+      // session event that ends a run may now settle it.
       this.root.buildSpecActionPrompt.beginLocalTurn(turnUserMessageId)
       this.root.currentWorkingTraceAttribution.captureLiveWorkingSelection()
-      agentRuns.setBusy(projectId, id, true, turnUserMessageId)
+      turnBegun = true
       // Nothing has reported this turn yet: the harness session still has to be
       // bound (and, after a provider or harness switch, created and spawned while
       // the orphaned one is released). The persisted row keeps the previous turn's
@@ -882,12 +891,12 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
         )
         // Wait for the DOM to reflect the optimistic message, then follow it.
         // A send is the reader acting on the conversation, so it always returns
-        // them to the tail: the view may have opened anchored on the previous
-        // prompt (a restore), and leaving the message they just sent below the
-        // fold would read as the send doing nothing. `scrollToLatest` also takes
-        // the viewport out of the open-at-prompt restore's hands, which is what
-        // a restore still in flight (a thread opened and answered immediately)
-        // would otherwise do right after this scroll.
+        // them to the tail, and the view may have opened anywhere above it (a
+        // restore): leaving the message they just sent below the fold would read
+        // as the send doing nothing. `scrollToLatest` also takes the viewport
+        // out of the open restore's hands, which is what a restore still in
+        // flight (a thread opened and answered immediately) would otherwise do
+        // right after this scroll.
         await tick()
         this.root.loadOlderMessages.scrollToLatest()
         await sendPromise
@@ -938,6 +947,11 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
       if (stagedMessageId && !handedOff) {
         threadMessages.unstage(this.thread.projectId, this.thread.id, stagedMessageId)
       }
+      // A send that never became a turn (parked behind the gate, refused by an
+      // entry card, stopped by a PRD error) hands the status back exactly as it
+      // found it. A send that began its turn keeps it: only the run itself may
+      // settle it now.
+      if (!busyBeforeSend && !turnBegun) agentRuns.setIdle(projectId, id)
     }
   }
 }

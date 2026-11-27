@@ -20,11 +20,6 @@ export function buildThreadDeletionStatements(
   const statements: SqlStatement[] = []
   const assignmentValues = [...assignmentIds]
 
-  // Pending turn-feedback rows are NOT resolved here: they keep their captured
-  // grading payload (their thread reference is SET NULL) and are judged by the
-  // LLM grader immediately after deletion   a lost-cause thread never scores
-  // as a pass just because it was deleted.
-
   if (assignmentValues.length > 0) {
     const assignmentPlaceholders = placeholdersFor(assignmentValues.length)
     statements.push(

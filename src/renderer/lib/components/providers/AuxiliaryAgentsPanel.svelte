@@ -170,12 +170,12 @@
   })
 </script>
 
-<div class="space-y-4">
+<div class="space-y-4" id="settings-block-harnesses-auxiliary">
   <div>
-    <h2 class="text-sm font-semibold text-foreground">Auxiliary Agents</h2>
+    <h2 class="text-sm font-semibold text-foreground">Auxiliary agents</h2>
     <p class="mt-0.5 text-xs text-muted">
-      The model each harness uses for thread titles, memory proposals, and turn grading. A harness
-      with no assignment keeps its own price-optimized choice.
+      The model each harness uses for thread titles, memory proposals and search summaries.
+      Unassigned harnesses keep their own cheaper choice.
     </p>
   </div>
 

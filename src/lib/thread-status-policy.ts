@@ -190,6 +190,46 @@ export function canMarkThreadUnread(status: ThreadStatus): boolean {
 }
 
 /**
+ * How a settled thread reads to the user, as the "Update status" submenu offers
+ * it. `unread` is the finished-but-unopened state, `done` the finished-and-read
+ * one, and `error` the needs-attention one. Only settled rows have an outcome;
+ * live, parked, retrying and spec threads report `null` (see
+ * {@link threadSettledOutcome}).
+ */
+export type ThreadSettledOutcome = 'unread' | 'done' | 'error'
+
+export const THREAD_SETTLED_OUTCOMES: readonly ThreadSettledOutcome[] = ['unread', 'done', 'error']
+
+/**
+ * Whether the user may rewrite this thread's outcome from the thread menu.
+ *
+ * Only a settled row has an outcome to rewrite: a finished run (`completed` or a
+ * run the user stopped, `interrupted`) reads done, and a `failed` run reads
+ * error. Work still in flight, a run parked on the user, a retry window and a
+ * ready spec are all states the app is still driving, so the menu leaves them
+ * alone instead of letting a click claim work ended when it has not.
+ */
+export function canUpdateThreadStatus(status: ThreadStatus): boolean {
+  return status === 'completed' || status === 'interrupted' || status === 'failed'
+}
+
+/**
+ * The outcome a thread currently reads as, or `null` when it has none.
+ *
+ * Shared by the "Update status" submenu (to mark the current entry) and the
+ * status service (to decide which writes change anything), so the checkmark the
+ * user sees and the rule the write follows can never disagree.
+ */
+export function threadSettledOutcome(
+  thread: Pick<Thread, 'status' | 'read'>
+): ThreadSettledOutcome | null {
+  if (thread.status === 'failed') return 'error'
+  if (thread.status === 'interrupted') return 'done'
+  if (thread.status !== 'completed') return null
+  return thread.read ? 'done' : 'unread'
+}
+
+/**
  * Whether this thread is parked on `spec` for an independent-audit report rather
  * than for a specification.
  *

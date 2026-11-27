@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   formatProjectEnvLine,
+  isEnvFileNameTaken,
   parseProjectEnvFile,
-  PROJECT_ENV_DISABLED_PREFIX
+  PROJECT_ENV_DISABLED_PREFIX,
+  sameEnvFileName,
+  suggestEnvFileName
 } from '../../src/lib/project-env'
 
 /** Only the assignment lines, which is what an editor turns into key rows. */
@@ -55,5 +58,24 @@ describe('formatProjectEnvLine', () => {
       { name: 'PORT', value: '3000', disabled: false },
       { name: 'MAIL_KEY', value: 'a b#c', disabled: true }
     ])
+  })
+})
+
+describe('env file names', () => {
+  it('compares names the way the filesystem does', () => {
+    expect(sameEnvFileName('.env', '.ENV')).toBe(true)
+    expect(sameEnvFileName('.env', '.env.local')).toBe(false)
+    expect(isEnvFileNameTaken(['.env.local'], ' .ENV.LOCAL ')).toBe(true)
+    expect(isEnvFileNameTaken(['.env.local'], '.env')).toBe(false)
+  })
+
+  it('suggests the first name a directory does not already use', () => {
+    expect(suggestEnvFileName([])).toBe('.env')
+    expect(suggestEnvFileName(['.env'])).toBe('.env.local')
+    expect(suggestEnvFileName(['.env', '.ENV.local', '.env.development'])).toBe('.env.production')
+    expect(
+      suggestEnvFileName(['.env', '.env.local', '.env.development', '.env.production', '.env.test'])
+    ).toBe('.env.2')
+    expect(suggestEnvFileName(['.env', '.env.2'])).toBe('.env.local')
   })
 })

@@ -78,6 +78,34 @@ export class ChatEngineProvidersCatalog {
     await this.invalidateProviderCatalogs()
   }
 
+  /**
+   * Replace one ACP agent's live process so the next probe reads fresh state.
+   *
+   * An agent caches its signed-in state per process: Cursor reports
+   * `isAuthenticated` from the moment it started, so a sign-in performed by the
+   * app's auth probe leaves every agent process started before it still refusing
+   * `session/new`. That is why the model picker kept asking for a sign-in while
+   * `cursor-agent update` (and a fresh probe) already worked. Disposing the
+   * driver drops that process, and the refresh below builds a new one that
+   * reads the credentials the sign-in just stored.
+   */
+  async restartAcpAgent(harnessId: string): Promise<void> {
+    if (!isAcpAgentId(harnessId)) return
+    const driver = this.host.drivers.get(harnessId)
+    if (!driver) return
+    // A turn in flight is using this process; its next turn re-reads auth anyway.
+    if (
+      driver.hasActiveTurn &&
+      this.host.units['providers-harness'].harnessHasActiveTurn(harnessId)
+    ) {
+      return
+    }
+    driver.dispose()
+    this.host.drivers.delete(harnessId)
+    this.acpDriverSignatures.delete(harnessId)
+    await this.refreshAcpHarnesses()
+  }
+
   // ─── Public API (IPC surface) ─────────────────────────────────────────────
 
   /**

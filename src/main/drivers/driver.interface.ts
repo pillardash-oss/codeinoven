@@ -384,7 +384,7 @@ export interface GenerateTitleOptions extends AuxiliaryCandidateOverride {
 /**
  * One self-contained auxiliary completion run against the harness's cheapest
  * available model, shared by every disposable cheap-model scenario (title
- * generation, turn grading, speech lessons, memory proposals, …).
+ * generation, speech lessons, memory proposals, search summaries, …).
  */
 export interface CheapModelRequest extends AuxiliaryCandidateOverride {
   /** Optional model-specific input budget and response validation for specialized tasks. */

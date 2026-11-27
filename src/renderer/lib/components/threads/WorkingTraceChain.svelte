@@ -172,7 +172,14 @@
         style="top: {ownScroll ? '0px' : 'var(--cio-trace-header-h, 0px)'}"
         aria-expanded={open}
         title={open ? 'Hide the steps behind this output' : 'Show the steps behind this output'}
-        onclick={() => (userChoice = !open)}
+        onclick={() => {
+          const next = !open
+          // Opening these steps is the reader's own gesture: the chain grows the
+          // transcript where they are, so the tail follower must not read that
+          // growth as new work at a bottom they are still watching.
+          if (next) onReaderInteraction?.()
+          userChoice = next
+        }}
       >
         <CioForward size={12} class="shrink-0 transition-transform {open ? 'rotate-90' : ''}" />
         <span class="font-medium">{stepLabel}</span>

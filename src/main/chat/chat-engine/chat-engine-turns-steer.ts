@@ -21,6 +21,7 @@ import type {
 } from '../../../lib/types'
 import { isAssistantSetupThread } from '../../../lib/types'
 import type { HeldSteer } from './chat-engine-types'
+import { mergeHeldSteerPayload, type HeldSteerPayload } from './chat-engine-held-steer-merge'
 import { rawErrorMessage } from './chat-engine-errors'
 import { withoutTransportParts } from './chat-engine-message-merge'
 import { formatProjectReferenceContext } from './chat-engine-message-text'
@@ -44,10 +45,53 @@ export class ChatEngineTurnsSteer {
 
   /** Register a held steer and tell renderers the undo window is open. */
   trackHeldSteer(sessionId: string, steer: HeldSteer): void {
-    // One steer at a time per session   a second steer while one is held
-    // replaces the pending delivery, but only the latest is undoable.
+    // Steer entry points fold an earlier held steer into the new one before
+    // building it (see `mergeHeldSteer`), so a held record is never silently
+    // replaced here: overwriting it would drop a message the user can still
+    // see and recall.
     this.host.state.heldSteers.set(sessionId, steer)
     this.host.broadcast({ type: 'steer.held', sessionId, userMessageId: steer.userMessageId })
+  }
+
+  /**
+   * Fold an earlier held steer into the message about to be steered.
+   *
+   * The hold keeps one record per session, so a second steer while the first
+   * was still undoable used to overwrite it: the first message stayed in the
+   * transcript with its recall control while its delivery was gone, and only
+   * the last words ever reached the harness. Instead the earlier message is
+   * removed and its words, files and references ride with the new one,
+   * separated by a newline, so one merged steer leaves and both rows settle
+   * together. Returns the folded payload, or null when nothing is held.
+   */
+  async takeHeldSteerForMerge(
+    sessionId: string,
+    scope: { projectId: string; conversationId: string; kind: HeldSteer['kind'] }
+  ): Promise<HeldSteerPayload | null> {
+    const previous = this.host.state.heldSteers.get(sessionId)
+    if (!previous) return null
+    if (
+      previous.projectId !== scope.projectId ||
+      previous.conversationId !== scope.conversationId ||
+      previous.kind !== scope.kind
+    ) {
+      return null
+    }
+    this.host.state.heldSteers.delete(sessionId)
+    try {
+      await previous.discard()
+    } catch (error) {
+      Logger.error('Held steer could not be removed before merging:', error)
+    }
+    // The earlier row is gone from the transcript, so the merged message takes
+    // its place in the conversation: the renderer drops the old bubble and the
+    // surviving one carries both texts.
+    this.host.broadcast({
+      type: 'steer.discarded',
+      sessionId,
+      userMessageId: previous.userMessageId
+    })
+    return previous.payload
   }
 
   /** Deliver every held steer for a session whose last in-flight tool just
@@ -309,6 +353,32 @@ export class ChatEngineTurnsSteer {
       attachments,
       thread.settings?.permissionLevel ?? 'auto_review'
     )
+    // A steer the user can still recall has not reached the harness yet, so a
+    // second steer arriving now is the same request continued: fold it into
+    // this message and drop the earlier row. The merged text leads with the
+    // earlier words, so nothing the user typed is lost and both rows settle
+    // together instead of only the last one sending. This runs only after the
+    // steer is known to be deliverable, so a refused steer never costs the
+    // words still waiting in an earlier one.
+    const heldPayload = await this.takeHeldSteerForMerge(activeSessionId, {
+      projectId,
+      conversationId: threadId,
+      kind: 'thread'
+    })
+    if (heldPayload) {
+      const merged = mergeHeldSteerPayload(heldPayload, {
+        text,
+        attachments,
+        promptReferences: promptReferences ?? [],
+        projectReferences: projectReferences ?? [],
+        taskReferences: taskReferences ?? []
+      })
+      text = merged.text
+      attachments = merged.attachments
+      promptReferences = merged.promptReferences
+      projectReferences = merged.projectReferences
+      taskReferences = merged.taskReferences
+    }
     const hiddenPromptContext = promptContext
       ? validateBoundedString(promptContext, 'Prompt context', 1, 100_000)
       : ''
@@ -485,6 +555,13 @@ export class ChatEngineTurnsSteer {
         conversationId: threadId,
         userMessageId: messageId,
         kind: 'thread',
+        payload: {
+          text,
+          attachments,
+          promptReferences: validatedPromptReferences,
+          projectReferences: validatedProjectReferences,
+          taskReferences: taskReferences ?? []
+        },
         deliverMidTurn: deliverNow,
         deliverAfterTurn: async () => {
           // The turn ended while the steer was held   it becomes the next
@@ -508,12 +585,10 @@ export class ChatEngineTurnsSteer {
         },
         discard: async () => {
           // Remove the persisted user message   the harness never saw it, so
-          // the conversation must look like the steer never happened.
-          const mirror = await this.host.threadManager.loadMessageRecords(projectId, threadId)
-          const kept = mirror.filter((message) => message.id !== messageId)
-          if (kept.length !== mirror.length) {
-            await this.host.threadManager.saveMessages(projectId, threadId, kept)
-          }
+          // the conversation must look like the steer never happened. Deleting
+          // by id touches one row: the turn is still streaming parts, and a
+          // whole-transcript rewrite would drop whatever landed meanwhile.
+          await this.host.threadManager.deleteAppMessages(projectId, threadId, [messageId])
         }
       })
       return withoutTransportParts(userMessage)

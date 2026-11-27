@@ -26,6 +26,11 @@
     thread: Thread
     /** Whether the harness is currently producing work for this thread. */
     isWorking?: boolean
+    /** Whether the thread is standing still on delegated work. The owning row is
+     *  the authority: a Sr. Engineer parked between dispatches waits on workers
+     *  without holding a blocking part of its own, and only that row can see the
+     *  workers. When omitted, the transcript decides for a live turn. */
+    waitsOnSubagents?: boolean
     /** Human-readable current-stage label shown next to the working badge. */
     stageLabel?: string
     /** Whether the provider is waiting for an automatic retry. */
@@ -57,6 +62,7 @@
   let {
     thread,
     isWorking = false,
+    waitsOnSubagents = false,
     isRetryPaused = false,
     isForeignRun = false,
     hideProject = false,
@@ -77,11 +83,15 @@
 
   let scopeBucket = $derived(threadScopeBucket(thread))
 
-  /** Whether the live turn is standing still on delegated work. A run owned by
-   *  another instance keeps its own stage row: this window streams no parts for
-   *  it, so the wait can only be read from a transcript it has. */
-  let waitsOnSubagents = $derived(
-    isWorking && !isForeignRun && threadMessages.waitsOnSubagents(thread.projectId, thread.id)
+  /** Whether the thread is standing still on delegated work: the owning row's
+   *  answer when it gave one, otherwise the turn's own transcript. A run owned by
+   *  another instance keeps its own stage row, since this window streams no parts
+   *  for it. */
+  let waitingOnSubagents = $derived(
+    isForeignRun
+      ? false
+      : waitsOnSubagents ||
+          (isWorking && threadMessages.waitsOnSubagents(thread.projectId, thread.id))
   )
 
   /** Wakes this thread has armed, soonest first. The row badges the soonest one;
@@ -266,7 +276,7 @@
         Running in another instance
       </dd>
     </div>
-  {:else if waitsOnSubagents}
+  {:else if waitingOnSubagents}
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
       <dd class="flex items-center gap-1 text-muted">

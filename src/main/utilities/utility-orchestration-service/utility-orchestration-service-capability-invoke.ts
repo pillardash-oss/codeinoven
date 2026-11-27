@@ -944,9 +944,9 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
     } else if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
       // One capability, operation groups with different owners: `preview`
       // serves the design folder, `checkpoint` saves a named step, `history` and
-      // `restore` read the folder's timeline and rewind it, `delegate` runs
-      // the model the user assigned to text work, `generate` produces media with the model assigned to a media
-      // craft, and `save-media` brings a generated asset in as a file.
+      // `restore` read the folder's timeline and rewind it, `generate` produces
+      // media with the model configured for its kind, and `save-media` brings a
+      // generated asset in as a file.
       const executors = new Map<string, DesignCapabilityExecutor | null>([
         ['preview', this.host.designPreviewExecutor],
         ['checkpoint', this.host.designPreviewExecutor],
@@ -965,8 +965,6 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
             this.host.designPreviewExecutor
           ]
         ),
-        ['delegate', this.host.designAssignmentExecutor],
-        ['generate', this.host.mediaGenerationExecutor],
         ['save-media', this.host.designMediaExecutor]
       ])
       const executor = executors.get(operation)
@@ -982,15 +980,14 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
         threadId: state.request.threadId
       })
     } else if (resolved.utility.id === APP_VIDEO_UTILITY_ID) {
-      // Preview serves the composition, checkpoint saves an edit step, generate
-      // makes media, and capture renders and pictures one frame.
+      // Preview serves the composition, checkpoint saves an edit step, and
+      // capture renders and pictures one frame.
       const executors = new Map<string, VideoCapabilityExecutor | null>([
         ['preview', this.host.videoPreviewExecutor],
         ['critique', this.host.videoPreviewExecutor],
         ['checkpoint', this.host.videoPreviewExecutor],
         ['history', this.host.videoPreviewExecutor],
         ['restore', this.host.videoPreviewExecutor],
-        ['generate', this.host.mediaGenerationExecutor],
         ...[
           'probe',
           'filmstrip',

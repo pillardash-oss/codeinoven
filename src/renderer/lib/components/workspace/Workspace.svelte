@@ -644,6 +644,20 @@
    * inside an `{#if}` and a narrowed property access does not survive the callback
    * Svelte compiles that branch into.
    */
+  /**
+   * What the conversation shows, and what everything else reacts to.
+   *
+   * The pane reads the selection the click made (`paneThread`), which exists
+   * immediately, and so does the list's own highlight: painting which row is open
+   * is the click, not work that follows it. Every other surface in this view reads
+   * `selectedThread`, which the store publishes one task later: Svelte applies
+   * every reaction to a state change in one flush in component order, so a
+   * selection published to the whole app at once made the dock, the git panel and
+   * the board all re-derive and fire their own reads before the pane could mount.
+   * Measured on the real app, that flush took 1.4 s for a blank thread - a six
+   * millisecond template behind a second of unrelated reactions.
+   */
+  const paneThread = $derived(workspaceState.paneThread)
   const selectedThread = $derived(board.openThreadFromSwitcher.selectedThread)
   const activeProject = $derived(board.openThreadFromSwitcher.activeProject)
 
@@ -713,7 +727,7 @@
         tasks={board.markThreadReadAndApply.assistantTasks}
         runs={board.mergeThreadsInList.assistantRuns}
         runsByAssistant={board.mergeThreadsInList.runsByAssistant}
-        selectedThreadId={activeThreadRowId(selectedThread)}
+        selectedThreadId={activeThreadRowId(paneThread)}
         onOpenTask={board.markThreadReadAndApply.openAssistantTask}
         onOpenAssistantKnowledge={(assistant) =>
           void board.markThreadReadAndApply.openAssistantKnowledgeFor(assistant)}
@@ -737,7 +751,7 @@
       visibleProjects={board.mergeThreadsInList.visibleProjects}
       projectIcons={board.createThreadInProject.projectIcons}
       loading={board.switcherPanelTabs.loading}
-      activeThreadId={activeThreadRowId(selectedThread)}
+      activeThreadId={activeThreadRowId(paneThread)}
       threadsByProject={board.markThreadReadAndApply.threadsByProject}
       pinnedThreads={board.markThreadReadAndApply.pinnedThreads}
       pinnedProjects={board.markThreadReadAndApply.pinnedProjects}
@@ -793,7 +807,7 @@
       <WorkspaceConversationPane
         mode={board.props.mode}
         active={board.props.active}
-        {selectedThread}
+        selectedThread={paneThread}
         visibleProjects={board.mergeThreadsInList.visibleProjects}
         projectIcons={board.createThreadInProject.projectIcons}
         threadsByProject={board.markThreadReadAndApply.threadsByProject}

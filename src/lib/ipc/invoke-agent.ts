@@ -81,6 +81,7 @@ export const invokeAgentContract = {
   >,
   'agent:abort': {} as Contract<[projectId: string, threadId: string], void>,
   'agent:compact': {} as Contract<[projectId: string, threadId: string], void>,
+  'agent:checkpoint': {} as Contract<[projectId: string, threadId: string], void>,
   'agent:answerQuestion': {} as Contract<
     [projectId: string, threadId: string, requestId: string, answers: string[][]],
     void
@@ -135,6 +136,38 @@ export const invokeAgentContract = {
     [projectId: string, threadId: string, sessionId: string],
     void
   >,
+  /**
+   * Run a pawn agent again from its own thread, on the model the caller picked.
+   *
+   * A pawn takes no user prompt, so its retry is the one action the person
+   * watching it must still be able to take without a conversation: a rate limit,
+   * a paused provider, or a task spawned on the wrong model or thinking level.
+   *
+   * The pick rides along with the click instead of being read back from the
+   * thread row: the picker saves asynchronously, and a retry that read the row
+   * could race that write and run the model the reader just moved away from. It
+   * is persisted here first, so the run and the thread agree afterwards.
+   */
+  'agent:retryPawnRun': {} as Contract<
+    [projectId: string, threadId: string, settings?: ThreadSettings],
+    void
+  >,
+  /**
+   * Whether an open pawn thread is running, and the failure it ended on when it is
+   * not. A pawn takes no user prompt, so this is what its locked card reads to
+   * report a rate limit and offer the retry the reader cannot reach otherwise.
+   */
+  'agent:getPawnRunState': {} as Contract<
+    [projectId: string, threadId: string],
+    { pawn: boolean; running: boolean; failure: string | null }
+  >,
+  /**
+   * Settle the pawn runs a crash left behind.
+   *
+   * Opening the board is the moment their truth matters, and it is cheap: one
+   * mirror read per pawn that still claims to be running.
+   */
+  'agent:repairPawnRuns': {} as Contract<[projectId: string, spawnerThreadId: string], void>,
   'agent:retryAssignmentWorker': {} as Contract<
     [projectId: string, coordinatorThreadId: string, workerThreadId: string],
     AssignmentPlan

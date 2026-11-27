@@ -44,15 +44,6 @@ when a decision needs it.
 | Fork records lineage and copies no rows                                       | **Landed** |
 | Old rows reindexed to the narrowed corpus (schema v15)                        | **Landed** |
 
------------------------------------------------------------------------------ | ----------- |
-| `formatHistoryBrief` — the short recap | **Landed** |
-| Fork notice naming the parent thread id | **Landed** |
-| `read_messages` paging (`before_id` / `nextBeforeId`) and tool evidence | **Landed** |
-| Indexes carry the conversation's words only (no tools, reasoning, sub-agents) | **Landed** |
-| Checkpoint-scoped reads, page-level budget, checkpoints in the brief | **Agreed** |
-| App-owned context checkpoints replacing harness compaction | **Planned** |
-| Fork stops copying rows, lineage row instead | **Planned** |
-
 ---
 
 ## 2. What a rebuilt session receives
@@ -200,6 +191,17 @@ favour of it.
 Nothing is summarized away. The old session's messages are still in
 `agent_messages`; the session id says which window each row belonged to.
 
+### Asking for one
+
+- **`/checkpoint`** in the composer closes the session and continues the thread on
+  a successor. It carries no harness gate: every harness can be checked in.
+- **`/compact`** remains as an alias and takes the same path, so muscle memory
+  never reaches a harness that would rewrite the transcript in place.
+- A harness's own `compact` command is filtered out of the slash menu for the same
+  reason. Its trigger (where the app sets one) stays as the emergency net.
+- The context panel's action is **Checkpoint Work**, and the busy reading is
+  **Checking in…**.
+
 ### Pi specifics
 
 Pi is the one harness where the app already owns compaction end to end, so most
@@ -330,26 +332,31 @@ current window knows which ids to search.
 
 ## 6. Forks are lineage, not copies
 
-A fork today duplicates every mirrored row up to the fork point into the new
-thread (`thread-manager-fork.ts`), which means a fork of a fork re-stores the
-same history again. That is the only place in this design where storage grows
-faster than the data written, and it buys nothing: the fork already names the
-parent thread id in its first turn.
+A fork duplicates no rows. It records **lineage** — a `kind = 'fork'` checkpoint
+row naming the parent thread and the message it was cut at — and its transcript is
+read _through_ that lineage: its own rows plus the ancestors' rows up to the cut.
+So the conversation screen opens on the history the fork inherited, a fork of a
+fork reaches its grandparent, and no history is ever stored twice.
 
-So:
+Rules the read path keeps (`MESSAGE_LINEAGE_CTE` / `MESSAGE_LINEAGE_ROWS` in
+`agent-message-repo.ts`):
 
-- A fork records **lineage** (`thread_lineage` or a `kind = 'fork'` checkpoint
-  row naming the parent thread and the message it cut at) and copies **no
-  messages**.
-- Its first turn is the brief with the parent id, which is what it already
-  carries.
-- The reader takes a thread id, so reading the parent's history is the same call
-  as reading its own — including the pages from before the fork.
+- The lineage walks the `fork` checkpoint rows to the root, and each stage carries
+  the **minimum** of the boundaries above it. A fork cut at a message it inherited
+  therefore sees exactly what that point covered, and a fork cut at its own later
+  turn still cannot see ancestor rows its parent never showed.
+- A thread's own rows are never bounded; only inherited rows are.
+- The cut point may itself be an inherited message, which is why `forkThread`
+  resolves it through the chain rather than only in the thread's own rows.
+- The checkpoint boundary uses the same rule: a session "saw" everything the
+  conversation screen shows, inherited rows included.
+- The brief reads the same transcript, so a rebuilt fork session is told what the
+  fork inherited instead of opening with an empty recap.
 - Subagent traces stay with the session that produced them. They are not copied,
   and they are reachable through the same thread id.
 
-This also settles what a fork _is_: a new thread sharing a history, not a new
-copy of one.
+This settles what a fork _is_: a new thread sharing a history, not a new copy of
+one — and not a blank page either.
 
 ---
 
@@ -396,3 +403,40 @@ has to keep.
 Two things stay out on purpose: tool evidence never enters the FTS or embedding
 indexes (search stays the thing a person would recognise), and a checkpoint never
 summarizes the conversation it closes — the rows stay in the mirror.
+
+---
+
+## 9. An audit records its own position
+
+A checkpoint names a boundary, never a position inside a turn: `thread_checkpoints`
+says where a session ended, `turn_checkpoints` says which files a turn changed.
+Neither says "the auditor was at check 7 of 12", and for a long time nothing did —
+a turn's tool calls only reach the mirror when its message is finalized, so a
+death mid-turn left the next attempt a session and no position.
+
+An audit now writes its own position while it works
+(`chat-engine-audit-progress.ts`). Every settled tool call of an audit turn is
+appended, the moment it completes, to a durable log:
+
+`.cio/specs/<feature>/audit/progress/<auditorThreadId>.jsonl`
+
+- One `kind: "run"` header names the run and its kind (`independent` or
+  `assignment`), then one `kind: "step"` line per finished call: action phrase,
+  subject, status, timestamp. A call still running is not a step; the same part is
+  seen again when it settles, and that is the moment recorded.
+- A new run of that auditor replaces the log, so what a resume reads is the run it
+  continues, not a pile of history.
+- The log is written by the same turn-stream funnel that persists working traces
+  (`persistTurnStreamEvent`), so it records for every harness without the auditor
+  having to cooperate.
+- `formatAuditProgressBrief` turns it into prompt text: the steps already done,
+  numbered, with how many the prompt left out, and where the whole log lives. It
+  rides the resume prompt of an independent audit and the continuing prompt of an
+  Assignment audit. `auditEvidencePointer` names the auditor's thread id alongside
+  it, so a session that was rebuilt can still read its tool calls with
+  `read_messages`.
+
+The log is a position, never an authority: validation, the repair manifest and the
+attempt artifacts stay the source of truth about what the audit concluded. What the
+log adds is the one thing none of them carried — which checks had already run when
+the process died.

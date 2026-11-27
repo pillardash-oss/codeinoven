@@ -7,6 +7,15 @@ import { isWindowsStorePackage, skipsOsKeyring } from '../lib/utils'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { hasCaptionOverlay } from '../lib/traffic-light'
 import { Logger } from './system/logger'
+import { perfTrace } from './system/perf-trace'
+import { HEAP_SNAPSHOT_AUTO_TOTAL_BYTES, heapSnapshots } from './system/perf-heap-snapshot'
+import {
+  startMainLoopLagSampling,
+  startPerfMemorySampling,
+  stopMainLoopLagSampling,
+  stopPerfMemorySampling
+} from './system/perf-memory-sampler'
+import { PERF_MEMORY_INTERVAL_FULL_MS, PERF_MEMORY_INTERVAL_PRODUCTION_MS } from '../lib/perf-trace'
 import { installApplicationMenu } from './system/app-menu'
 import { captureScreenshotForAgent } from './system/screenshot-service'
 import { usageAnalytics } from './system/usage-analytics'
@@ -651,7 +660,10 @@ const RENDERER_RECOVERY_WINDOW_MS = 60_000
 
 /** Replace the workspace renderer and leave the main process and its work alone. */
 function restartWorkspace(): void {
-  if (state.quitCleanupStarted) return
+  if (state.quitCleanupStarted) {
+    Logger.info('Restart workspace ignored: the app is quitting')
+    return
+  }
   void requestWorkspaceRestart({ window: () => state.mainWindow, openWindow: openMainWindow })
 }
 
@@ -1275,6 +1287,26 @@ void app
       architecture: process.arch,
       electronVersion: process.versions.electron
     })
+    // The performance trace writes beside the durable log, through the same
+    // storage engine, and starts sampling memory immediately: the boot itself is
+    // the first thing worth measuring, and a sampler started after the window
+    // appears has already missed the most expensive minute of the session.
+    perfTrace.initialize(storage)
+    // Snapshots write into the same day folder, so they are pointed at the same
+    // storage root the trace uses.
+    heapSnapshots.initialize(storage)
+    // A shipped build keeps the trace to operations that were actually slow, on a
+    // one-minute memory cadence. A checkout or probe launch records everything:
+    // that is where a regression has to become visible before it ships.
+    const fullTrace = !isShippedBuild()
+    perfTrace.setFullTrace(fullTrace)
+    startPerfMemorySampling(
+      fullTrace ? PERF_MEMORY_INTERVAL_FULL_MS : PERF_MEMORY_INTERVAL_PRODUCTION_MS,
+      // Only a build being investigated snapshots itself when it has grown: the
+      // capture pauses every window for as long as V8 needs to write the file.
+      fullTrace ? HEAP_SNAPSHOT_AUTO_TOTAL_BYTES : undefined
+    )
+    startMainLoopLagSampling()
     logConfiguredDataRoot()
     if (!startHidden && splashOutcome !== 'ready' && splashOutcome !== 'deadline') {
       Logger.error('Splash did not reach visual readiness before startup continued', {
@@ -1662,4 +1694,10 @@ app.on('will-quit', () => {
   // force-exit losing the session's localStorage writes.
   flushSessionStorage()
   setNotificationService(null)
+  // The trace is queued, not immediate: without this the last two hundred
+  // milliseconds of a session   the part where the app was being quit because
+  // it had become unusable   is the part that never reaches disk.
+  stopPerfMemorySampling()
+  stopMainLoopLagSampling()
+  void perfTrace.flush()
 })

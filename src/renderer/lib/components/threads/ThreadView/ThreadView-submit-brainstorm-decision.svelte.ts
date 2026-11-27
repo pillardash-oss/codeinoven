@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import { SvelteSet } from 'svelte/reactivity'
 import { classifyProviderIssue } from '$shared/provider-issue'
 import { messageId } from '$shared/id'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -218,7 +219,18 @@ export class ThreadViewSubmitBrainstormDecision extends BoardUnit<ThreadView> {
         : null)
   )
 
-  assignmentWorkerRetryingId = $state<string | null>(null)
+  /**
+   * Workers whose retry is in flight, one entry each.
+   *
+   * This was a single id for the whole coordinator, and the guard below returned
+   * silently whenever it was set. One pawn's retry therefore swallowed every
+   * other pawn's click for as long as its own round trip lasted — which includes
+   * starting the worker's run on main, so on a loaded machine the rest of the
+   * board was unclickable and gave no sign why. A set keeps the one thing the
+   * guard was for (no double retry of the same worker) without making one
+   * worker's turn block another's.
+   */
+  assignmentWorkerRetryingIds = $state<SvelteSet<string>>(new SvelteSet<string>())
 
   assignmentWorkerReportingId = $state<string | null>(null)
 
@@ -798,7 +810,7 @@ export class ThreadViewSubmitBrainstormDecision extends BoardUnit<ThreadView> {
 
   async retryAssignmentWorker(worker: Thread): Promise<void> {
     const current = this.root.submitSpecDecision.assignment
-    if (!current || this.assignmentWorkerRetryingId) return
+    if (!current || this.assignmentWorkerRetryingIds.has(worker.id)) return
     const task = current.content.tasks.find((candidate) => candidate.threadId === worker.id)
     const clearBubbledCoordinatorError =
       this.visibleProviderStatus?.state === 'error' &&
@@ -806,7 +818,7 @@ export class ThreadViewSubmitBrainstormDecision extends BoardUnit<ThreadView> {
         this.visibleProviderStatus.issue,
         task?.report?.summary ?? ''
       )
-    this.assignmentWorkerRetryingId = worker.id
+    this.assignmentWorkerRetryingIds.add(worker.id)
     try {
       this.root.submitSpecDecision.assignment = await invoke(
         'agent:retryAssignmentWorker',
@@ -823,7 +835,7 @@ export class ThreadViewSubmitBrainstormDecision extends BoardUnit<ThreadView> {
       this.root.handleAgentEvent.errorMessage =
         error instanceof Error ? error.message : 'The worker could not be retried.'
     } finally {
-      this.assignmentWorkerRetryingId = null
+      this.assignmentWorkerRetryingIds.delete(worker.id)
     }
   }
 

@@ -8,6 +8,15 @@ export interface AcpAgentIpcOptions {
   /** Called after any change, so drivers, catalogs and the harness list agree. */
   onAgentsChanged?: () => void | Promise<void>
   /**
+   * Called after the user signed one agent in.
+   *
+   * A sign-in happens in a probe process of its own, while the driver serving
+   * turns and the model catalog keeps the agent process it already had, which
+   * may have started before the credentials existed and so keeps refusing
+   * sessions. This is the hook that replaces that process.
+   */
+  onAgentSignedIn?: (harnessId: string) => void | Promise<void>
+  /**
    * Cheap check that every configured agent has a driver, run whenever the
    * Harnesses page reads the list. Opening the page then heals a map that was
    * built before the agent store had loaded, without restarting the app.
@@ -83,6 +92,9 @@ export function registerAcpAgentIpc(
         methodId.trim(),
         typeof projectPath === 'string' && projectPath.length > 0 ? projectPath : undefined
       )
+      // Before the catalogs are invalidated, so the re-probe that follows runs
+      // against an agent process that knows about the credentials just stored.
+      await options.onAgentSignedIn?.(agent.id)
       // The catalog was probed while the agent was still signed out (a refused
       // session is what produced the sign-in card), so its cached answer has to
       // go: without this the model picker keeps the empty catalog until the TTL.

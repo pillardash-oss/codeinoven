@@ -25,9 +25,9 @@
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import { threadBusyForIndicator } from './app-header-thread-status'
+  import { delegatesWorking } from '$lib/thread-delegate-activity'
   import {
     ASSISTANT_SPACE_ID,
-    coordinatorHasActiveDelegates,
     INBOX_PROJECT_ID,
     isThreadRetryPaused,
     type Project
@@ -146,7 +146,7 @@
     {@const isWorking =
       workspaceState.specStudioFormulating ||
       threadBusyForIndicator(thread) ||
-      coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)}
+      delegatesWorking(thread, scopeState.allScopeThreads)}
     {@const isRetryPaused = isThreadRetryPaused(thread)}
     {@const isForeignRun = foreignRuns.isForeign(thread.projectId, thread.id)}
     {@const activeRunActivity = agentRuns.activity(thread.projectId, thread.id)}

@@ -160,7 +160,35 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
   async retryConnection(): Promise<void> {
     if (this.providerRetrying) return
     this.providerRetrying = true
+    const { projectId, id } = this.root.handleAgentEvent.thread
+    // The click is the work. A retry re-runs a turn the reader already asked
+    // for, so the thread reads working from this moment, whatever the machine
+    // still has to do underneath: aborting the parked run, releasing the
+    // replaced account's harness, binding and spawning a new one. Marking it
+    // only when the new harness finally reports left a retried thread parked on
+    // the previous turn's settled status for a minute, and the row read done
+    // for that whole window.
+    agentRuns.setBusy(projectId, id, true)
+    agentRuns.beginDispatch(projectId, id)
     try {
+      // A pawn answers only to the agent that spawned it, so a user-origin
+      // retry would be refused by its lock. Its own retry restarts the same run
+      // on the model the thread carries now, and that restart can take minutes
+      // (it re-dispatches the worker through the engine), so the optimistic busy
+      // state above is the only status the row has until the run reports.
+      const lockedThread = this.root.handleAgentEvent.thread
+      if (lockedThread.userInputLocked === true) {
+        // The card's picker holds the model this retry must run, so the thread's
+        // live settings ride along instead of being read back in the main process.
+        await invoke(
+          'agent:retryPawnRun',
+          lockedThread.projectId,
+          lockedThread.id,
+          this.root.loadOlderMessages.settings
+        )
+        this.root.handleAgentEvent.providerStatus = null
+        return
+      }
       const pausedTurn = this.root.handleAgentEvent.providerStatus !== null
       if (this.root.switchProject.busy || pausedTurn) {
         this.userRequestedStop = true
@@ -184,6 +212,11 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
         }
       }
       const request = this.retryRequest()
+      // Hand the status to the send, which marks the same thread working on its
+      // own first line and owns clearing it if the message parks instead of
+      // starting. Clearing here keeps a frame from reading the abort's settle as
+      // the answer.
+      agentRuns.setIdle(projectId, id)
       await this.root.handleAgentEvent.sendMessage(
         request ? continuationRequestPrompt(request) : 'Continue',
         request?.attachments ?? [],
@@ -195,6 +228,9 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
         { action: 'Retry connection' }
       )
     } catch (error) {
+      // The retry never reached the send, so the optimistic work is not running
+      // and the row must not keep claiming it is.
+      agentRuns.setIdle(projectId, id)
       this.root.handleAgentEvent.errorMessage =
         error instanceof Error ? error.message : 'The connection could not be retried.'
     } finally {

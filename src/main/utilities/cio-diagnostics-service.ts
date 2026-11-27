@@ -654,7 +654,12 @@ export class CioDiagnosticsService {
         `No message ${beforeId} in thread ${threadId}. Pass a message id from this thread as before_id, or omit before_id for the newest page.`
       )
     }
-    const page = this.messageRepo.loadPageByThread(threadId, before, boundedLimit)
+    const page = this.messageRepo.loadPageByThread(
+      threadId,
+      before,
+      boundedLimit,
+      this.messageRepo.inheritsHistory(threadId)
+    )
     return this.toMessagePage({
       threadId,
       title,

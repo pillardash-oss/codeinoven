@@ -50,6 +50,5 @@ describe('DesignService conversation container state', () => {
       items: [],
       root: '.cio/designs'
     })
-    await expect(service.authoredWorkKindFor('assistant-thread')).resolves.toBeNull()
   })
 })

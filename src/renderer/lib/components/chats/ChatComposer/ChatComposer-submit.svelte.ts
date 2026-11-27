@@ -26,8 +26,6 @@ import { speechController } from '../../../speech/speech-controller.svelte'
 import { filterActions, permissionLevelForAction } from '$lib/actions'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { cioSearchVisibility } from '$lib/stores/cio-search-visibility.svelte'
-import { sessionTagKind } from '$shared/session-tags'
-import { expertSessionFor, shouldOfferExpertCard } from '$shared/experts'
 import type { SpeechEditorApplyResult, SpeechEditorTarget } from '../../../speech/editor-target'
 import { notifyVoiceDraftLanded } from '../../../speech/voice-send'
 import type { ActionDefinition, ActionSelection } from '$lib/actions'
@@ -183,7 +181,16 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
 
   lastCaretText: string | null = $state(null)
 
-  richEditor!: RichMarkdownEditor
+  /**
+   * The mounted editor instance.
+   *
+   * Declared as `$state` because `bind:this` writes it. As a plain field Svelte
+   * rejected the binding ("binding to a non-reactive property") and every reader
+   * of this instance — the speech target, the selection capture, the submit
+   * path — read a value nothing could invalidate, so the composer could keep
+   * talking to an editor that had already been replaced.
+   */
+  richEditor = $state<RichMarkdownEditor>()
 
   composerSpeechTarget(): SpeechEditorTarget | null {
     const editorTarget = this.richEditor?.speechEditorTarget(this.composerEditorId) ?? null
@@ -243,37 +250,6 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
         }
       }
     }
-  }
-
-  /**
-   * Hold this send for the expert card, or let it go.
-   *
-   * The card has one question, scoped to a session: may this design or video
-   * session hand its craft work to the models the user staffed. It is asked on
-   * the send that opens a session and on later sends until the thread answers,
-   * and it comes back only when the expert list itself changed. Everything else
-   * sends straight through.
-   */
-  async offerExpertCardOrSend(msg: string, direct?: boolean): Promise<void> {
-    const state = await this.root.captureComposerRoot.readExpertState()
-    const session = expertSessionFor(sessionTagKind(msg), state?.session ?? null)
-    if (
-      !state ||
-      !shouldOfferExpertCard({
-        session,
-        expertCount: state.experts.length,
-        decision: state.decision,
-        signature: state.signature
-      })
-    ) {
-      this.performSend(direct)
-      return
-    }
-    this.root.captureComposerRoot.expertGateState = state
-    this.root.captureComposerRoot.expertGateSession = session === 'video' ? 'video' : 'design'
-    this.root.captureComposerRoot.expertGateDirect = direct
-    this.root.captureComposerRoot.expertGateOpen = true
-    void this.root.captureComposerRoot.warmSession()
   }
 
   slashActions = $derived(filterActions(this.root.handleDropData.slash.available, this.slashQuery))
@@ -419,8 +395,8 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
     // of sending a prompt without the attachment the user just gave it.
     if (this.pendingAttachments.length > 0) await this.waitForPendingAttachments()
     // A tag typed but never picked still targets what it names. Resolve it
-    // before anything reads the draft, so the expert gate sees a session tag
-    // and the dispatched turn carries the tagged reference.
+    // before anything reads the draft, so the dispatched turn carries the
+    // tagged reference.
     if (this.resolvingSend) return
     this.resolvingSend = true
     try {
@@ -478,13 +454,6 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
     // We still clear the input so the user can type their next message.
     if (this.root.handleDropData.shouldInterceptImageGate()) {
       this.root.handleDropData.openImageDescriptorGate(direct)
-      return
-    }
-    // A design or video session holds its send once, so the expert card can ask.
-    // Reading the answer is one call on the user's own action, and the common
-    // case (a thread that already answered, or a plain message) sends through.
-    if (this.root.props.projectId && this.root.props.threadId) {
-      void this.offerExpertCardOrSend(msg, direct)
       return
     }
     this.performSend(direct)

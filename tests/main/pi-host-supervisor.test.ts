@@ -16,6 +16,8 @@ class FakeHost {
   /** Leave `compact` in flight, so a checkpoint's timeout behaviour is testable. */
   holdCompactions = false
   /** Sessions that report a turn in flight, so a rejoin cannot pick them up. */
+  /** Refuse a create, the way a host that cannot open the session answers. */
+  refuseCreates = false
   readonly streaming = new Set<string>()
   readonly transport: HostTransport
   #listeners: ((line: string) => void)[] = []
@@ -63,12 +65,16 @@ class FakeHost {
   }
 
   #answer(request: HostRequestEnvelope): void {
-    const reply = (data: unknown): void => {
-      const line = JSON.stringify({ type: 'response', id: request.id, ok: true, data })
+    const reply = (data: unknown, ok = true, error?: string): void => {
+      const line = JSON.stringify({ type: 'response', id: request.id, ok, error, data })
       for (const listener of this.#listeners) listener(line)
     }
     switch (request.command.type) {
       case 'create_session':
+        if (this.refuseCreates) {
+          reply(undefined, false, 'create refused')
+          return
+        }
         this.#sessions.add(String(request.sessionId))
         reply(this.state(String(request.sessionId)))
         return
@@ -415,13 +421,16 @@ describe('PiHostSupervisor', () => {
    */
   it('stops one host by pid and reports only its sessions as lost', async () => {
     const hosts: FakeHost[] = []
+    // Two populated hosts: the session on the primary first, then a saturated
+    // reading opens the loan the second one runs on.
+    let cpu = 1.2
     const supervisor = new PiHostSupervisor(
       () => {
         const host = new FakeHost(500 + hosts.length)
         hosts.push(host)
         return host.transport
       },
-      { maxSessionsPerHost: 1 }
+      { readHostCpu: () => cpu }
     )
     const lost: string[] = []
     supervisor.onSessionLost((sessionId) => lost.push(sessionId))
@@ -429,11 +438,14 @@ describe('PiHostSupervisor', () => {
       sessionId: 'atlas',
       command: { type: 'create_session', cwd: '/work/atlas', agentDir: '/agent' }
     })
+    cpu = 98
     await supervisor.createSession({
       sessionId: 'ledger',
       command: { type: 'create_session', cwd: '/work/ledger', agentDir: '/agent' }
     })
     expect(hosts).toHaveLength(2)
+    expect(supervisor.hostOf('atlas')).toBe(500)
+    expect(supervisor.hostOf('ledger')).toBe(501)
     expect(supervisor.pids()).toEqual(hosts.map((host) => host.transport.pid))
 
     supervisor.stopHost(hosts[0].transport.pid)
@@ -515,6 +527,8 @@ describe('PiHostSupervisor placement and rejoin', () => {
     options: {
       rebalanceIntervalMs?: number
       readPressure?: () => Promise<AdmissionDecision>
+      /** Configure each host the moment the supervisor starts it. */
+      configure?: (host: FakeHost) => void
     } = {}
   ) {
     const hosts: FakeHost[] = []
@@ -522,6 +536,7 @@ describe('PiHostSupervisor placement and rejoin', () => {
       () => {
         const host = new FakeHost(500 + hosts.length)
         hosts.push(host)
+        options.configure?.(host)
         return host.transport
       },
       {
@@ -539,6 +554,43 @@ describe('PiHostSupervisor placement and rejoin', () => {
       command: { type: 'create_session', cwd: `/work/${sessionId}`, agentDir: '/agent' }
     })
   }
+
+  /**
+   * How many sessions a host carries never opens another process.
+   *
+   * Eight resident sessions opening a second host, sixteen a third and so on is
+   * what made a busy window read as a leak: every one of those processes held
+   * one heap for the same machine, and none of them fixed anything. A session
+   * costs the host it runs on nothing extra, so every one of them shares the one
+   * host, however many the window has.
+   */
+  it('keeps every session on one host however many there are', async () => {
+    const { supervisor, hosts } = harness(() => IDLE_HOST)
+    for (let index = 0; index < 20; index += 1) await create(supervisor, `thread-${index}`)
+
+    expect(hosts).toHaveLength(1)
+    expect(supervisor.sessionsOn(500)).toBe(20)
+    supervisor.stop()
+  })
+
+  it('drains a loan back into a primary that carries many sessions', async () => {
+    let cpu = IDLE_HOST
+    const { supervisor, hosts } = harness(() => cpu)
+    for (let index = 0; index < 12; index += 1) await create(supervisor, `thread-${index}`)
+
+    cpu = SATURATED
+    await create(supervisor, 'borrowed')
+    expect(supervisor.hostOf('borrowed')).toBe(501)
+
+    // The count the primary carries is not a reason to hold the loan: only its
+    // own CPU is, and it has room now.
+    cpu = IDLE_HOST
+    await supervisor.rebalance()
+
+    expect(supervisor.hostOf('borrowed')).toBe(500)
+    expect(hosts[1].stopped).toBe(true)
+    expect(supervisor.pids()).toEqual([500])
+  })
 
   it('opens one temporary host while the primary host is saturated', async () => {
     const asked: number[] = []
@@ -668,5 +720,99 @@ describe('PiHostSupervisor placement and rejoin', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  /**
+   * A move is a home, and a process that is already up is always the cheaper
+   * one.
+   *
+   * The move empties and stops the source host, so the session's new process is
+   * all the app has left. The next session used to be sent to a freshly spawned
+   * primary instead, which left two hosts running for good: the new primary, and
+   * the moved session's host that nothing would ever drain.
+   */
+  it('adopts the host a move left running instead of opening a second one', async () => {
+    const { supervisor, hosts } = harness(() => IDLE_HOST)
+    await create(supervisor, 'atlas')
+    await supervisor.moveToNewHost('atlas')
+    expect(hosts).toHaveLength(2)
+    expect(hosts[0].stopped).toBe(true)
+
+    await create(supervisor, 'ledger')
+
+    expect(hosts).toHaveLength(2)
+    expect(supervisor.pid()).toBe(501)
+    expect(supervisor.hostOf('atlas')).toBe(501)
+    expect(supervisor.hostOf('ledger')).toBe(501)
+    supervisor.stop()
+  })
+
+  /**
+   * The drain check belongs to the process, not to one entry that fills it.
+   *
+   * A host opened by a move never had a session land on it through the create
+   * path, so arming the check there left the moved host unsupervised until the
+   * app restarted. It is armed at the spawn now, and the host with no primary
+   * left over it takes the primary home on that tick.
+   */
+  it('watches a host a move opened, so it never arrives without a primary', async () => {
+    vi.useFakeTimers()
+    try {
+      const { supervisor } = harness(() => IDLE_HOST, { rebalanceIntervalMs: 1000 })
+      await create(supervisor, 'atlas')
+      await supervisor.moveToNewHost('atlas')
+      expect(supervisor.pid()).toBeNull()
+
+      await vi.advanceTimersByTimeAsync(1000)
+
+      expect(supervisor.pid()).toBe(501)
+      expect(supervisor.pids()).toEqual([501])
+      expect(supervisor.hostOf('atlas')).toBe(501)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops a host whose session never arrived', async () => {
+    // The primary takes the first session with an idle reading, then a saturated
+    // one opens the loan this create is meant to fail on.
+    let cpu = IDLE_HOST
+    const { supervisor, hosts } = harness(() => cpu, {
+      // Every process the supervisor opens after the first one refuses the create
+      // it was started for, which is what a host that cannot open the session
+      // does.
+      configure: (host) => {
+        if (host.transport.pid > 500) host.refuseCreates = true
+      }
+    })
+    await create(supervisor, 'atlas')
+    expect(hosts).toHaveLength(1)
+    expect(supervisor.hostOf('atlas')).toBe(500)
+
+    cpu = SATURATED
+    await expect(create(supervisor, 'ledger')).rejects.toThrow(/create refused/)
+
+    expect(hosts).toHaveLength(2)
+    expect(hosts[1].stopped).toBe(true)
+    expect(supervisor.pids()).toEqual([500])
+    expect(supervisor.sessions()).toEqual(['atlas'])
+  })
+
+  it('adopts the surviving host after the primary exits, never a third process', async () => {
+    let cpu = SATURATED
+    const { supervisor, hosts } = harness(() => cpu)
+    await create(supervisor, 'atlas')
+    await create(supervisor, 'ledger')
+    expect(supervisor.pid()).toBe(500)
+
+    hosts[0].exit()
+    cpu = IDLE_HOST
+    await create(supervisor, 'memo')
+
+    expect(hosts).toHaveLength(2)
+    expect(supervisor.pid()).toBe(501)
+    expect(supervisor.hostOf('memo')).toBe(501)
+    expect(supervisor.sessions().sort()).toEqual(['atlas', 'ledger', 'memo'])
+    supervisor.stop()
   })
 })

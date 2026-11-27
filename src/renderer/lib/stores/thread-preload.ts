@@ -86,6 +86,14 @@ export function prefetchThreadTrace(thread: Thread): void {
 /** Warm a thread's whole conversation before it is opened. */
 export function preloadThreadConversation(thread: Thread): void {
   prefetchThreadTrace(thread)
+  // Hover is intent, not a lookup: the row under the pointer is the candidate for
+  // the next slot, and the user changes their mind by moving on. So the read stays
+  // — what must not stay is its current size. The preload asks for a twelve-message
+  // window, and the loader then extends that window backwards up to four more
+  // times to reach the prompt that opens the newest turn, so a hover can read
+  // hundreds of messages, reconcile them and publish them for a slot the user may
+  // never take. The slim read (the last turn's answer, the newest trace parts) is
+  // what a hover should cost; the full window belongs to the open.
   if (threadMessages.loaded(thread.projectId, thread.id)) return
   void threadMessages.preload(thread.projectId, thread.id)
 }

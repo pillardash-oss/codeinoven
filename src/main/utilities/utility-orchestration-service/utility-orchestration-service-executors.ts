@@ -52,17 +52,6 @@ export class UtilityOrchestrationServiceExecutors {
   }
 
   /**
-   * Register the executor behind the design capability's `delegate` operation,
-   * which runs one prompt on the model the user assigned to a piece of design
-   * work. The chat engine supplies it because it owns drivers, accounts and the
-   * resolved project path, and because the assignment is a user decision the
-   * app must never make on the agent's behalf.
-   */
-  setDesignAssignmentExecutor(executor: DesignCapabilityExecutor | null): void {
-    this.host.designAssignmentExecutor = executor
-  }
-
-  /**
    * Register the executor behind the design capability's `save-media`
    * operation, which writes a generated image, video or sound file into the
    * project so the design references a file rather than a link that expires.
@@ -70,17 +59,6 @@ export class UtilityOrchestrationServiceExecutors {
    */
   setDesignMediaExecutor(executor: DesignCapabilityExecutor | null): void {
     this.host.designMediaExecutor = executor
-  }
-
-  /**
-   * Register the executor behind the `generate` operation the design and video
-   * capabilities share, which runs the model the user assigned to a media craft
-   * and saves the result into the project. The app supplies it because it owns
-   * the provider credential, the vault and the folder the file lands in, and
-   * because the model is a user decision the agent must never make.
-   */
-  setMediaGenerationExecutor(executor: DesignCapabilityExecutor | null): void {
-    this.host.mediaGenerationExecutor = executor
   }
 
   /**
@@ -189,30 +167,13 @@ export class UtilityOrchestrationServiceExecutors {
   async designPlaybook(threadId: string): Promise<string> {
     const config = await this.host.storage.getConfig()
     const work = await this.host.units['orchestration'].workContext(threadId)
-    return (
-      work.note +
-      designCapabilityDocs(
-        prototypeCdnPolicyFromConfig(config),
-        await this.host.units['orchestration'].expertsForThread(threadId),
-        work.roots
-      )
-    )
+    return work.note + designCapabilityDocs(prototypeCdnPolicyFromConfig(config), work.roots)
   }
 
-  /**
-   * The video capability's playbook. The craft notes are a constant; the experts
-   * paragraph is the thread's, because a composition is staffed by the same
-   * models a design is.
-   */
+  /** The video capability's playbook. */
   async videoPlaybook(threadId: string): Promise<string> {
     const work = await this.host.units['orchestration'].workContext(threadId)
-    return (
-      work.note +
-      videoCapabilityDocs(
-        await this.host.units['orchestration'].expertsForThread(threadId),
-        work.roots
-      )
-    )
+    return work.note + videoCapabilityDocs(work.roots)
   }
 
   /** The remembered snapshot of the window one call names. */

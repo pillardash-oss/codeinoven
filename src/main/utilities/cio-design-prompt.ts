@@ -65,11 +65,10 @@ const DESIGN_SESSION_STEPS = `How to run the session:
 5. Reuse what the project already has when it has anything: its components,
    tokens, fonts and copy. A second visual language invented beside an existing
    one is a defect, not a design.
-6. The work that is not markup is staffed, not improvised: copy goes to the model
-   the user assigned through \`delegate\`, and a picture, clip or track comes from
-   \`generate\` with \`save-media\` writing it beside the design. When neither
-   exists, say which work needs one and ask; never choose a model yourself, and
-   never present placeholder content as the real thing.
+6. The work that is not markup is not improvised: when the design needs copy or a
+   picture, clip or track the project does not have, say which piece is missing
+   and ask rather than inventing it, and never present placeholder content as
+   the real thing.
 7. Report in the user's terms: what a viewer sees, what they can try, the folder
    it lives in and the URL that shows it. If a decision was a guess, say which
    one and what would settle it.

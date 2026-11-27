@@ -905,7 +905,7 @@ export class AntigravityDriver extends PersistentCliDriver {
     return readAntigravityAccountUsage(this.accountEnvironment)
   }
 
-  /** Cheapest available catalog model, shared by title and grading runs. */
+  /** Cheapest available catalog model, shared by title and summary runs. */
   private async cheapestCandidate(): Promise<TitleModelCandidate[]> {
     const catalogs = await this.listProviders()
     const models = catalogs.flatMap((catalog) => catalog.models)

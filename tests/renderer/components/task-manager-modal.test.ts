@@ -161,6 +161,58 @@ describe('task manager modal', () => {
     expect(document.body.textContent).toContain('Build the preview')
   })
 
+  it('draws one row for a pid the snapshot reports as both a service and a process', async () => {
+    const duplicate: TaskManagerSnapshot = {
+      ...SNAPSHOT,
+      processes: [
+        {
+          pid: 51178,
+          parentPid: 1,
+          command: '/app/pi',
+          cwd: '/Users/someone/Development/codeinoven',
+          projectId: 'project-1',
+          threadId: null,
+          ports: [],
+          cpuPercent: 2.4,
+          memoryBytes: 170 * 1024 * 1024,
+          projectName: 'codeinoven',
+          startedAt: 1_000,
+          scope: 'app'
+        }
+      ],
+      services: [
+        {
+          id: 'pi-host-51178',
+          kind: 'worker',
+          name: 'CIO Pi host',
+          detail: '3 hosted threads working',
+          scope: 'app',
+          projectId: null,
+          threadId: null,
+          pid: 51178,
+          port: null,
+          url: null,
+          startedAt: 1_000,
+          stoppable: true,
+          cpuPercent: 2.4,
+          memoryBytes: 170 * 1024 * 1024
+        }
+      ]
+    }
+    bridge.invoke.mockImplementation((channel: string) => {
+      if (channel === 'taskManager:list') return Promise.resolve(duplicate)
+      if (channel === 'project:list') return Promise.resolve([])
+      return Promise.resolve(null)
+    })
+    render()
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('CIO Pi host')
+    })
+    // The same runtime must not be drawn under a second owner node.
+    expect(document.body.textContent?.match(/51178/gu) ?? []).toHaveLength(1)
+    expect(document.body.textContent).not.toContain('codeinoven')
+  })
+
   it('makes the search toggle the footer default action', async () => {
     render()
     await vi.waitFor(() => {
@@ -178,5 +230,42 @@ describe('task manager modal', () => {
     ).find((button) => button.getAttribute('aria-label')?.startsWith('Pause automatic refresh'))
     expect(searchToggle?.hasAttribute('data-modal-primary')).toBe(true)
     expect(pauseToggle?.hasAttribute('data-modal-primary')).toBe(false)
+  })
+
+  it('shows the total use of every renderer surface beside the live count', async () => {
+    const withSurfaces: TaskManagerSnapshot = {
+      ...SNAPSHOT,
+      surfaces: [
+        {
+          pid: 11_001,
+          kind: 'window',
+          title: 'CodeInOven',
+          url: 'file:///app/index.html',
+          cpuPercent: 9.5,
+          memoryBytes: 200 * 1024 * 1024
+        },
+        {
+          pid: 11_002,
+          kind: 'tab',
+          title: 'Svelte docs',
+          url: 'https://svelte.dev/docs',
+          cpuPercent: 3,
+          memoryBytes: 100 * 1024 * 1024
+        }
+      ]
+    }
+    bridge.invoke.mockImplementation((channel: string) => {
+      if (channel === 'taskManager:list') return Promise.resolve(withSurfaces)
+      if (channel === 'project:list') return Promise.resolve([])
+      return Promise.resolve(null)
+    })
+    render()
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain('Svelte docs')
+    })
+    // The header total is the sum across surfaces, not the CPU-sorted first row.
+    expect(document.body.textContent).toContain('12.5%')
+    expect(document.body.textContent).toContain('300 MB')
+    expect(document.body.textContent).toContain('2 live')
   })
 })

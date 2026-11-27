@@ -73,8 +73,6 @@
    *  default: a box is a jar, so leaving its logins behind is the surprising
    *  choice, and the switch is right there for a user who wants them kept. */
   let eraseData = $state(true)
-  let deleting = $state(false)
-  let clearing = $state(false)
 
   /** How many tabs close with the box, so the confirmation can say the cost. */
   const tabCount = $derived(existing ? globalBrowser.tabCountInBox(jarIdForBox(existing.id)) : 0)
@@ -135,41 +133,32 @@
 
   async function deleteBox(): Promise<void> {
     const target = existing
-    if (!target) {
-      confirmDelete = false
-      return
-    }
-    deleting = true
-    try {
-      // Remove the row first: it closes this browser's tabs in the box, so the
-      // erase below can take the profile. The box is one jar for the whole
-      // profile, so other contexts that picked it lose the box with it. The erase
-      // is the forgetting one: the row is gone for good, so its whole profile
-      // directory goes with it.
-      globalBrowser.deleteBox(target.id)
-      if (eraseData) await globalBrowser.forgetBox(target.id)
-      confirmDelete = false
-      onDeleted?.()
-    } finally {
-      deleting = false
-    }
+    confirmDelete = false
+    if (!target) return
+    // Remove the row first: it closes this browser's tabs in the box, so the erase
+    // below can take the profile. The box is one jar for the whole profile, so
+    // other contexts that picked it lose the box with it. The erase is the
+    // forgetting one: the row is gone for good, so its whole profile directory
+    // goes with it.
+    globalBrowser.deleteBox(target.id)
+    onDeleted?.()
+    // The dialog is already gone: erasing a profile directory can take seconds
+    // and must never hold the window. The store reports a failed erase as a
+    // toast itself, so nothing is lost by not waiting for it here.
+    if (eraseData) void globalBrowser.forgetBox(target.id)
   }
 
   /** Erase this box's cookies and site data without deleting the box: the
-   *  signed-out reset for a jar the user wants to keep. */
-  async function clearData(): Promise<void> {
+   *  signed-out reset for a jar the user wants to keep.
+   *
+   *  The confirmation closes on the click, because clearing a jar is slow enough
+   *  that leaving the dialog up would block the window for it. The store already
+   *  turns a failure into a toast. */
+  function clearData(): void {
     const target = existing
-    if (!target) {
-      confirmClear = false
-      return
-    }
-    clearing = true
-    try {
-      await globalBrowser.clearBoxData(target.id)
-      confirmClear = false
-    } finally {
-      clearing = false
-    }
+    confirmClear = false
+    if (!target) return
+    void globalBrowser.clearBoxData(target.id)
   }
 
   /** Enter in the name field saves, and Cmd/Ctrl+Enter saves from anywhere in the
@@ -288,7 +277,6 @@
     variant="danger"
     title="Clear this box's data?"
     confirmLabel="Clear cookies and data"
-    busy={clearing}
     onCancel={() => (confirmClear = false)}
     onConfirm={clearData}
   >
@@ -307,7 +295,6 @@
     variant="danger"
     title="Delete this box?"
     confirmLabel={eraseData ? 'Delete box and data' : 'Delete box'}
-    busy={deleting}
     onCancel={() => (confirmDelete = false)}
     onConfirm={deleteBox}
   >

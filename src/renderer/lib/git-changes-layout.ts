@@ -10,6 +10,12 @@
  * one grows into everything the short ones did not use, only falling back to a
  * scrollbar when every section is full and the column itself is the limit.
  *
+ * Whatever no section asked for then goes to the section that wants the most:
+ * a column with one short section must still look like a full column, and the
+ * section with the most content is the one where extra height buys the most. The
+ * heights therefore always add up to the column, and no section is ever left
+ * hugging its content in the middle of an empty panel.
+ *
  * The result is deterministic for a given set of natural heights, which is why it
  * lives here as a plain function: the view measures, this decides.
  */
@@ -19,8 +25,8 @@
  *
  * @param available The column's usable height, gaps and padding already removed.
  * @param natural The height each section would take if nothing limited it.
- * @returns One height per section, in the same order, summing to at most
- *   `available` and never exceeding the matching natural height.
+ * @returns One height per section, in the same order, summing to `available`
+ *   whenever the column has room at all.
  */
 export function waterFillHeights(available: number, natural: readonly number[]): number[] {
   const count = natural.length
@@ -38,6 +44,7 @@ export function waterFillHeights(available: number, natural: readonly number[]):
       // Everyone still open wants more than an equal share of what is left, so
       // an equal share is exactly what is fair.
       for (const index of open) heights[index] = fairShare
+      remaining = 0
       break
     }
     // The sections that fit take what they asked for and leave the dividers
@@ -49,6 +56,17 @@ export function waterFillHeights(available: number, natural: readonly number[]):
       remaining -= heights[index]
       open.splice(open.indexOf(index), 1)
     }
+  }
+
+  // Nothing asked for the rest, so it goes to the section with the most content:
+  // a lone short section should still fill its panel, not sit in the top corner
+  // of an empty one. Ties keep the earlier section, which is the one above.
+  if (remaining > 0) {
+    let largest = 0
+    for (let index = 1; index < count; index += 1) {
+      if ((natural[index] ?? 0) > (natural[largest] ?? 0)) largest = index
+    }
+    heights[largest] = (heights[largest] ?? 0) + remaining
   }
 
   return heights

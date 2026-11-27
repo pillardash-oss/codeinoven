@@ -37,9 +37,6 @@ import { type ComposerUsage } from '../ComposerShoe.svelte'
 import { uniqueThreadContextReferences, type ThreadContextReference } from '$lib/thread-context'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-import { type ExpertSummary } from '$shared/experts'
-import { mediaProviderLabel } from '$shared/media-generation'
-import { appConfigState } from '$lib/stores/app-config.svelte'
 import type {
   ThreadSettings,
   ThinkingLevel,
@@ -459,28 +456,6 @@ export class ChatComposerHandleDropData extends BoardUnit<ChatComposer> {
     }
     this.imageDescriptorGateOpen = false
     this.root.submit.performSend(this.gateDirect)
-  }
-
-  /**
-   * The provider and model an expert runs on, named from the composer's own
-   * catalog so a row reads as one of the models the user can see, not as an id.
-   */
-  expertModelLabel(expert: ExpertSummary): string {
-    // A media craft names a generation model rather than a harness model, and
-    // there is no catalog to resolve that against, so the provider's own name is
-    // the whole label.
-    if (expert.mediaModel) {
-      const providerId = appConfigState.mediaGeneration?.providerId
-      return `${providerId ? mediaProviderLabel(providerId) : 'Generation'} ${expert.mediaModel}`
-    }
-    const selection = expert.selection
-    if (!selection) return expert.label
-    const provider = this.resolvedProviders.find(
-      (candidate) =>
-        candidate.harnessId === selection.harnessId && candidate.id === selection.providerId
-    )
-    const model = provider?.models.find((candidate) => candidate.id === selection.modelId)
-    return `${provider?.name ?? selection.providerId} ${model?.name ?? selection.modelId}`
   }
 
   /**

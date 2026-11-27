@@ -124,6 +124,34 @@ export async function readForkOrigin(
 }
 
 /**
+ * The lineage clause a fork's reads use: the thread's ancestors and the boundary
+ * this thread was cut at. A fork can be cut at a message it inherited (fork a
+ * fork from a point in the grandparent), so the cut point is resolved through the
+ * chain rather than only in the thread's own rows.
+ */
+const FORK_LINEAGE_CTE = `WITH RECURSIVE lineage(thread_id, boundary_at) AS (
+  SELECT parent_thread_id, boundary_created_at FROM thread_checkpoints
+   WHERE thread_id = ? AND kind = 'fork' AND parent_thread_id IS NOT NULL
+  UNION
+  SELECT c.parent_thread_id,
+         CASE
+           WHEN l.boundary_at IS NULL THEN c.boundary_created_at
+           WHEN c.boundary_created_at IS NULL THEN l.boundary_at
+           ELSE min(l.boundary_at, c.boundary_created_at)
+         END
+    FROM thread_checkpoints c JOIN lineage l ON c.thread_id = l.thread_id
+   WHERE c.kind = 'fork' AND c.parent_thread_id IS NOT NULL
+)`
+
+/** Rows this thread shows: its own, plus its ancestors' up to the cut. */
+const FORK_VISIBLE_ROWS = `(m.thread_id = ?
+  OR EXISTS (
+    SELECT 1 FROM lineage l
+     WHERE l.thread_id = m.thread_id
+       AND (l.boundary_at IS NULL OR m.created_at <= l.boundary_at)
+  ))`
+
+/**
  * The one-line label a fork's lineage row carries: the thread it came from, named
  * so a reader of the checkpoint list never has to resolve an id to know it.
  */
@@ -166,13 +194,23 @@ export class ThreadForkService {
     // Resolve the fork point before creating a destination: an unknown or stale
     // boundary has to fail while no fork exists yet. Only the boundary's id and
     // timestamp are read; the parent's transcript itself is never touched.
-    const upper = await this.db.queryViaWorker(
-      `SELECT id, created_at FROM agent_messages WHERE thread_id = ?
-       AND session_id IS NULL ${messageId ? 'AND id = ?' : ''}
-       ORDER BY created_at DESC, id DESC LIMIT 1`,
-      messageId ? [threadId, messageId] : [threadId],
-      1
-    )
+    const upper = messageId
+      ? await this.db.queryViaWorker(
+          `${FORK_LINEAGE_CTE}
+           SELECT m.id, m.created_at FROM agent_messages m
+            WHERE m.id = ? AND m.session_id IS NULL AND ${FORK_VISIBLE_ROWS}
+            LIMIT 1`,
+          [threadId, messageId, threadId],
+          1
+        )
+      : await this.db.queryViaWorker(
+          `${FORK_LINEAGE_CTE}
+           SELECT m.id, m.created_at FROM agent_messages m
+            WHERE m.session_id IS NULL AND ${FORK_VISIBLE_ROWS}
+            ORDER BY m.created_at DESC, m.id DESC LIMIT 1`,
+          [threadId, threadId],
+          1
+        )
     if (!upper.ok) throw new Error(upper.error ?? 'Cannot read fork boundary')
     let cutoff = upper.rows[0]
     if (messageId && !cutoff) {

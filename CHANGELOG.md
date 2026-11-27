@@ -80,6 +80,36 @@ browser-session-cookies.ts`), plus upstream ANGLE, Skia and V8 backports and
 
 ### Fixed
 
+- **A working turn always shows the thinking orb, never the settled wrench.**
+  The trace header picked its icon from the live-session flag, so a turn the run
+  was demonstrably still feeding read as settled whenever that flag did not
+  agree with the busy state: a trace restored from the durable fold (or
+  re-mounted while the turn kept streaming) drew the wrench beside the composer's
+  "working" line and a step count that kept climbing. The orb now follows the
+  trace's own in-progress state, while a restored snapshot still keeps its clock
+  frozen. A run restored from a persisted busy snapshot also opens its trace the
+  moment live activity confirms it, instead of staying shut with no orb, no steps
+  and no way to tell it apart from a finished turn (`WorkingTrace.svelte`,
+  `WorkingTraceSummary.svelte`, `agent-runs.svelte.ts`).
+
+- **A thread opens at its tail, not at the first lines of the answer.** The open
+  restore anchored the viewport on the newest prompt, so on a settled turn with a
+  long answer the screen showed the _beginning_ of the final output with the rest
+  of it below the fold, and the reader scrolled to the end of the answer every
+  time they opened a thread. The restore now settles on the live bottom and stays
+  attached, so the end of the newest answer is on screen whatever its length and
+  the run's own cards and receipt stay under it where they already were
+  (`ThreadView-effects.svelte.ts`).
+- **A tool call the reader opens mid-run keeps its place on screen.** The
+  transcript follows the live tail while the reader is still at the bottom, and
+  it read the resize caused by the reader's own expansion as new work arriving
+  there: the card they had just expanded was scrolled past, then again for every
+  step the run appended after it. The trace now hands the viewport over on the
+  reader's gesture a tool call, a reasoning block, a chain of thought, the
+  trace body itself so the viewport stays where they left it until they scroll
+  back to the bottom, which re-attaches the tail through the ordinary scroll
+  contract (`WorkingTrace.svelte`, `WorkingTraceChain.svelte`,
+  `ThreadView-load-older-messages.svelte.ts`).
 - **A working trace keeps counting while its turn is still running, so a stuck
   run can no longer read as minutes of work.** The header measured the turn's
   mirrored rows: once the harness closed a message and went quiet between steps,

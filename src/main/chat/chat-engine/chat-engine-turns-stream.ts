@@ -8,7 +8,16 @@ import {
 import type { TurnStreamEvent } from '../turn-stream'
 import type { TurnStreamCacheEntry } from './chat-engine-types'
 import { deliverBroadcast, turnStreamPath } from './chat-engine-pure'
+
 import { ChatEngine } from '../chat-engine'
+/**
+ * How much parsed stream state the cache may hold across all threads.
+ *
+ * The count cap alone let sixteen threads each keep a full multi-megabyte log's
+ * events resident, which is how the main process grew by hundreds of megabytes
+ * over a session that was only reading threads.
+ */
+const TURN_STREAM_CACHE_BUDGET_BYTES = 64 * 1024 * 1024
 
 /** ChatEngine turns-stream: one concern, moved verbatim from the composition root. */
 export class ChatEngineTurnsStream {
@@ -28,12 +37,41 @@ export class ChatEngineTurnsStream {
     }
     this.host.state.turnStreamCache.delete(streamPath)
     this.host.state.turnStreamCache.set(streamPath, entry)
-    while (this.host.state.turnStreamCache.size > ChatEngine.TURN_STREAM_CACHE_LIMIT) {
-      const oldest = this.host.state.turnStreamCache.keys().next().value
-      if (oldest === undefined || oldest === streamPath) break
-      this.host.state.turnStreamCache.delete(oldest)
-    }
+    this.trimTurnStreamCache(streamPath)
     return entry
+  }
+
+  /**
+   * Trim the parse cache by what it actually holds, not by how many threads it
+   * holds.
+   *
+   * The cache was bounded by an entry count (sixteen) and nothing else, while one
+   * entry holds every parsed event of a log that reaches tens of megabytes.
+   * Parsed event objects cost several times their JSON, so sixteen busy threads
+   * could hold gigabytes — and the trace measured exactly that: the main process
+   * gaining four hundred megabytes over a session while nothing was running.
+   * `consumedBytes` is what was read from each log and is the honest weight of
+   * its entry, so the bound is a byte budget with the count kept as a floor.
+   */
+  private trimTurnStreamCache(keep: string): void {
+    const cache = this.host.state.turnStreamCache
+    let held = 0
+    for (const entry of cache.values()) held += entry.consumedBytes
+    if (cache.size <= ChatEngine.TURN_STREAM_CACHE_LIMIT && held <= TURN_STREAM_CACHE_BUDGET_BYTES)
+      return
+    // Least recently used first: the map is kept in access order above, and the
+    // entry the caller just asked for is never the one evicted.
+    for (const [path, entry] of [...cache]) {
+      if (path === keep) continue
+      if (cache.size <= 1) break
+      if (
+        cache.size <= ChatEngine.TURN_STREAM_CACHE_LIMIT &&
+        held <= TURN_STREAM_CACHE_BUDGET_BYTES
+      )
+        break
+      cache.delete(path)
+      held -= entry.consumedBytes
+    }
   }
 
   /** Read and fold a thread's whole durable turn stream, with activity times. */

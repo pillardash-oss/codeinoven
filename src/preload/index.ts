@@ -34,7 +34,17 @@ type MissingInvokeChannel = Exclude<InvokeChannel, (typeof INVOKE_CHANNELS)[numb
 const allInvokeChannelsRegistered: [MissingInvokeChannel] extends [never] ? true : never = true
 void allInvokeChannelsRegistered
 
-const SEND_CHANNELS = ['pty:resize', 'pty:write', 'pty:ack', 'terminal:focusState'] as const
+const SEND_CHANNELS = [
+  'pty:resize',
+  'pty:write',
+  'pty:ack',
+  'terminal:focusState',
+  // The performance trace's batch. A `send` because a measurement must never
+  // wait on an answer: the renderer has nothing to do with the reply, and
+  // blocking a click behind its own telemetry is the one thing measurement may
+  // never do.
+  'perf:records'
+] as const
 
 /* Every main-to-renderer event channel in the IPC contract is exposed here.
  * The list is derived from the contract itself, so an event and its
@@ -74,7 +84,55 @@ function assertEventChannel(channel: string): asserts channel is EventChannel {
   }
 }
 
+/**
+ * Blink's allocator statistics for this renderer, in bytes.
+ *
+ * The V8 heap is only part of what a window costs: DOM nodes, CSS, layout
+ * objects, strings and decoded images live in Blink's own allocators, which no
+ * heap snapshot reports. These four numbers are the other half.
+ */
+export interface BlinkMemoryInfo {
+  /** Raw malloc-ed bytes outside the partition allocator. */
+  malloc: number
+  /** Discardable memory: decoded bitmaps and other reclaimable surfaces. */
+  discardable: number
+  /** PartitionAlloc: DOM nodes, layout objects, strings, vectors. */
+  partitionAlloc: number
+  /** Blink's own garbage-collected heap. */
+  blinkGc: number
+}
+
+function readBlinkMemoryInfo(): BlinkMemoryInfo | null {
+  // Electron's runtime extends `process` with Blink's counters, which the DOM
+  // typings do not know about, so the access is narrowed through `unknown`.
+  const read = (process as unknown as { getBlinkMemoryInfo?: () => Record<string, unknown> })
+    .getBlinkMemoryInfo
+  if (typeof read !== 'function') return null
+  try {
+    const info = read.call(process) as Record<string, unknown>
+    const pick = (key: string): number => {
+      const value = info[key]
+      return typeof value === 'number' && Number.isFinite(value) ? value : 0
+    }
+    return {
+      malloc: pick('malloc'),
+      discardable: pick('discardable'),
+      partitionAlloc: pick('partition_alloc'),
+      blinkGc: pick('blink_gc')
+    }
+  } catch {
+    return null
+  }
+}
+
 export interface AppBridge {
+  /**
+   * This window's non-JS memory: DOM, layout, strings and decoded images.
+   *
+   * Null when the runtime will not report it, so a caller records nothing rather
+   * than recording zeroes as if the window were empty.
+   */
+  blinkMemory: () => BlinkMemoryInfo | null
   spellcheck: {
     suggestions: (word: string) => string[]
     isMisspelled: (word: string) => boolean
@@ -165,6 +223,7 @@ const bridge: AppBridge = {
       return result as InvokeResult<Channel>
     })
   },
+  blinkMemory: readBlinkMemoryInfo,
   send: (channel: SendChannel, ...args: unknown[]) => {
     assertSendChannel(channel)
     ipcRenderer.send(channel, ...args)
