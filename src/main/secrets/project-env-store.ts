@@ -48,7 +48,7 @@ export class ProjectEnvStore {
   async readProject(projectId: string): Promise<StoredProjectEnvFile[]> {
     const document = await this.storage.read<ProjectEnvDocument>(this.projectPath(projectId))
     if (!document || !Array.isArray(document.files)) return []
-    return document.files.flatMap((raw: unknown) => {
+    const parsed = document.files.flatMap((raw: unknown) => {
       if (typeof raw !== 'object' || raw === null) return []
       const file = raw as Record<string, unknown>
       if (typeof file['group'] !== 'string') return []
@@ -75,6 +75,7 @@ export class ProjectEnvStore {
         }
       ]
     })
+    return mergeSamePathFiles(parsed)
   }
 
   async writeProject(projectId: string, files: readonly StoredProjectEnvFile[]): Promise<void> {
@@ -124,6 +125,33 @@ function sanitizeEntry(entry: unknown): StoredProjectEnvEntry[] {
       ...(record['disabled'] === true ? { disabled: true } : {})
     }
   ]
+}
+
+/**
+ * Fold two manifests that stand for the same path into one.
+ *
+ * An older build could write `.env` and `.ENV` as two manifests while the
+ * filesystem holds one file, so a manifest read back is keyed by its lowercased
+ * name and the entries of the later record win over the earlier one.
+ */
+function mergeSamePathFiles(files: readonly StoredProjectEnvFile[]): StoredProjectEnvFile[] {
+  const merged = new Map<string, StoredProjectEnvFile>()
+  for (const file of files) {
+    const key = `${file.group}\u0000${file.fileName.toLowerCase()}`
+    const kept = merged.get(key)
+    if (!kept) {
+      merged.set(key, { ...file, entries: [...file.entries] })
+      continue
+    }
+    const entries = new Map(kept.entries.map((entry) => [entry.name, entry]))
+    for (const entry of file.entries) entries.set(entry.name, entry)
+    merged.set(key, {
+      ...kept,
+      updatedAt: Math.max(kept.updatedAt, file.updatedAt),
+      entries: [...entries.values()]
+    })
+  }
+  return [...merged.values()]
 }
 
 function assertId(id: string, label: string): string {

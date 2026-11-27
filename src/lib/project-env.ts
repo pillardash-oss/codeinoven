@@ -57,6 +57,55 @@ export function validateEnvFileName(name: string): string {
 }
 
 /**
+ * The names a new file may take, in the order they are offered.
+ *
+ * Each one is a name people already run with, so a second file is never a name
+ * typed from scratch: `.env` is where everything starts, and the rest layer on it.
+ */
+export const SUGGESTED_ENV_FILE_NAMES: readonly string[] = [
+  DEFAULT_ENV_FILE_NAME,
+  '.env.local',
+  '.env.development',
+  '.env.production',
+  '.env.test'
+]
+
+/**
+ * True when two file names would land on the same path.
+ *
+ * The managed file is written into the project, and a filesystem that ignores
+ * case (macOS, Windows) cannot hold `.env` and `.ENV` as two files, so two
+ * manifests must never carry names that only differ in case.
+ */
+export function sameEnvFileName(left: string, right: string): boolean {
+  return left.toLowerCase() === right.toLowerCase()
+}
+
+/** True when `name` is already one of the names taken in a directory group. */
+export function isEnvFileNameTaken(taken: readonly string[], name: string): boolean {
+  const wanted = name.trim()
+  return taken.some((candidate) => sameEnvFileName(candidate, wanted))
+}
+
+/**
+ * The first name a group does not already use.
+ *
+ * A dialog starts here, so pressing Create twice never targets a file that is
+ * already there: `.env` when the path is empty, then `.env.local`, then the rest
+ * of the suggested names, then `.env.2`, `.env.3` and so on.
+ */
+export function suggestEnvFileName(taken: readonly string[]): string {
+  for (const candidate of SUGGESTED_ENV_FILE_NAMES) {
+    if (!isEnvFileNameTaken(taken, candidate)) return candidate
+  }
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${DEFAULT_ENV_FILE_NAME}.${index}`
+    if (!isEnvFileNameTaken(taken, candidate)) return candidate
+  }
+  throw new Error('This directory already holds too many env files')
+}
+
+/**
  * Order two files of one group, earliest applied first.
  *
  * `.env` is the base every other name layers on top of, and the rest follow by

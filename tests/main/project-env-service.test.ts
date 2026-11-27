@@ -595,3 +595,72 @@ describe('ProjectEnvService turned-off keys', () => {
     expect(applied.preview.rewritten).toMatch(/^#cio-cmt PORT=cio:\/\/secret_/mu)
   })
 })
+
+describe('ProjectEnvService creating a file', () => {
+  it('refuses a second file at a path that already has one', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+
+    await expect(
+      service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    ).rejects.toThrow(/already has \.env/u)
+
+    const files = await service.listProjectEnv(PROJECT_ID)
+    expect(files.map((file) => file.fileName)).toEqual(['.env'])
+  })
+
+  it('names the next free file in the refusal instead of colliding', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env.local' })
+
+    await expect(
+      service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env.local' })
+    ).rejects.toThrow(/use \.env\.development/u)
+  })
+
+  it('treats a name that differs only in case as the same file on disk', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+
+    await expect(
+      service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.ENV' })
+    ).rejects.toThrow(/already has \.ENV/u)
+
+    // A body typed into the differently-cased name lands in the one file, not a second one.
+    await service.applyEnvText({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.ENV',
+      text: 'PORT=3000\n'
+    })
+
+    const files = await service.listProjectEnv(PROJECT_ID)
+    expect(files).toHaveLength(1)
+    expect(files[0]).toMatchObject({ fileName: '.env' })
+    expect(files[0]?.entries.map((entry) => entry.name)).toEqual(['PORT'])
+  })
+
+  it('reads a manifest that named one path twice as a single file', async () => {
+    await storage.write('project-env/proj-1.json', {
+      version: 1,
+      projectId: PROJECT_ID,
+      files: [
+        {
+          group: '',
+          fileName: '.env',
+          updatedAt: 1,
+          entries: [{ name: 'PORT', secretRef: 'secret_1', updatedAt: 1 }]
+        },
+        {
+          group: '',
+          fileName: '.ENV',
+          updatedAt: 2,
+          entries: [{ name: 'API_URL', secretRef: 'secret_2', updatedAt: 2 }]
+        }
+      ]
+    })
+
+    const files = await service.listProjectEnv(PROJECT_ID)
+    expect(files).toHaveLength(1)
+    expect(files[0]?.fileName).toBe('.env')
+    expect(files[0]?.entries.map((entry) => entry.name)).toEqual(['API_URL', 'PORT'])
+  })
+})

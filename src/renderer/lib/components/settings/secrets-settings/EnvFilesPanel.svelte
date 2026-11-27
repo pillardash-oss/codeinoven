@@ -9,6 +9,7 @@
   import { formatDateTimeCompact } from '$shared/date-time-format'
   import {
     DEFAULT_ENV_FILE_NAME,
+    suggestEnvFileName,
     type ProjectEnvFile,
     type ProjectEnvImportPreview,
     type ProjectEnvLaunchPreview
@@ -319,8 +320,13 @@
         disabled={!projectId || busy}
         title="Create an env file for this project"
         onclick={() => {
+          // The dialog offers the first free name, so a second file can never be
+          // created over one that is already there.
           newGroup = selectedGroup
-          newFileName = DEFAULT_ENV_FILE_NAME
+          newFileName = suggestEnvFileName(
+            files.filter((file) => file.group === selectedGroup).map((file) => file.fileName)
+          )
+          error = ''
           createFileOpen = true
         }}
       >
@@ -601,7 +607,9 @@
   <CreateEnvFileDialog
     bind:group={newGroup}
     bind:name={newFileName}
+    existing={files}
     {busy}
+    {error}
     onCreate={createFile}
     onClose={() => (createFileOpen = false)}
   />
