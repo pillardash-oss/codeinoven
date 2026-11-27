@@ -199,3 +199,26 @@ export async function composeMarkAttachments(input: {
   }
   return attachments
 }
+
+/**
+ * The filenames the annotated pictures for these marks carry.
+ *
+ * A send composes them at send time, so a message's own parts already hold the
+ * copies an earlier send produced. A resend (an edited message) drops those and
+ * lets the send draw them again from the references, instead of delivering the
+ * same picture twice and the marks' text without their picture.
+ */
+export function markAttachmentFilenames(references: readonly ResponseReferenceAnchor[]): string[] {
+  const filenames: string[] = []
+  for (const group of groupMarks(references)) {
+    try {
+      filenames.push(
+        annotatedFilename(posixBasename(pathForUrl(group.url)) || 'image', group.seconds)
+      )
+    } catch {
+      // A media URL this app cannot name is one the send will not compose
+      // either, so it names no file to drop.
+    }
+  }
+  return filenames
+}

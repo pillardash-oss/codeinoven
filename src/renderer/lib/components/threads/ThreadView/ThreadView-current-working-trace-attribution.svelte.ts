@@ -35,6 +35,9 @@ import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { modelKey } from '$lib/model-keys'
 import { catalogModelEntry, providerModel, resolveModelProvider } from '$shared/provider-identity'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
+import type { ResponseReferenceAnchor } from '$lib/stores/response-references.svelte'
+import { markAttachmentFilenames } from '$lib/annotation-composite'
+import { referencePromptContext } from '$lib/reference-prompt-context'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { toast } from 'svelte-sonner'
 import { reportError } from '$lib/stores/app-errors.svelte'
@@ -726,12 +729,32 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
 
   editingMessageProjectReferences = $state<PromptProjectReference[]>([])
 
+  /**
+   * The references the edited message carried (a quoted response excerpt, a
+   * picked design element, an annotated document passage, a note on a video
+   * moment, a numbered mark on a picture).
+   *
+   * Editing replaces the turn the message started, so the edited message is
+   * resent as the same request: its references and their comments travel with
+   * it, exactly as they did the first time, instead of being dropped by the new
+   * turn.
+   */
+  editingMessageReferences = $state<ResponseReferenceAnchor[]>([])
+
   /** Edit a user message in place   the bubble itself becomes editable. */
   editMessage(msg: AgentMessage): void {
     this.editingMessageId = msg.id
     this.editingText = messageText(msg)
+    const references = msg.references ?? []
+    this.editingMessageReferences = references
+    // A mark's picture is composed at send time, so the copy this message's own
+    // parts already hold is stale evidence: the resend draws it again from the
+    // references. Keeping it would deliver the same picture twice and its marks
+    // without the picture they were drawn on.
+    const regenerated = new SvelteSet(markAttachmentFilenames(references))
     this.editingMessageAttachments = msg.parts
       .filter((p): p is Extract<AgentPart, { type: 'file' }> => p.type === 'file')
+      .filter((p) => p.filename === undefined || !regenerated.has(p.filename))
       .map((p) => ({ mime: p.mime, url: p.url, filename: p.filename }))
     this.editingMessageProjectReferences = msg.projectReferences ?? []
     void tick().then(() => {
@@ -744,6 +767,7 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
     this.editingText = ''
     this.editingMessageAttachments = []
     this.editingMessageProjectReferences = []
+    this.editingMessageReferences = []
   }
 
   /**
@@ -768,6 +792,11 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
     const conversationId = this.root.props.controller?.conversationId ?? threadId
     const attachments = this.editingMessageAttachments
     const projectReferences = this.editingMessageProjectReferences
+    // The references the message already carried are part of the request, not
+    // decoration on the bubble: a resend that dropped them asked the agent a
+    // different question, without the passages, comments and marks it had.
+    const promptReferences = this.editingMessageReferences
+    const promptContext = referencePromptContext(promptReferences)
     const controller = this.root.props.controller
     this.root.handleAgentEvent.errorMessage = ''
     // Leave edit mode with the new words already in the message: the bubble
@@ -777,13 +806,15 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
     this.editingText = ''
     this.editingMessageAttachments = []
     this.editingMessageProjectReferences = []
+    this.editingMessageReferences = []
     threadMessages.beginEdit(
       projectId,
       conversationId,
       msg.id,
       text,
       attachments,
-      projectReferences
+      projectReferences,
+      promptReferences
     )
     // The turn is running from this instant: the working state, its clock and
     // the tail follow are all armed synchronously, before the truncation and
@@ -795,6 +826,25 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
     // following the turn it starts.
     this.root.loadOlderMessages.scrollToLatest()
     speechController.observeSent(`message-edit-${threadId}-${msg.id}`, text)
+    // A controller-driven conversation (a side chat) keeps its references on the
+    // conversation and sends those, so the edited message's references are
+    // re-attached there before the resend reads them. Their comments ride along
+    // for the same reason they exist: the comment is the part the agent has to
+    // answer.
+    if (controller?.addSelection) {
+      controller.clearReferences?.()
+      for (const reference of promptReferences) {
+        const referenceId = controller.addSelection({
+          text: reference.text,
+          ...(reference.messageId === undefined ? {} : { messageId: reference.messageId }),
+          ...(reference.startOffset === undefined ? {} : { startOffset: reference.startOffset }),
+          ...(reference.endOffset === undefined ? {} : { endOffset: reference.endOffset })
+        })
+        if (referenceId && reference.comment) {
+          controller.updateReferenceComment?.(referenceId, reference.comment)
+        }
+      }
+    }
     try {
       if (controller?.truncateBefore) {
         // Controller-driven conversations (temporary chats) truncate against
@@ -825,8 +875,8 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
       attachments,
       undefined,
       true,
-      undefined,
-      [],
+      promptContext,
+      promptReferences,
       projectReferences,
       undefined,
       [],

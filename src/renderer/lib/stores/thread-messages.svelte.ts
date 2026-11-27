@@ -752,7 +752,8 @@ class ThreadMessagesStore {
     messageId: string,
     text: string,
     attachments: PromptAttachment[],
-    projectReferences: PromptProjectReference[]
+    projectReferences: PromptProjectReference[],
+    promptReferences: PromptReference[] = []
   ): AgentMessage | null {
     this.#editedMessageIds.add(messageId)
     return this.cache.applyEdit(projectId, threadId, messageId, (message) => {
@@ -760,6 +761,7 @@ class ThreadMessagesStore {
         id: message.id,
         text,
         attachments,
+        promptReferences,
         projectReferences,
         presentation: userMessagePresentation(message),
         createdAt: message.createdAt
@@ -769,8 +771,7 @@ class ThreadMessagesStore {
       return {
         ...edited,
         origin: message.origin,
-        visibility: message.visibility,
-        ...(message.references ? { references: message.references } : {})
+        visibility: message.visibility
       }
     })
   }
