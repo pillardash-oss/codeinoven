@@ -73,7 +73,15 @@ describe('the read pool', () => {
       getReadWorker: () => readers[next++ % readers.length]!.worker,
       getAsyncWorker: () => null,
       all: () => [],
-      syncProviderDeltas: () => ({ applied: 0, inserted: 0, replaced: 0 })
+      syncProviderDeltas: () => ({
+        applied: 0,
+        skipped: 0,
+        collisions: 0,
+        duplicatedPrompts: 0,
+        total: 0,
+        cursor: null,
+        noop: true
+      })
     }
     const queries = new DatabaseQueries(host)
 
