@@ -80,6 +80,18 @@ browser-session-cookies.ts`), plus upstream ANGLE, Skia and V8 backports and
 
 ### Fixed
 
+- **A working turn always shows the thinking orb, never the settled wrench.**
+  The trace header picked its icon from the live-session flag, so a turn the run
+  was demonstrably still feeding read as settled whenever that flag did not
+  agree with the busy state: a trace restored from the durable fold (or
+  re-mounted while the turn kept streaming) drew the wrench beside the composer's
+  "working" line and a step count that kept climbing. The orb now follows the
+  trace's own in-progress state, while a restored snapshot still keeps its clock
+  frozen. A run restored from a persisted busy snapshot also opens its trace the
+  moment live activity confirms it, instead of staying shut with no orb, no steps
+  and no way to tell it apart from a finished turn (`WorkingTrace.svelte`,
+  `WorkingTraceSummary.svelte`, `agent-runs.svelte.ts`).
+
 - **A thread opens at its tail, not at the first lines of the answer.** The open
   restore anchored the viewport on the newest prompt, so on a settled turn with a
   long answer the screen showed the _beginning_ of the final output with the rest

@@ -12,9 +12,11 @@
   interface Props {
     /** True while the trace's entries are mounted. */
     open: boolean
-    /** True only while a live session is streaming this trace, so the header
-     *  keeps the thinking orb for as long as work is actually happening, folded
-     *  or not. A finished or restored trace shows the cog. */
+    /** True while the turn this trace belongs to is still in progress, so the
+     *  header keeps the thinking orb for as long as work is actually happening,
+     *  folded or not. Only a settled trace shows the cog   a run the app is still
+     *  feeding reads as working even when its clock is pinned to a restored
+     *  snapshot. */
     live: boolean
     /** Number of thinking and tool steps this trace holds. */
     count: number

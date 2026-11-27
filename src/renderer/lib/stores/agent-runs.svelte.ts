@@ -302,6 +302,14 @@ class AgentRunsStore {
     // folded, which is exactly the state this keeps.
     if (busy && (!wasBusy || isNewTurn)) {
       if (openTrace && !entry.traceUserFolded) entry.traceOpen = true
+    } else if (busy && live && !previousLive) {
+      // A run restored from a persisted snapshot starts folded, because nothing
+      // confirmed it yet. The first live activity is that confirmation: the turn
+      // is demonstrably being worked on now, so its trace opens like any other
+      // running turn's would, unless the reader folded it themselves. Leaving it
+      // shut is what kept a running turn showing only its closed header: no orb,
+      // no steps, and no way to tell it apart from a finished trace.
+      if (openTrace && !entry.traceUserFolded) entry.traceOpen = true
     } else if (!busy) {
       this.foldSettledTrace(entry)
     }

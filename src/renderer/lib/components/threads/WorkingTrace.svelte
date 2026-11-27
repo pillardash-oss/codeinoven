@@ -515,6 +515,19 @@
     workingTraceStartTime(visibleParts, startTime ?? traceSpan?.start)
   )
 
+  /**
+   * True while the turn this trace belongs to is still in progress.
+   *
+   * This is the trace's own claim about the work, and the header's orb reads it:
+   * a trace the run is still feeding is not settled, whatever its clock is doing.
+   * It used to read the live-session flag instead, so a trace restored from the
+   * durable fold (the run is busy but the live session has not confirmed it yet,
+   * or the trace was re-mounted while the turn kept running) showed the settled
+   * wrench beside the composer's "working" line and a step count that kept
+   * climbing. An orb next to work is never a lie; a wrench next to it is.
+   */
+  const traceInProgress = $derived(busy)
+
   /** True only while a live session is streaming this trace. A restored trace
    *  (busy with the saved-activity note) is historical: its durations are
    *  frozen snapshots, never live wall-clock counts. */
@@ -764,7 +777,7 @@
   >
     <WorkingTraceSummary
       open={isOpen}
-      live={liveActivity}
+      live={traceInProgress}
       count={stepCount}
       durationSeconds={totalDurationSeconds}
       {hasCompaction}
