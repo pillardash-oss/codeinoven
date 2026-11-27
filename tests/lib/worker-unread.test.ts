@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { coordinatorHasUnreadWorkers, threadTracksReadStatus, type Thread } from '$shared/types'
-import { settledThreadReadsUnread } from '$shared/thread-status-policy'
 
 function thread(overrides: Partial<Thread> = {}): Thread {
   return {
@@ -34,25 +33,41 @@ function worker(overrides: Partial<Thread> = {}): Thread {
   })
 }
 
+/** A worker the user works with directly: it hands nothing back. */
+const directWorker = worker({
+  settings: {
+    harnessId: 'pi',
+    providerId: 'p',
+    modelId: 'm',
+    thinkingLevel: 'medium',
+    permissionLevel: 'auto_review',
+    reportToCoordinator: false
+  }
+})
+
 describe('orchestration children and read state', () => {
-  it('never track a read state, reporting or not', () => {
-    expect(threadTracksReadStatus(thread())).toBe(true)
+  it('never lets a reporting worker carry a read state', () => {
     expect(threadTracksReadStatus(worker())).toBe(false)
+  })
+
+  it('lets the worker the user works with directly carry one', () => {
+    expect(threadTracksReadStatus(directWorker)).toBe(true)
+  })
+
+  it('keeps auditors and pawns silent', () => {
     expect(threadTracksReadStatus(thread({ achievementRole: 'auditor' }))).toBe(false)
     expect(threadTracksReadStatus(thread({ assignmentId: 'assignment-1' }))).toBe(false)
+    expect(threadTracksReadStatus(thread())).toBe(true)
   })
 
-  it('keep a finished worker out of the unread rule', () => {
-    // A worker settles its run like any thread, but the Assignment already
-    // carries that news: the row must never read as unread.
-    expect(settledThreadReadsUnread(worker(), false)).toBe(true) // the status rule
-    expect(threadTracksReadStatus(worker())).toBe(false) // but the child gate refuses it
+  it('puts a direct worker unread on the Sr. Engineer row, not just the rail', () => {
+    // The coordinator row is read in its own right, but the worker the user
+    // works with directly holds it open: the row wears the dot and the rail
+    // counts it.
+    expect(coordinatorHasUnreadWorkers(coordinator, [coordinator, directWorker])).toBe(true)
   })
 
-  it('never hold the coordinator row open, so no unread dot and no rail mark', () => {
+  it('never holds the coordinator open for a reporting worker', () => {
     expect(coordinatorHasUnreadWorkers(coordinator, [coordinator, worker()])).toBe(false)
-    // A regular thread with an unread child is still counted: only children that
-    // track read state can ever hold a done.
-    expect(coordinatorHasUnreadWorkers(thread({ id: 'coordinator-1' }), [worker()])).toBe(false)
   })
 })
