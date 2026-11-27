@@ -20,6 +20,7 @@ import { relativeTimeClock } from '$lib/relative-time.svelte'
 import { preloadThreadConversation } from './thread-preload'
 import { threadMessages } from './thread-messages.svelte'
 import { perfMarkNextPaint, perfSpan } from '$lib/perf-trace'
+import { settleSelectedThreadRead } from './selected-thread-read'
 import { scopeState } from './scope.svelte'
 import { invoke } from '$lib/ipc.svelte'
 import { prewarmThreadOven } from '$lib/ovens/oven-prewarm'
@@ -432,6 +433,21 @@ class WorkspaceState {
       if (!thread.settings?.ovenId || thread.settings.ovenId === 'local')
         contextSidebarState.close(`oven:${thread.projectId}:${thread.id}`)
     }
+  }
+
+  /**
+   * Settle the open thread's read flag without republishing its row.
+   *
+   * Opening a thread settles its unread badge a moment after the click, and that
+   * write used to go through {@link updateThread}: the same thread, but a new
+   * object, which every derivation reading the open thread treated as a
+   * different thread. Rebuilding the conversation around that new identity was a
+   * third of a second of blocking script landing between the click and the first
+   * frame   for a field the conversation does not even draw. See
+   * `settleSelectedThreadRead` for the rule itself.
+   */
+  settleSelectedThreadRead(threadId: string, read: boolean): void {
+    settleSelectedThreadRead(this.selectedThread, threadId, read)
   }
 
   /**

@@ -124,6 +124,16 @@ export interface Props {
    * the page it belongs to and into the panel that opened beside it.
    */
   ownsReadingColumn?: boolean
+  /**
+   * Called once this thread's transcript is built and in the DOM.
+   *
+   * The shell of a thread (its header and composer) paints before the
+   * transcript, and a surface that is standing in for this view with a frozen
+   * picture of the last visit lifts that picture on this signal. Without it the
+   * picture has nothing to wait for, so it would either cover real content or
+   * uncover a placeholder that is still building.
+   */
+  onTranscriptReady?: () => void
 }
 
 /** One file part of a message the fullscreen preview can render, and whether

@@ -1,6 +1,7 @@
 <script lang="ts">
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { SvelteMap } from 'svelte/reactivity'
+  import type { Attachment } from 'svelte/attachments'
   import type { ComposerShoeData } from '../chats/ComposerShoe.svelte'
   // The pickers and annotators below are reached by a gesture and are imported
   // where they are rendered. The five dialogs that take an `open` prop instead
@@ -37,9 +38,11 @@
   import { createThreadView } from './ThreadView/ThreadView-board.svelte'
   import type { Props } from './ThreadView/ThreadView-types'
   import ThreadViewConversation from './ThreadView/ThreadViewConversation.svelte'
+  import ConversationSkeleton from './ThreadView/ConversationSkeleton.svelte'
   import ThreadViewComposer from './ThreadView/ThreadViewComposer.svelte'
   import ThreadParentLink from './ThreadParentLink.svelte'
   import { permissionLevelActions } from '$lib/actions'
+  import { perfSpan } from '$lib/perf-trace'
   import { isRemoteOvenId } from '$shared/ovens'
 
   let {
@@ -67,7 +70,8 @@
     composerPlaceholder,
     onOpenScopeView,
     active = true,
-    ownsReadingColumn = false
+    ownsReadingColumn = false,
+    onTranscriptReady
   }: Props = $props()
   const board = createThreadView(() => ({
     thread: threadProp,
@@ -97,6 +101,91 @@
     ownsReadingColumn
   }))
   board.submitBrainstormDecision.setReconcileReadySpec(() => reconcileReadySpecNow())
+
+  /**
+   * The thread whose transcript is allowed to build, once the shell has painted.
+   *
+   * The transcript is the expensive half of showing a thread: every message,
+   * trace row, diff and image of the read window is built in one pass, and doing
+   * that inside the click's own task held the pane's first frame behind it. That
+   * is what made opening a cold thread show nothing for about a second   the
+   * work was correct, it simply ran before the screen could change.
+   *
+   * So the shell paints first and the transcript hydrates in the task after that
+   * paint. A skeleton stands in for it inside the conversation's own container,
+   * so the column's width, gutters and bottom anchoring are the ones the
+   * messages will use and nothing moves when they replace it.
+   */
+  let hydratedThreadId = $state.raw<string | null>(null)
+  let conversationHydrated = $derived(hydratedThreadId === board.handleAgentEvent.thread.id)
+
+  // The two halves of showing a thread, timed apart.
+  //
+  // "Opening a thread takes a second" was never one number: the shell (header,
+  // composer, and the conversation's own empty container) has to be built before
+  // anything can be painted, and the transcript is built in the task after that
+  // paint. Measured as one span, a shell that paints in forty milliseconds and a
+  // transcript that takes three hundred read as the same slow click, and there
+  // is no way to tell which half to work on.
+  const threadIdForTrace = board.handleAgentEvent.thread.id
+  const shellSpan = perfSpan('thread.shell', { threadId: threadIdForTrace })
+
+  /**
+   * How long the shell may go unpainted before the transcript is built anyway.
+   *
+   * Two frames is the whole wait in a window the reader can see. A covered
+   * window never runs a frame callback, and its threshold is what keeps an open
+   * there from stalling on a placeholder; nothing is being painted, so there is
+   * no first frame to protect.
+   */
+  const HIDDEN_HYDRATE_FLOOR_MS = 150
+
+  /** Mount the transcript in the first task after the shell has had its frame. */
+  function hydrateConversationAfterPaint(threadId: string): Attachment<HTMLElement> {
+    return () => {
+      shellSpan.end()
+      let settle: ReturnType<typeof setTimeout> | undefined
+      let floor = 0
+      let frame = 0
+      let done = false
+      const hydrate = (): void => {
+        if (done) return
+        done = true
+        clearTimeout(floor)
+        const transcriptSpan = perfSpan('thread.transcript', { threadId })
+        hydratedThreadId = threadId
+        // The transcript is built in the flush this assignment queues, so its
+        // own task is the first moment the work is done and measurable.
+        setTimeout(() => {
+          transcriptSpan.end()
+          onTranscriptReady?.()
+        }, 0)
+      }
+      // The shell's own frame comes first, then the build: two frame callbacks
+      // are the browser's statement that the shell has been presented, and the
+      // timer behind them runs after it. A frame callback alone would put the
+      // build into a frame that has not painted yet.
+      if (typeof requestAnimationFrame === 'function') {
+        frame = requestAnimationFrame(() => {
+          frame = requestAnimationFrame(() => {
+            settle = setTimeout(hydrate, 0)
+          })
+        })
+      }
+      // Never depend on frames for correctness. A window that is hidden or
+      // covered runs no frame callbacks at all, so a thread opened there (a
+      // restore, a notification, another window's hand-off) would sit on a
+      // placeholder for as long as it stays covered. This is the floor: whichever
+      // arrives first wins, and there is no paint to protect when it fires.
+      floor = window.setTimeout(hydrate, HIDDEN_HYDRATE_FLOOR_MS)
+      return () => {
+        done = true
+        if (frame !== 0) cancelAnimationFrame(frame)
+        clearTimeout(settle)
+        clearTimeout(floor)
+      }
+    }
+  }
   let composerShoe = $derived.by((): ComposerShoeData => {
     const isNewThread = board.loadOlderMessages.messages.length === 0 && !board.switchProject.busy
     const identity = board.contextUsage.composerIdentity(board.handleAgentEvent.thread, isNewThread)
@@ -1314,7 +1403,25 @@
       parentThreadId={board.currentWorkingTraceAttribution.coordinatorParentId ??
         board.handleAgentEvent.thread.dispatchOrigin?.initiatorThreadId}
     />
-    <ThreadViewConversation {board} />
+    {#if conversationHydrated}
+      <ThreadViewConversation {board} />
+    {:else}
+      <!-- The shell's stand-in, inside the scroller the transcript will use. -->
+      <div
+        class="conversation-scroll conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-20 {board
+          .composerScope.centeredComposer
+          ? 'hidden'
+          : ''}"
+        aria-hidden="true"
+        {@attach hydrateConversationAfterPaint(board.handleAgentEvent.thread.id)}
+      >
+        <div
+          class="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6"
+        >
+          <ConversationSkeleton />
+        </div>
+      </div>
+    {/if}
 
     <!-- Bottom-anchored chrome. Everything pinned between the conversation and
          the window edge lives here so the scroll-to-latest button can float at

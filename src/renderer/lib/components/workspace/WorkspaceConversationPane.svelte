@@ -129,6 +129,36 @@
   /** No rise-in under a cached screen: the screen is already where it belongs. */
   const NO_REVEAL = { duration: 0 }
 
+  /** Longest a frozen screen waits for the live transcript before it steps
+   *  aside. The signal arrives one task after the transcript is built, so this
+   *  only ever covers a view that failed to report at all. */
+  const LIFT_FALLBACK_MS = 1200
+
+  /**
+   * The screen standing in for the live view, waiting to be uncovered.
+   *
+   * A frozen screen is lifted only once the live transcript is built, so the
+   * switch from picture to live view happens between two frames that both show
+   * the conversation: never a placeholder in between, and never a picture over
+   * content that is already there. `LIFT_FALLBACK_MS` bounds the wait, so a view
+   * that fails to report cannot leave the picture on screen for good.
+   */
+  let coverAwaitingLift = $state.raw<ThreadScreenSnapshot | null>(null)
+  let liftFallback = 0
+
+  function liftCoverWhenReady(snapshot: ThreadScreenSnapshot): void {
+    if (coverAwaitingLift !== snapshot) return
+    coverLiftedFrom = snapshot
+    coverAwaitingLift = null
+    clearTimeout(liftFallback)
+  }
+
+  /** The live transcript is on the page: the picture may step aside. */
+  function onLiveTranscriptReady(): void {
+    const awaiting = coverAwaitingLift
+    if (awaiting !== null) liftCoverWhenReady(awaiting)
+  }
+
   /** Paint a cached screen, mount the live view after that paint, then lift it. */
   function paintCachedScreen(cached: ThreadScreenSnapshot): Attachment<HTMLElement> {
     return (host) => {
@@ -136,17 +166,22 @@
       let frame = requestAnimationFrame(() => {
         settle = setTimeout(() => {
           liveMountedOver = cached
-          frame = requestAnimationFrame(() => {
-            frame = requestAnimationFrame(() => {
-              coverLiftedFrom = cached
-            })
-          })
+          coverAwaitingLift = cached
+          clearTimeout(liftFallback)
+          liftFallback = window.setTimeout(() => {
+            // Only ever uncover a view that actually mounted: if the live view
+            // never arrived (a covered window runs no frames), the picture is
+            // still better than an empty pane.
+            if (liveMountedOver === cached) liftCoverWhenReady(cached)
+          }, LIFT_FALLBACK_MS)
         }, 0)
       })
       let settle: ReturnType<typeof setTimeout> | undefined
       return () => {
         cancelAnimationFrame(frame)
         clearTimeout(settle)
+        clearTimeout(liftFallback)
+        coverAwaitingLift = null
       }
     }
   }
@@ -214,6 +249,7 @@
               thread={selectedThread}
               {active}
               ownsReadingColumn
+              onTranscriptReady={onLiveTranscriptReady}
               chatMode={mode === 'chats' || mode === 'assistant'}
               assistantMode={mode === 'assistant'}
               {assistantId}

@@ -619,9 +619,11 @@ export class WorkspaceMarkThreadReadAndApply extends BoardUnit<Workspace> {
   applyThreadRead(thread: Thread): void {
     this.root.createThreadInProject.upsertThreadInList(thread)
     scopeState.updateThread(thread)
-    if (workspaceState.selectedThread?.id === thread.id) {
-      workspaceState.updateThread(thread)
-    }
+    // The open thread's row is not replaced here on purpose: only its read flag
+    // moved, and handing the conversation a new thread object to re-derive
+    // around costs a blocking frame right after the click that opened it. See
+    // `settleSelectedThreadRead`.
+    workspaceState.settleSelectedThreadRead(thread.id, thread.read)
   }
 
   /** Mark a thread read through the backend and apply the confirmed snapshot.

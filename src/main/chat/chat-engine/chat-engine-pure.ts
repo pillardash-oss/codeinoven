@@ -119,6 +119,22 @@ export function inactiveQuestionDecision(
   }
 }
 
+/**
+ * Where a resumed or retried audit reads the work it already did.
+ *
+ * The auditor's own thread is mirrored like any other: every tool call it made,
+ * its argument, status and result preview, is in the app database under the
+ * auditor's thread id. A resumed session may hold no history (a harness switch
+ * or a rebuilt transcript), so the prompt names the id and the query instead of
+ * leaving the agent to redo checks it already ran.
+ */
+export function auditEvidencePointer(threadId: string): string {
+  return [
+    `Everything this audit already inspected is still in the app database under this auditor's thread id, ${threadId}.`,
+    `Read it instead of redoing the work: cio_util_diagnose with action read_messages and thread_id "${threadId}" returns this auditor's conversation, newest page first, with the tool calls each turn made. Pass a page's nextBeforeId as before_id to walk older pages back to the beginning.`
+  ].join(' ')
+}
+
 export function auditCorrectionPrompt(error: Error | null): string {
   const issues = error instanceof AuditReportValidationError ? error.issues : []
   const evidenceGaps = issues.filter(

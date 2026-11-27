@@ -32,6 +32,7 @@ import {
   assignmentAuditErrorsUnchanged,
   assignmentAuditRepairPrompt,
   auditCorrectionPrompt,
+  auditEvidencePointer,
   auditRequiresRework,
   latestAssignmentAuditOutput,
   validateAssignmentAuditExecutionEvidence
@@ -163,12 +164,15 @@ export class ChatEngineAuditRun {
     let continuationRetries = 0
 
     /** Continuation prompt for a run that stopped partway: the auditor keeps
-     *  its prior session context, so it resumes rather than restarting. */
+     *  its prior session context, so it resumes rather than restarting. The
+     *  evidence pointer is what makes that true when the session holds no
+     *  history, because its checks live in the mirror under its thread id. */
     const resumePrompt = (failure: string): string =>
       [
         'Your previous independent audit run stopped partway with an error, and no report was delivered.',
         `Previous failure: ${failure}`,
         'Your session still contains the work from that run; continue the audit from where you left off instead of starting over. The transcript below is unchanged and remains the contract. Finish the remaining verification and return exactly one audit-report JSON object with no Markdown fences or commentary.',
+        auditEvidencePointer(auditorThread.id),
         '',
         'Thread transcript:',
         '',
@@ -587,6 +591,13 @@ export class ChatEngineAuditRun {
         ].join('\n')
       })
       .join('\n\n')
+    // A retry continues a cycle that was already running, or one that failed:
+    // either way the checks already run are in the auditor's own mirror.
+    const resumingAudit = assignment.auditCycle?.status === 'running'
+    const continuingAudit =
+      resumingAudit ||
+      assignment.auditCycle?.status === 'failed' ||
+      auditorThread.status === 'failed'
     const basePrompt = [
       spec
         ? 'Audit the current project implementation against the approved specification and completed Assignment:'
@@ -597,7 +608,8 @@ export class ChatEngineAuditRun {
       'Treat the expected-file lists as the minimum scope, then use the reported commits, repository status/history, imports, and affected consumers to enumerate every additional implementation file that must be audited.',
       ...(spec
         ? [`Open annotations on the specification:\n${formatOpenAnnotations(spec.annotations)}`]
-        : [])
+        : []),
+      ...(continuingAudit ? [auditEvidencePointer(auditorThread.id)] : [])
     ].join('\n\n')
     let terminalFailure: Error
     /** Latest shape-valid attempt content plus its remaining evidence gaps,
@@ -606,7 +618,6 @@ export class ChatEngineAuditRun {
       content: AuditReportContent
       issues: string[]
     } | null = null
-    const resumingAudit = assignment.auditCycle?.status === 'running'
     const auditStartedAt =
       resumingAudit && assignment.auditCycle?.startedAt !== undefined
         ? assignment.auditCycle.startedAt
