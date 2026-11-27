@@ -16,6 +16,7 @@ import type {
   AuditSectionId,
   SpecActionIntent
 } from '$shared/types'
+import { assignmentDelegationRole } from '$shared/types'
 import {
   isActivityOnlyUserMessage,
   lastTurnStartIndex,
@@ -182,6 +183,28 @@ export class ThreadViewBuildSpecActionPrompt extends BoardUnit<ThreadView> {
       this.root.loadOlderMessages.settings.assignmentMode !== true
   )
 
+  /**
+   * The live row for the Assignment's auditor.
+   *
+   * `assignmentAuditThread` is a snapshot taken the last time this view
+   * reconciled the Assignment, so an auditor that changed status after that
+   * read, or was created a moment later than it, stayed invisible in the panel
+   * until something reconciled again — and a reader who never saw a reconcile
+   * got a panel with no audit row and no working pulse until they reloaded the
+   * window. The scope list is the copy every `thread:updated` broadcast already
+   * maintains, so the panel's audit row and its "is it working" answer come from
+   * the row itself and never from a read that happened to land earlier. The
+   * snapshot stays as the fallback for a row the scope list has not merged yet.
+   */
+  liveAssignmentAuditThread = $derived.by<Thread | undefined>(() => {
+    const auditorThreadId = this.root.submitSpecDecision.assignment?.auditorThreadId
+    if (auditorThreadId === undefined) return this.assignmentAuditThread
+    return (
+      scopeState.allScopeThreads.find((candidate) => candidate.id === auditorThreadId) ??
+      this.assignmentAuditThread
+    )
+  })
+
   assignmentAuditState = $derived.by<AssignmentAuditDisplayState>(() => {
     if (this.root.submitSpecDecision.auditBusy) return 'running'
     const cycleStatus = this.root.submitSpecDecision.assignment?.auditCycle?.status
@@ -254,7 +277,7 @@ export class ThreadViewBuildSpecActionPrompt extends BoardUnit<ThreadView> {
 
   assignmentAuditorWorking = $derived(
     this.assignmentAuditState === 'running' ||
-      this.delegatedThreadWorking(this.assignmentAuditThread)
+      this.delegatedThreadWorking(this.liveAssignmentAuditThread)
   )
 
   achievementAuditorWorking = $derived(
@@ -263,16 +286,20 @@ export class ThreadViewBuildSpecActionPrompt extends BoardUnit<ThreadView> {
   )
 
   delegatedWorkBusy = $derived.by(() => {
-    if (
-      this.root.submitSpecDecision.assignment?.coordinatorThreadId ===
-      this.root.handleAgentEvent.thread.id
-    ) {
+    const thread = this.root.handleAgentEvent.thread
+    // The coordination's own row and its auditor's row both speak for the plan:
+    // the Sr. Engineer's turn is idle between hand-offs, and the auditor IS the
+    // audit. Answering only for the coordinator's row left the docked panel on
+    // the audit thread reporting no work at all while the auditor produced it.
+    const role = assignmentDelegationRole(this.root.submitSpecDecision.assignment, thread.id)
+    if (role === 'coordinator') {
       return this.activeAssignmentWorkerCount > 0 || this.assignmentAuditorWorking
     }
+    if (role === 'auditor') {
+      return this.root.switchProject.busy || this.assignmentAuditorWorking
+    }
     return (
-      this.achievementOnly &&
-      this.root.handleAgentEvent.thread.achievementRole !== 'auditor' &&
-      this.achievementAuditorWorking
+      this.achievementOnly && thread.achievementRole !== 'auditor' && this.achievementAuditorWorking
     )
   })
 

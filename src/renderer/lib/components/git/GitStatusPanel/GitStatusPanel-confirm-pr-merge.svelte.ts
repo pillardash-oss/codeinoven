@@ -287,6 +287,10 @@ export class GitStatusPanelConfirmPrMerge extends BoardUnit<GitStatusPanel> {
     const identity = this.root.handlePrListAction.githubIdentity
     if (!pending || !identity) return
     this.prMergeBusy = true
+    // The dialog closes on the click: a merge runs on GitHub, and a modal kept up
+    // for that round trip holds the window on an answer the user already gave.
+    // The busy flag still guards a second confirm (⌘+Enter) until the run settles.
+    this.prMergeOpen = false
     try {
       const merged = await gitState.mergePullRequest(
         this.root.props.projectId,
@@ -305,7 +309,6 @@ export class GitStatusPanelConfirmPrMerge extends BoardUnit<GitStatusPanel> {
       }
     } finally {
       this.prMergeBusy = false
-      this.prMergeOpen = false
     }
   }
 

@@ -20,8 +20,10 @@
   import { isOrchestrationChildThread, type Thread } from '$shared/types'
   import {
     DEFAULT_ENV_FILE_NAME,
+    compareEnvFileNames,
     formatProjectEnvLine,
     parseProjectEnvFile,
+    suggestEnvFileName,
     validateEnvFileName,
     type ProjectEnvFile
   } from '$shared/project-env'
@@ -148,9 +150,18 @@
   const groupLabel = $derived(group || '/')
   /** The directory as a prefix, so a label built from it reads as one path. */
   const groupPrefix = $derived(group ? `${group}/` : '')
-  const groupFiles = $derived(
-    files.filter((file) => file.group === group).map((file) => file.fileName)
-  )
+  const groupFiles = $derived.by(() => {
+    const names = files.filter((file) => file.group === group).map((file) => file.fileName)
+    // A file opened here and not saved yet is still a file of this path, so it is
+    // offered beside the stored ones instead of vanishing until its first save.
+    for (const visitedEntry of visited) {
+      if (visitedEntry.group !== group) continue
+      if (names.includes(visitedEntry.fileName)) continue
+      names.push(visitedEntry.fileName)
+    }
+    if (!names.includes(fileName)) names.push(fileName)
+    return names.sort(compareEnvFileNames)
+  })
   /**
    * Every file the picker offers.
    *
@@ -488,6 +499,32 @@
     const file =
       files.find((candidate) => candidate.group === group && candidate.fileName === next) ?? null
     await loadDocument(group, next, file)
+  }
+
+  /**
+   * Start another file in the directory being edited.
+   *
+   * A path holds as many env files as it has run modes, and the plus used to add a
+   * key instead, so a directory that already had a `.env` could never gain a
+   * `.env.local` from this panel. The new file is named for the first mode that path
+   * does not use yet and is created right away, so it appears in the picker and in
+   * the path's file row without waiting for a key to be typed into it.
+   */
+  async function startNewFile(): Promise<void> {
+    if (loading) return
+    error = ''
+    outcome = ''
+    skipped = []
+    try {
+      const name = suggestEnvFileName(groupFiles)
+      applyManifest(
+        projectId,
+        await invoke('secrets:envCreateFile', { projectId, group, fileName: name })
+      )
+      await openSibling(name)
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : 'Could not create this env file'
+    }
   }
 
   /**
@@ -1045,18 +1082,17 @@
       </div>
 
       <div class="ml-auto flex shrink-0 items-center gap-0.5">
-        {#if surface === 'keys'}
-          <button
-            type="button"
-            class="flex h-7 w-7 items-center justify-center border text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            title="Add a key"
-            aria-label="Add a key to this env file"
-            onclick={() => void addRow()}
-          >
-            <CioPlus size={13} />
-          </button>
-          <span class="mx-0.5 h-4 w-px bg-border" aria-hidden="true"></span>
-        {/if}
+        <button
+          type="button"
+          class="flex h-7 w-7 items-center justify-center border text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          title="Create a new env file in {group || 'the project root'}"
+          aria-label="Create a new env file in {group || 'the project root'}"
+          disabled={loading}
+          onclick={() => void startNewFile()}
+        >
+          <CioPlus size={13} />
+        </button>
+        <span class="mx-0.5 h-4 w-px bg-border" aria-hidden="true"></span>
         <button
           type="button"
           class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
@@ -1214,10 +1250,21 @@
             </div>
           {/each}
           {#if rows.length === 0}
-            <p class="px-3 py-3 text-xs text-muted">No keys yet. Use the plus button to add one.</p>
+            <p class="px-3 py-3 text-xs text-muted">No keys yet.</p>
           {:else if findFiltersRows && findRows.length === 0}
             <p class="px-3 py-3 text-xs text-muted">No keys match this search.</p>
           {/if}
+        </div>
+        <div class="px-3 py-2">
+          <button
+            type="button"
+            class="mx-auto flex h-8 w-full max-w-64 items-center justify-center bg-primary text-xs font-medium text-on-primary disabled:opacity-40"
+            disabled={saving || writing}
+            title="Add another key to {groupPrefix}{fileName}"
+            onclick={() => void addRow()}
+          >
+            New Key
+          </button>
         </div>
       {/if}
     </div>

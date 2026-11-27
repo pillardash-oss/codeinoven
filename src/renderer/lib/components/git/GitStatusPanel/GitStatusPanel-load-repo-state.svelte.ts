@@ -820,39 +820,62 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
     if (this.root.confirmAcceptAllConflicts.completeMergeBusy || !this.mergeAwaitsCompletion) return
     const temporaryBranch = this.prResolveBranch
     const lostSessionBranch = this.prResolveLost ? (this.status?.branch ?? null) : null
-    if (this.mergePending) {
-      await gitState.commit(this.root.props.projectId, this.mergeCommitMessage())
-      if (gitState.error) return
-      // A local merge is done once committed. A `pr-<n>` branch with no recorded
-      // session is not: the commit stays here, so say where it stops instead of
-      // letting it read as a published resolution.
-      if (!temporaryBranch) {
+    const mergePending = this.mergePending
+    // Everything the run reads from the dialog is captured before it closes, and
+    // the dialog closes on the click rather than after the work: completing a PR
+    // resolution commits, pushes, and merges on GitHub, and the panel's own
+    // Complete merge row already reports that run, so a modal that waits it out
+    // only keeps the user watching work that no longer needs an answer.
+    const message = mergePending ? this.mergeCommitMessage() : ''
+    this.closeCompleteMerge()
+    try {
+      if (mergePending) {
+        await gitState.commit(this.root.props.projectId, message)
+        if (gitState.error) {
+          toast.error(gitState.error)
+          return
+        }
+        // A local merge is done once committed. A `pr-<n>` branch with no recorded
+        // session is not: the commit stays here, so say where it stops instead of
+        // letting it read as a published resolution.
+        if (!temporaryBranch) {
+          toast.success(
+            lostSessionBranch
+              ? `Merge committed on ${lostSessionBranch}; push it to update the pull request`
+              : 'Merge committed'
+          )
+        }
+      }
+      if (temporaryBranch) {
+        // The finish step clears the session, so the pull request it belongs to is
+        // read before the push.
+        const pullNumber = gitState.prResolveSession?.pullNumber ?? null
+        const finished = await gitState.finishPrResolve(this.root.props.projectId)
+        if (!finished) {
+          toast.error(gitState.error ?? `The resolution could not be pushed to the pull request`)
+          return
+        }
+        const merged = pullNumber === null ? false : await this.mergeResolvedPullRequest(pullNumber)
         toast.success(
-          lostSessionBranch
-            ? `Merge committed on ${lostSessionBranch}; push it to update the pull request`
-            : 'Merge committed'
+          merged
+            ? `Resolution pushed to pull request #${pullNumber} and merged`
+            : pullNumber === null
+              ? `Resolution pushed to the pull request; ${temporaryBranch} removed`
+              : `Resolution pushed to pull request #${pullNumber}; merge it from the pull request view`
         )
       }
+    } finally {
+      // The dialog is already gone, so the panel is what has to show where the run
+      // left the worktree, whether it finished or stopped on a refusal.
+      void this.root.handlePrListAction.refreshStatus()
     }
-    if (temporaryBranch) {
-      // The finish step clears the session, so the pull request it belongs to is
-      // read before the push.
-      const pullNumber = gitState.prResolveSession?.pullNumber ?? null
-      const finished = await gitState.finishPrResolve(this.root.props.projectId)
-      if (!finished) return
-      const merged = pullNumber === null ? false : await this.mergeResolvedPullRequest(pullNumber)
-      toast.success(
-        merged
-          ? `Resolution pushed to pull request #${pullNumber} and merged`
-          : pullNumber === null
-            ? `Resolution pushed to the pull request; ${temporaryBranch} removed`
-            : `Resolution pushed to pull request #${pullNumber}; merge it from the pull request view`
-      )
-    }
+  }
+
+  /** Dismiss the Complete merge dialog and drop the message it was drafting. */
+  closeCompleteMerge(): void {
     this.completeMergeOpen = false
     this.mergeTitle = ''
     this.mergeDescription = ''
-    void this.root.handlePrListAction.refreshStatus()
   }
 
   /**

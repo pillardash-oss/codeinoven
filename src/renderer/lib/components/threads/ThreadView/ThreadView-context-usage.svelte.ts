@@ -448,7 +448,7 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
         props: {
           assignment: activeAssignment,
           threads: this.root.currentWorkingTraceAttribution.assignmentThreads,
-          auditThread: this.root.buildSpecActionPrompt.assignmentAuditThread,
+          auditThread: this.root.buildSpecActionPrompt.liveAssignmentAuditThread,
           auditState: this.root.buildSpecActionPrompt.assignmentAuditState,
           finalComplete: this.root.unmirroredTraceStartTime.assignmentFinalComplete,
           reportAvailable: this.root.unmirroredTraceStartTime.assignmentReportAvailable,
