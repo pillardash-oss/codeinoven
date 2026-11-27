@@ -386,25 +386,25 @@
   {/if}
 
   {#if section === 'processes'}
-    {#if processCount > 0}
-      <label class="relative mt-3 block">
-        <CioSearch
-          size={13}
-          class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
-        />
-        <span class="sr-only">Search running processes</span>
-        <input
-          class="h-8 w-full border bg-elevated pl-8 pr-3 text-xs outline-none placeholder:text-dimmed focus:border-primary"
-          type="search"
-          placeholder="Search by name, pid, port, or path"
-          bind:value={processSearchQuery}
-        />
-      </label>
-    {/if}
     <div class="mt-3 flex items-center gap-2">
+      {#if processCount > 0}
+        <label class="relative min-w-0 flex-1">
+          <CioSearch
+            size={13}
+            class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
+          />
+          <span class="sr-only">Search running processes</span>
+          <input
+            class="h-8 w-full border bg-elevated pl-8 pr-3 text-xs outline-none placeholder:text-dimmed focus:border-primary"
+            type="search"
+            placeholder="Search name, pid, port, path"
+            bind:value={processSearchQuery}
+          />
+        </label>
+      {/if}
       <button
         type="button"
-        class="inline-flex h-8 w-28 items-center justify-center gap-1.5 border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50"
+        class="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50"
         disabled={processesRefreshing || processesLoading}
         title="Refresh running processes"
         onclick={onRefreshProcesses}
@@ -419,7 +419,7 @@
       {#if processCount > 0}
         <button
           type="button"
-          class="inline-flex h-8 items-center gap-1.5 border border-danger/30 bg-danger/10 px-2.5 text-xs font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
+          class="inline-flex h-8 shrink-0 items-center gap-1.5 border border-danger/30 bg-danger/10 px-2.5 text-xs font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
           disabled={stoppingAll}
           title="Stop all processes running for this task"
           onclick={onStopAllProcesses}
