@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { markAttachmentFilenames } from '$lib/annotation-composite'
-import { referencePromptContext } from '$lib/reference-prompt-context'
+import { attachedReferenceContext, referencePromptContext } from '$lib/reference-prompt-context'
 import type { ResponseReferenceAnchor } from '$lib/stores/response-references.svelte'
 
 function reference(overrides: Partial<ResponseReferenceAnchor>): ResponseReferenceAnchor {
@@ -34,6 +34,44 @@ describe('referencePromptContext', () => {
     expect(context).toContain('[docs/spec.md]\n<file>\nannotated passage\n</file>')
     expect(context).toContain('[Intro]\n<video>\nat 00:12\n</video>')
     expect(context).toContain('[Mark 1]\n<image>\nround logo\n</image>')
+  })
+
+  it('leaves an attached conversation out of the excerpt blocks', () => {
+    expect(
+      referencePromptContext([
+        reference({ id: 'thread-1', label: 'Design notes', text: 'thread-1', kind: 'thread' })
+      ])
+    ).toBeUndefined()
+  })
+})
+
+describe('attachedReferenceContext', () => {
+  it('tells the agent which conversation it may look up', () => {
+    const context = attachedReferenceContext(
+      [
+        reference({
+          id: 'thread-1',
+          label: 'Design notes',
+          text: 'thread-1',
+          kind: 'thread',
+          threadId: 'thread-1',
+          projectId: 'project-9'
+        }),
+        reference({ id: 'selection', text: 'the quoted passage' })
+      ],
+      'current-project'
+    )
+
+    expect(context).toContain(
+      'You may lookup this thread: thread-1 if you need some context as to the sent message'
+    )
+    expect(context).toContain('<selection>\nthe quoted passage\n</selection>')
+    // A conversation travels by identity only, never as an excerpt block.
+    expect(context).not.toContain('<selection>\nthread-1\n</selection>')
+  })
+
+  it('answers nothing when the message carries no references at all', () => {
+    expect(attachedReferenceContext([], 'current-project')).toBeUndefined()
   })
 })
 

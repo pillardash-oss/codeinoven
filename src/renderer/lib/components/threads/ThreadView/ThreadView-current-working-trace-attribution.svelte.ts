@@ -37,7 +37,7 @@ import { catalogModelEntry, providerModel, resolveModelProvider } from '$shared/
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import type { ResponseReferenceAnchor } from '$lib/stores/response-references.svelte'
 import { markAttachmentFilenames } from '$lib/annotation-composite'
-import { referencePromptContext } from '$lib/reference-prompt-context'
+import { attachedReferenceContext } from '$lib/reference-prompt-context'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { toast } from 'svelte-sonner'
 import { reportError } from '$lib/stores/app-errors.svelte'
@@ -794,9 +794,11 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
     const projectReferences = this.editingMessageProjectReferences
     // The references the message already carried are part of the request, not
     // decoration on the bubble: a resend that dropped them asked the agent a
-    // different question, without the passages, comments and marks it had.
+    // different question, without the passages, comments and marks it had. An
+    // attached conversation travels by identity only, so its chip rides in the
+    // references and the turn's hidden context names the thread it may read.
     const promptReferences = this.editingMessageReferences
-    const promptContext = referencePromptContext(promptReferences)
+    const promptContext = attachedReferenceContext(promptReferences, projectId)
     const controller = this.root.props.controller
     this.root.handleAgentEvent.errorMessage = ''
     // Leave edit mode with the new words already in the message: the bubble
@@ -826,14 +828,17 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
     // following the turn it starts.
     this.root.loadOlderMessages.scrollToLatest()
     speechController.observeSent(`message-edit-${threadId}-${msg.id}`, text)
-    // A controller-driven conversation (a side chat) keeps its references on the
-    // conversation and sends those, so the edited message's references are
-    // re-attached there before the resend reads them. Their comments ride along
-    // for the same reason they exist: the comment is the part the agent has to
-    // answer.
+    // A controller-driven conversation (a side chat) keeps its passage
+    // references on the conversation and sends those, so the edited message's
+    // references are re-attached there before the resend reads them. Their
+    // comments ride along for the same reason they exist: the comment is the
+    // part the agent has to answer. A side chat has no slot for an attached
+    // conversation, so those are left out instead of being turned into a
+    // passage quoting a thread id.
     if (controller?.addSelection) {
       controller.clearReferences?.()
       for (const reference of promptReferences) {
+        if (reference.kind === 'thread') continue
         const referenceId = controller.addSelection({
           text: reference.text,
           ...(reference.messageId === undefined ? {} : { messageId: reference.messageId }),
