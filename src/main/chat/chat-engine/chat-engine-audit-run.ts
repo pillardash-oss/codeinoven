@@ -205,6 +205,12 @@ export class ChatEngineAuditRun {
       runId,
       auditKind: 'independent'
     })
+    // The worktree as this run found it. An audit only reads, so any change to
+    // it came from the auditor, and the run is discarded rather than saved.
+    const worktreeBefore = await this.host.units['audit-write-guard'].capture(
+      projectId,
+      projectPath
+    )
     for (let attemptIndex = 0; attemptIndex < 3; attemptIndex += 1) {
       if (this.consumeIndependentAuditStop(projectId, coordinatorThreadId, runStartedAt)) {
         stopped = true
@@ -280,9 +286,11 @@ export class ChatEngineAuditRun {
             .filter(Boolean)
             .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
+          readOnly: true,
           userMessageId: messageId
         })
         const streamed = await completion
+        await this.host.units['audit-write-guard'].assertUnmodified(worktreeBefore)
         let content: AuditReportContent
         if (streamed !== undefined) {
           content = validateAuditReportContent(streamed, { requireVerification: true })
@@ -787,6 +795,12 @@ export class ChatEngineAuditRun {
       runId,
       auditKind: 'assignment'
     })
+    // The worktree as this run found it, so a turn that patched the code is
+    // caught before its report can describe the patch as delivered work.
+    const worktreeBefore = await this.host.units['audit-write-guard'].capture(
+      projectId,
+      projectPath
+    )
     for (let attemptIndex = 0; ; attemptIndex += 1) {
       if (this.host.state.stoppedAssignmentAuditRuns.has(auditRunKey)) {
         terminalFailure = new Error('Assignment audit stopped by user')
@@ -867,9 +881,11 @@ export class ChatEngineAuditRun {
           // allowlist never opens file-mutating tools, even when the gateway
           // runtime is prepared (previously this branch was unrestricted).
           allowedTools: AUDIT_ALLOWED_TOOLS,
+          readOnly: true,
           userMessageId: messageId
         })
         const streamed = await completion
+        await this.host.units['audit-write-guard'].assertUnmodified(worktreeBefore)
         if (this.host.state.stoppedAssignmentAuditRuns.has(auditRunKey)) {
           throw new Error('Assignment audit stopped by user')
         }
@@ -1116,6 +1132,10 @@ export class ChatEngineAuditRun {
     await this.host.threadManager.setStatus(projectId, coordinatorThreadId, 'executing', {
       read: false
     })
+    const worktreeBefore = await this.host.units['audit-write-guard'].capture(
+      projectId,
+      projectPath
+    )
     for (let attemptIndex = 0; attemptIndex < 3; attemptIndex += 1) {
       await this.host.threadManager.setStatus(projectId, auditorThread.id, 'executing')
       this.host.handledIdleSessions.delete(sessionId)
@@ -1179,9 +1199,11 @@ export class ChatEngineAuditRun {
             .filter(Boolean)
             .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
+          readOnly: true,
           userMessageId: messageId
         })
         const streamed = await completion
+        await this.host.units['audit-write-guard'].assertUnmodified(worktreeBefore)
         let content: AuditReportContent
         if (streamed !== undefined) {
           content = validateAuditReportContent(streamed)
@@ -1335,6 +1357,10 @@ export class ChatEngineAuditRun {
     await this.host.threadManager.setStatus(projectId, coordinatorThreadId, 'executing', {
       read: false
     })
+    const worktreeBefore = await this.host.units['audit-write-guard'].capture(
+      projectId,
+      projectPath
+    )
     for (let attemptIndex = 0; ; attemptIndex += 1) {
       await this.host.threadManager.setStatus(projectId, auditorThread.id, 'executing')
       this.host.handledIdleSessions.delete(sessionId)
@@ -1398,9 +1424,11 @@ export class ChatEngineAuditRun {
             .filter(Boolean)
             .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
+          readOnly: true,
           userMessageId: messageId
         })
         const streamed = await completion
+        await this.host.units['audit-write-guard'].assertUnmodified(worktreeBefore)
         let content: AuditReportContent
         if (streamed !== undefined) {
           try {

@@ -49,6 +49,7 @@ import { ChatEngineSpecAuthoring } from './chat-engine-spec-authoring'
 import { ChatEngineAuditRun } from './chat-engine-audit-run'
 import { ChatEngineAuditReport } from './chat-engine-audit-report'
 import { ChatEngineAuditProgress } from './chat-engine-audit-progress'
+import { ChatEngineAuditWriteGuard } from './chat-engine-audit-write-guard'
 import { ChatEngineSpec } from './chat-engine-spec'
 import { ChatEngineMemory } from './chat-engine-memory'
 import { ChatEngineSpecLifecycle } from './chat-engine-spec-lifecycle'
@@ -118,6 +119,7 @@ export function buildChatEngineUnits(engine: ChatEngine) {
     'audit-run': new ChatEngineAuditRun(engine),
     'audit-report': new ChatEngineAuditReport(engine),
     'audit-progress': new ChatEngineAuditProgress(engine),
+    'audit-write-guard': new ChatEngineAuditWriteGuard(engine),
     spec: new ChatEngineSpec(engine),
     memory: new ChatEngineMemory(engine),
     'spec-lifecycle': new ChatEngineSpecLifecycle(engine),
