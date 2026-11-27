@@ -78,11 +78,11 @@
   import { resolveModelProvider } from '$shared/provider-identity'
   import type { Thread } from '$shared/types'
   import {
-    coordinatorHasActiveDelegates,
     coordinatorHasUnreadWorkers,
     DEFAULT_SCOPE_BUCKET_ID,
     isOrchestrationChildThread
   } from '$shared/types'
+  import { delegatesWorking } from '$lib/thread-delegate-activity'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
   import { dispatchBadgeFor } from './thread-dispatch-badge'
 
@@ -491,9 +491,7 @@
   let primarySettledAt = $derived(agentRuns.settledAt(thread.projectId, thread.id))
 
   /** Aggregate child activity onto the Sr. Engineer row   the public source of truth. */
-  let delegatedWorkActive = $derived(
-    coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
-  )
+  let delegatedWorkActive = $derived(delegatesWorking(thread, scopeState.allScopeThreads))
 
   /** Whether this thread's own turn is producing work right now. The one
    *  live-working rule (`isThreadLiveWorking`) keeps a thread parked on the user

@@ -15,10 +15,10 @@ import { scopeState } from '$lib/stores/scope.svelte'
 import { pinnedFold } from '$lib/stores/pinned-fold.svelte'
 import { threadUnreadIntent } from '$lib/stores/thread-unread-intent'
 import { workspaceState } from '$lib/stores/workspace.svelte'
+import { delegatesWorking } from '$lib/thread-delegate-activity'
 import type { AgentPart, Thread } from '$shared/types'
 import {
   activeThreadRowId,
-  coordinatorHasActiveDelegates,
   delegationSpawnerRow,
   INBOX_PROJECT_ID,
   isThreadBusy,
@@ -289,8 +289,7 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
     ) {
       return 'done'
     }
-    if (coordinatorHasActiveDelegates(this.selectedThread, scopeState.allScopeThreads))
-      return 'working'
+    if (delegatesWorking(this.selectedThread, scopeState.allScopeThreads)) return 'working'
     if (
       auditor &&
       (isThreadBusy(auditor) ||

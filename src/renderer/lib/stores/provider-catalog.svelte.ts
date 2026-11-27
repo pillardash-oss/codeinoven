@@ -46,45 +46,16 @@ const RETRY_MIN_INTERVAL_MS = 20 * 1000
 /** localStorage key under which the last-known catalogs are mirrored. */
 const CATALOG_MIRROR_KEY = `${APP_SLUG}.providerCatalog.mirror.v2`
 
-/**
- * Merge catalog snapshots without allowing a partial/stale model record to
- * erase optional capability metadata discovered by another snapshot.
- *
- * Provider catalogs arrive from several places during startup: the local
- * mirror, the main-process snapshot, the component prop, and a live driver
- * refresh. Thinking presets are optional, so an older record that omits them
- * must not hide presets already reported by another record.
- */
-export function mergeProviderCatalogEntries(catalogs: ProviderCatalog[]): ProviderCatalog[] {
-  // This is a local computation, not application state. Using SvelteMap here
-  // makes every merge write reactive signals while ModelPicker/ChatComposer
-  // are evaluating their derived values, which can cascade into a long flush.
-  // eslint-disable-next-line svelte/prefer-svelte-reactivity -- local-only merge state; it must not notify Svelte while derived values are evaluated
-  const merged = new Map<string, ProviderCatalog>()
-  for (const catalog of catalogs) {
-    const key = `${catalog.harnessId}:${catalog.id}`
-    const existing = merged.get(key)
-    if (!existing) {
-      merged.set(key, { ...catalog, models: [...catalog.models] })
-      continue
-    }
+import { mergeProviderCatalogEntries } from '$lib/provider-catalog-merge'
 
-    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- local-only merge state; it must not notify Svelte while derived values are evaluated
-    const models = new Map(
-      existing.models.map((model) => [`${model.providerId}:${model.id}`, model])
-    )
-    for (const model of catalog.models) {
-      const modelKey = `${model.providerId}:${model.id}`
-      const prior = models.get(modelKey)
-      const mergedModel = { ...prior, ...model }
-      if (model.thinkingPresets === undefined && prior?.thinkingPresets !== undefined) {
-        mergedModel.thinkingPresets = prior.thinkingPresets
-      }
-      models.set(modelKey, mergedModel)
-    }
-    existing.models = [...models.values()]
+export { mergeProviderCatalogEntries }
+
+function sameParts(previous: readonly unknown[], next: readonly unknown[]): boolean {
+  if (previous.length !== next.length) return false
+  for (let index = 0; index < next.length; index++) {
+    if (previous[index] !== next[index]) return false
   }
-  return [...merged.values()]
+  return true
 }
 
 class ProviderCatalogStore {
@@ -98,6 +69,9 @@ class ProviderCatalogStore {
    */
   private knownProjects = new SvelteSet<string>()
   private customOverrides = new SvelteMap<string, BaseUrlProvider | null>()
+  /** The inputs `allCached` last answered for, and the union it produced. */
+  private unionParts: unknown[] | null = null
+  private union: ProviderCatalog[] | null = null
   private refreshedAt = new Map<string, number>()
   /** When the last hydration attempt for a project failed. */
   private failedAt = new Map<string, number>()
@@ -309,12 +283,27 @@ class ProviderCatalogStore {
    * leak into pickers through this union.
    */
   allCached(): ProviderCatalog[] {
+    // The union is read by both pickers and the composer inside derived values,
+    // so it re-evaluates whenever a thread switch touches them. The answer only
+    // changes when one of the per-project catalog lists, the set of validated
+    // projects, or the custom overrides changes - all of which are replaced, never
+    // mutated - so those references are compared and the last union is reused.
+    // Without this the merge ran again over identical inputs on every switch.
+    const parts: unknown[] = []
     const catalogs: ProviderCatalog[] = []
     for (const [projectId, projectCatalogs] of this.cache) {
       if (!this.knownProjects.has(projectId)) continue
+      parts.push(projectId, projectCatalogs)
       catalogs.push(...projectCatalogs)
     }
-    return this.applyCustomOverrides(mergeProviderCatalogEntries(catalogs))
+    for (const [key, provider] of this.customOverrides) parts.push(key, provider)
+    if (this.unionParts !== null && sameParts(this.unionParts, parts) && this.union !== null) {
+      return this.union
+    }
+    const union = this.applyCustomOverrides(mergeProviderCatalogEntries(catalogs))
+    this.unionParts = parts
+    this.union = union
+    return union
   }
 
   /**

@@ -43,5 +43,40 @@ describe('opening a thread', () => {
     expect(pane).toMatch(
       /const selectedThread = \$derived\(board\.openThreadFromSwitcher\.selectedThread\)/u
     )
+    // The list's own highlight is the click, not a second flush: the sidebar is
+    // given the immediate selection, so the row the user pressed with is the row
+    // that reads as open.
+    expect(pane).toMatch(/activeThreadId=\{activeThreadRowId\(paneThread\)\}/u)
+    expect(pane).toMatch(/selectedThreadId=\{activeThreadRowId\(paneThread\)\}/u)
+  })
+
+  it('writes everything that is not the conversation after the conversation', () => {
+    const workspace = source('stores', 'workspace.svelte.ts')
+    const paneAssignedAt = workspace.indexOf('this.paneThread = thread')
+    expect(paneAssignedAt).toBeGreaterThan(-1)
+    // Each of these reaches its own subscribers, and each of them re-derives and
+    // reads: in the click's flush they ran in front of the pane the click asked
+    // for. They belong to the task after it, behind the guard that drops them
+    // when the reader has already selected another thread.
+    for (const call of [
+      'recentVisits.recordThread(thread)',
+      'relativeTimeClock.refresh()',
+      'prewarmThreadOven(thread)',
+      'scopeState.noteProjectBucket(',
+      'gitState.notifyThreadOpened(project, thread)',
+      'notificationPanelState.acknowledgeOpenThread(thread)',
+      'contextSidebarState.activateThread('
+    ]) {
+      const at = workspace.indexOf(call, paneAssignedAt)
+      expect(at, `${call} must exist after the pane selection`).toBeGreaterThan(paneAssignedAt)
+      const before = workspace.slice(paneAssignedAt, at)
+      const lastDeferral = before.lastIndexOf('afterShellPaint(')
+      expect(lastDeferral, `${call} must run inside afterShellPaint`).toBeGreaterThan(-1)
+      // The deferral it lives in skips itself once a newer open took over.
+      expect(
+        before.slice(lastDeferral).includes('if (this.paneThread !== thread) return'),
+        `${call} must be behind the supersede guard`
+      ).toBe(true)
+    }
   })
 })

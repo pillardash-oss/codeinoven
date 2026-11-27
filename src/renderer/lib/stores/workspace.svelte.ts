@@ -318,11 +318,6 @@ class WorkspaceState {
     // pass, so a live thread's tail paints instead of arriving seconds later.
     preloadThreadConversation(thread)
     mark('preload')
-    recentVisits.recordThread(thread)
-    // The sidebar rows stamp their last-activity age against the shared clock,
-    // so opening a thread re-reads it on the spot: the row the user just entered
-    // is measured against this moment instead of the last shared tick.
-    relativeTimeClock.refresh()
     // The pane gets the thread now; the rest of the app gets it one task later,
     // after the conversation is on screen (see `paneThread`).
     this.paneThread = thread
@@ -333,11 +328,6 @@ class WorkspaceState {
     // Exactly one transcript is live at a time; the other slots are frozen
     // snapshots that must not be fed events while they are off screen.
     threadMessages.setActive(thread.projectId, thread.id)
-    // A thread attached to an Oven opens that Oven's session now, before the
-    // user touches anything: the file tree, Git status and composer all read
-    // through it on mount.
-    prewarmThreadOven(thread)
-    mark('oven')
     this.activeProject = project
     this.activeProjectIconUrl = iconUrl ?? null
     this.rememberContentViewThread(thread)
@@ -349,32 +339,53 @@ class WorkspaceState {
     // A boot restore defers this: the context panel is a secondary surface, and
     // its reads must never share the moment the restored conversation paints.
     const rowThreadId = activeThreadRowId(thread) ?? thread.id
-    // Never on the click. A panel is a surface beside the conversation, and the
-    // conversation is what the user asked to open: activating the dock here
-    // mounted its panel in the same flush as the transcript, so the thread waited
-    // for a panel it may not even show. It lands on the task after the opened
-    // thread's own state is applied, which is also where its own reads start
-    // (`thread-open-window`).
+    rendererRecovery.setSelectedThread(thread.projectId, thread.id)
+    // Everything that reacts to the selection without being the conversation is
+    // written on the task after the conversation has had its frame. It is one
+    // flush: a write here reaches every subscriber - the visit order, the shared
+    // relative clock every row stamps its age against, the scope bucket the file
+    // manager and terminals follow, the git store, the notice panel, the Oven
+    // prewarm - and each of them re-derives and reads, in front of the pane the
+    // user asked for. None of it is needed to paint the thread that was clicked.
+    // The guard skips the whole block when the reader has already moved on, so a
+    // burst of clicks pays for the thread they land on rather than for every one
+    // they passed through.
     afterShellPaint(() => {
+      if (this.paneThread !== thread) return
+      recentVisits.recordThread(thread)
+      // Rows stamp their last-activity age against the shared clock, and the
+      // row that was just entered is measured against this moment.
+      relativeTimeClock.refresh()
+      // A thread attached to an Oven opens that Oven's session before the user
+      // touches anything: the file tree, Git status and composer read through it
+      // on mount.
+      prewarmThreadOven(thread)
+      // The project's active scope is what the file manager, the terminal and
+      // action roots resolve against.
+      scopeState.noteProjectBucket(
+        thread.projectId,
+        thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
+      )
+      // Every open (creation, switch, restore) tells the git store the project is
+      // in use, so it refreshes status and the connection-gated PR indicators
+      // without polling.
+      gitState.notifyThreadOpened(project, thread)
+      // Once the conversation is on screen there is nothing left for the notice
+      // panel to report, so a read thread never lingers there. The retire is
+      // durable, so neither a restart nor a scope reload can rebuild it.
+      notificationPanelState.acknowledgeOpenThread(thread)
+    })
+    mark('deferredReactions', { deferred: true })
+    // A panel is a surface beside the conversation, and the conversation is what
+    // the user asked to open: activating the dock here mounted its panel in the
+    // same flush as the transcript, so the thread waited for a panel it may not
+    // even show. It lands on the task after the opened thread's own state is
+    // applied, which is also where its own reads start (`thread-open-window`).
+    afterShellPaint(() => {
+      if (this.paneThread !== thread) return
       contextSidebarState.activateThread(thread.projectId, thread.id, thread.title, rowThreadId)
     })
     mark('contextPanel', { deferred: true })
-    rendererRecovery.setSelectedThread(thread.projectId, thread.id)
-    // Opening a thread re-anchors the project's active scope (file manager,
-    // terminal, and action roots follow the thread's scope bucket).
-    scopeState.noteProjectBucket(thread.projectId, thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
-    // Event-driven git refresh: every thread open (creation, switch, restore)
-    // tells the git store the project is in use, so it can refresh status and
-    // the connection-gated PR indicators without any polling.
-    gitState.notifyThreadOpened(project, thread)
-    mark('git')
-    // The moment a thread is opened every notice it carried is acknowledged:
-    // once its conversation is on screen there is nothing left for the panel to
-    // report, so a read thread never lingers there waiting to be dismissed by
-    // hand. The retire is durable, so neither a restart nor a scope reload can
-    // rebuild it.
-    notificationPanelState.acknowledgeOpenThread(thread)
-    mark('notices')
     // The live process count is a badge, and reading it walks a session's
     // process table. It must never share the switch instant with the
     // conversation mount.
