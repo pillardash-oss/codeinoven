@@ -127,6 +127,28 @@
   const auditWorkAvailable = $derived(
     (auditState === 'offered' || auditState === 'failed') && !finalComplete
   )
+  /** The run is done once every task has completed, even while the audit that
+   *  follows it is still going. `finalComplete` is the stricter flag: the whole
+   *  audit cycle finished, so it counts as complete as well. */
+  const assignmentComplete = $derived(
+    finalComplete ||
+      assignment.status === 'completed' ||
+      (assignment.content.tasks.length > 0 && completed === assignment.content.tasks.length)
+  )
+  /** The report takes the highlight only once there is nothing left to review. */
+  const reportPrimary = $derived(
+    assignmentComplete && reportAvailable && onViewReport !== undefined
+  )
+  const assignmentButtonClass = $derived(
+    assignmentComplete
+      ? 'flex flex-1 items-center justify-center gap-2 border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay'
+      : 'flex flex-1 items-center justify-center gap-2 bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover'
+  )
+  const reportButtonClass = $derived(
+    reportPrimary
+      ? 'flex flex-1 items-center justify-center gap-2 bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover'
+      : 'flex items-center justify-center gap-2 border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay'
+  )
   /** When this run first started working: the earliest task start, or the
    *  sign-off when the Sr. Engineer is already on it. */
   const runStartedAt = $derived.by(() => {
@@ -277,12 +299,13 @@
     <div class="mt-3 flex gap-2">
       <button
         type="button"
-        class="flex flex-1 items-center justify-center gap-2 bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
+        class={assignmentButtonClass}
         title="Open the complete Assignment in Spec Studio"
         onclick={onOpenAssignment}
       >
-        {#if finalComplete}
-          View Assignment
+        {#if assignmentComplete}
+          <span class="assignment-label-full">View Assignment</span>
+          <span class="assignment-label-short">Assignment</span>
         {:else}
           <span class="assignment-label-full">Review Assignment</span>
           <span class="assignment-label-short">Assignment</span>
@@ -326,10 +349,10 @@
           {auditState === 'failed' ? 'Audit Failed' : 'Audit Work'}
         </button>
       {/if}
-      {#if reportAvailable && !finalComplete && onViewReport}
+      {#if reportAvailable && onViewReport}
         <button
           type="button"
-          class="border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
+          class={reportButtonClass}
           title="Open the latest audit report in Audit Studio"
           onclick={onViewReport}
         >
