@@ -368,6 +368,18 @@ export class ThreadViewSubmitBrainstormDecision extends BoardUnit<ThreadView> {
 
   readySpecReconcileInFlight: Promise<void> | null = $state(null)
 
+  /**
+   * One more pass owed because state changed during the pass in flight.
+   *
+   * A read answers the rows as they were when it started, so an event that
+   * arrives while it runs describes state that read cannot carry. Returning the
+   * in-flight promise for it dropped that event's facts until something else
+   * reconciled, which is the panel that kept reporting an idle coordination
+   * while its auditor was working until the window was reloaded. Coalescing one
+   * follow-up pass keeps at most one extra read, however many events land.
+   */
+  readySpecReconcileQueued = false
+
   /** Fast path: settings and the mirrored transcript are plain disk reads. */
   latestUserMessageId(): string | undefined {
     for (let index = this.root.loadOlderMessages.messages.length - 1; index >= 0; index--) {
@@ -432,7 +444,10 @@ export class ThreadViewSubmitBrainstormDecision extends BoardUnit<ThreadView> {
   })
 
   async reconcileReadySpec(): Promise<void> {
-    if (this.readySpecReconcileInFlight) return this.readySpecReconcileInFlight
+    if (this.readySpecReconcileInFlight) {
+      this.readySpecReconcileQueued = true
+      return this.readySpecReconcileInFlight
+    }
     const reconcilePromise = this.reconcileReadySpecProvider()
     this.readySpecReconcileInFlight = reconcilePromise
     try {
@@ -440,6 +455,10 @@ export class ThreadViewSubmitBrainstormDecision extends BoardUnit<ThreadView> {
     } finally {
       if (this.readySpecReconcileInFlight === reconcilePromise) {
         this.readySpecReconcileInFlight = null
+        if (this.readySpecReconcileQueued) {
+          this.readySpecReconcileQueued = false
+          void this.reconcileReadySpec().catch(() => {})
+        }
       }
     }
   }

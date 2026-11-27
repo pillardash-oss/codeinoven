@@ -1731,7 +1731,7 @@
         />
       {/if}
 
-      {#if board.unmirroredTraceStartTime.brainstormReportRefreshing || board.buildSpecActionPrompt.delegatedWorkBusy || board.composerScope.assignmentFormulating || (board.buildSpecActionPrompt.heldSteerAbsIndex === -1 && !board.buildSpecActionPrompt.pendingLiveTurn && !board.submitBrainstormDecision.activePlanningEntry && !board.harnessUsage.specFormulating && board.switchProject.busy && board.pollStreamParts.latestTurnRenderableParts.length === 0)}
+      {#if board.unmirroredTraceStartTime.brainstormReportRefreshing || (board.buildSpecActionPrompt.delegatedWorkBusy && !board.pollStreamParts.conversationBusy) || board.composerScope.assignmentFormulating || (board.buildSpecActionPrompt.heldSteerAbsIndex === -1 && !board.buildSpecActionPrompt.pendingLiveTurn && !board.submitBrainstormDecision.activePlanningEntry && !board.harnessUsage.specFormulating && board.switchProject.busy && board.pollStreamParts.latestTurnRenderableParts.length === 0)}
         <div class="flex items-center gap-2 text-sm text-dimmed">
           <ThinkingOrb size={20} label={board.submitBrainstormDecision.activityLabel} />
           <span>

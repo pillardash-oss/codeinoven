@@ -303,3 +303,24 @@ export interface AssignmentToolResult {
   thread?: Thread
   idempotent: boolean
 }
+
+/**
+ * Which side of an Assignment a thread speaks for, when delegated work running
+ * on that thread is what the reader must see as working.
+ *
+ * The coordination's own row and its auditor's row are both surfaces of the
+ * same running plan: the Sr. Engineer's turn is idle between hand-offs while
+ * its workers and audit produce the work, so its row has to pulse, and an audit
+ * thread IS the audit, so its own view has to report the audit running instead
+ * of looking like a settled conversation. A worker answers for its own turn
+ * only: its task state already says what it owes the plan.
+ */
+export function assignmentDelegationRole(
+  plan: Pick<AssignmentPlan, 'coordinatorThreadId' | 'auditorThreadId'> | null | undefined,
+  threadId: string
+): 'coordinator' | 'auditor' | null {
+  if (!plan || threadId === '') return null
+  if (plan.coordinatorThreadId === threadId) return 'coordinator'
+  if (plan.auditorThreadId !== undefined && plan.auditorThreadId === threadId) return 'auditor'
+  return null
+}
