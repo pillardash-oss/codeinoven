@@ -980,8 +980,8 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
         threadId: state.request.threadId
       })
     } else if (resolved.utility.id === APP_VIDEO_UTILITY_ID) {
-      // Preview serves the composition, checkpoint saves an edit step, generate
-      // makes media, and capture renders and pictures one frame.
+      // Preview serves the composition, checkpoint saves an edit step, and
+      // capture renders and pictures one frame.
       const executors = new Map<string, VideoCapabilityExecutor | null>([
         ['preview', this.host.videoPreviewExecutor],
         ['critique', this.host.videoPreviewExecutor],
