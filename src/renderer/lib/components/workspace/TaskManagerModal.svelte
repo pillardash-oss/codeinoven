@@ -1440,10 +1440,6 @@
               </p>
             </div>
           </div>
-          <p class="px-5 pb-1.5 text-[0.625rem] text-dimmed">
-            The windows, tabs and webviews drawn by these renderer processes. Read-only: there is
-            nothing to end here, the list above holds the processes and services.
-          </p>
           <ul class="divide-y divide-border">
             {#each visibleSurfaces as surface (surface.pid)}
               <li class="flex items-center gap-3 px-5 py-2">
