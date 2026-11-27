@@ -500,9 +500,6 @@ export class ChatEngine {
   setDesignMediaExecutor(executor: DesignCapabilityExecutor | null): void {
     return this.units['media-visual'].setDesignMediaExecutor(executor)
   }
-  setMediaGenerationExecutor(executor: DesignCapabilityExecutor | null): void {
-    return this.units['media-visual'].setMediaGenerationExecutor(executor)
-  }
   setVideoPreviewExecutor(executor: VideoCapabilityExecutor | null): void {
     return this.units['media-visual'].setVideoPreviewExecutor(executor)
   }

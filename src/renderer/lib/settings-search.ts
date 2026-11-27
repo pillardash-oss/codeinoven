@@ -9,7 +9,6 @@ import CioHeartPulse from '@pdslng/cio-icon/CioHeartPulse.svelte'
 import CioKey from '@pdslng/cio-icon/CioKey.svelte'
 import CioKeyboard from '@pdslng/cio-icon/CioKeyboard.svelte'
 import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
-import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
 import CioPerson from '@pdslng/cio-icon/CioPerson.svelte'
 import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
 import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
@@ -177,38 +176,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Worker names and the vision model that describes images.',
     keywords: ['workers', 'audit', 'vision', 'image descriptor'],
     icon: CioTeam
-  },
-  {
-    id: 'design-generation',
-    section: 'design',
-    blockId: 'design-generation',
-    title: 'Generation backend',
-    description: 'The provider that generates images, clips and sound.',
-    keywords: ['replicate', 'generation', 'image', 'video', 'audio', 'token', 'api key', 'media'],
-    icon: CioSparkles
-  },
-  {
-    id: 'design',
-    section: 'design',
-    group: 'agents',
-    title: 'Design and video',
-    description: 'Where design and video work is saved, and who does each kind of it.',
-    keywords: [
-      'design',
-      'video',
-      'assignments',
-      'copywriter',
-      'illustrator',
-      'video editor',
-      'voice-over',
-      'copy',
-      'seo',
-      'script',
-      'storyboard',
-      'delegate',
-      'image generation'
-    ],
-    icon: CioPalette
   },
   {
     id: 'cio-prompts',

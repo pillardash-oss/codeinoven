@@ -15,7 +15,6 @@ import { invokeAssistantContract } from './ipc/invoke-assistant'
 import { invokeTypesafeContract } from './ipc/invoke-typesafe'
 import { invokeDesignContract } from './ipc/invoke-design'
 import { invokeDisplayContract } from './ipc/display'
-import { invokeMediaContract } from './ipc/invoke-media'
 import { invokeOvenContract } from './ipc/invoke-oven'
 import { invokeCioCleanupContract } from './ipc/invoke-cio-cleanup'
 import { invokeSearchContract } from './ipc/invoke-search'
@@ -30,7 +29,6 @@ import type { GitInvocation, GitRefusedOperation, GitRemoteUnavailable } from '.
 export * from './ipc/updater'
 export * from './ipc/browser'
 export * from './ipc/design'
-export * from './ipc/media'
 export * from './ipc/display'
 export * from './ipc/logging'
 export * from './ipc/notifications'
@@ -60,7 +58,6 @@ export const IPC_INVOKE_CONTRACT = {
   ...invokeTypesafeContract,
   ...invokeAssistantContract,
   ...invokeDesignContract,
-  ...invokeMediaContract,
   ...invokeDisplayContract,
   ...invokeOvenContract,
   ...invokeCioCleanupContract,

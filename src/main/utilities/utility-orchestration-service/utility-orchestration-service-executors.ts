@@ -62,17 +62,6 @@ export class UtilityOrchestrationServiceExecutors {
   }
 
   /**
-   * Register the executor behind the `generate` operation the design and video
-   * capabilities share, which runs the model configured for a kind of media and
-   * saves the result into the project. The app supplies it because it owns the
-   * provider credential, the vault and the folder the file lands in, and because
-   * the model is a user decision the agent must never make.
-   */
-  setMediaGenerationExecutor(executor: DesignCapabilityExecutor | null): void {
-    this.host.mediaGenerationExecutor = executor
-  }
-
-  /**
    * Register the executor behind the video capability's `preview` operation,
    * which serves a composition folder on the app's loopback origin and shows it
    * in the thread's browser tab. The app supplies it because it owns the preview

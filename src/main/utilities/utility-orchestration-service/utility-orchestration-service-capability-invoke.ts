@@ -965,7 +965,6 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
             this.host.designPreviewExecutor
           ]
         ),
-        ['generate', this.host.mediaGenerationExecutor],
         ['save-media', this.host.designMediaExecutor]
       ])
       const executor = executors.get(operation)
@@ -989,7 +988,6 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
         ['checkpoint', this.host.videoPreviewExecutor],
         ['history', this.host.videoPreviewExecutor],
         ['restore', this.host.videoPreviewExecutor],
-        ['generate', this.host.mediaGenerationExecutor],
         ...[
           'probe',
           'filmstrip',

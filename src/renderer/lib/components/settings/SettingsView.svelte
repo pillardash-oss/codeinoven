@@ -93,7 +93,6 @@
   import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
   import IdeModeSettingsTab from './IdeModeSettingsTab.svelte'
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
-  import MediaGenerationSettings from './MediaGenerationSettings.svelte'
   import OvensSettings from './OvensSettings.svelte'
   import LocalAiSettings from './LocalAiSettings.svelte'
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
@@ -1483,24 +1482,6 @@
       <BrowserSettingsTab {config} {settingsReady} {updateConfig} />
     {:else if section === 'audits'}
       <AuditSettingsTab {config} {settingsReady} {updateConfig} />
-    {:else if section === 'design'}
-      <div class="p-6 pb-24">
-        <div class="mb-6">
-          <h1 class="text-xl font-bold tracking-tight">Design and video</h1>
-          <p class="mt-0.5 text-sm text-muted">
-            Pick the models that make images, clips, sound and copy for design and video work. Each
-            project sets its own save folders from its design or video board.
-          </p>
-          {#if error}
-            <p class="mt-2 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
-              {error}
-            </p>
-          {/if}
-        </div>
-        <div class="mb-6">
-          <MediaGenerationSettings {config} {settingsReady} {updateConfig} />
-        </div>
-      </div>
     {:else if section === 'cio-prompts'}
       <CioPromptsSettings />
     {:else if section === 'heartbeat'}

@@ -24,12 +24,7 @@ import {
   atomicWrite,
   resolveWithinRoot
 } from '../../lib/utils'
-import type {
-  AppConfig,
-  HeartbeatConfig,
-  MediaGenerationModels,
-  VisionModelRecord
-} from '../../lib/types'
+import type { AppConfig, HeartbeatConfig, VisionModelRecord } from '../../lib/types'
 import { Logger } from '../system/logger'
 import { startupTelemetry, type StartupStep } from '../system/startup-telemetry'
 import {
@@ -95,30 +90,6 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
   return Math.min(max, Math.max(min, Math.round(value)))
 }
 
-/**
- * The per-kind media models, read tolerantly from a config file.
- *
- * Each kind is independent: a user who makes pictures but never clips has one
- * model and no complaint about the other two, and an entry that is not a string
- * is dropped rather than guessed at.
- */
-function normalizedMediaModels(models: unknown): MediaGenerationModels {
-  if (models === null || typeof models !== 'object') return {}
-  const source = models as Record<string, unknown>
-  const read = (key: 'image' | 'video' | 'audio'): string | undefined => {
-    const value = source[key]
-    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
-  }
-  const image = read('image')
-  const video = read('video')
-  const audio = read('audio')
-  return {
-    ...(image ? { image } : {}),
-    ...(video ? { video } : {}),
-    ...(audio ? { audio } : {})
-  }
-}
-
 const DEFAULT_CONFIG: AppConfig = {
   theme: 'system',
   fontFamily: DEFAULT_APP_FONT_FAMILY,
@@ -142,7 +113,6 @@ const DEFAULT_CONFIG: AppConfig = {
   agentDefaults: {},
   auxiliaryAgents: {},
   modelProfiles: [],
-  mediaGeneration: { providerId: null, models: {} },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
   autoInstallUpdates: true,
@@ -419,16 +389,6 @@ export class StorageEngine {
       modelProfiles: (Array.isArray(config?.modelProfiles) ? config.modelProfiles : [])
         .filter(isUsableModelProfile)
         .slice(0, MAX_MODEL_PROFILES),
-      // A provider id a future version wrote is passed through as-is so the
-      // choice is not silently erased; only a missing field falls back.
-      mediaGeneration: {
-        providerId:
-          config?.mediaGeneration?.providerId ?? DEFAULT_CONFIG.mediaGeneration.providerId,
-        // One model per kind, each a plain string the user typed or the settings
-        // page wrote. Anything that is not a string is dropped rather than
-        // guessed at: a media kind with no model is simply not offered.
-        models: normalizedMediaModels(config?.mediaGeneration?.models)
-      },
       // Read tolerantly, so a hand-edited entry list arrives as a working app
       // rather than as a failed start.
       memory: {

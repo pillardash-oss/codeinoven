@@ -2,7 +2,6 @@ import type { AgentDefaultsConfig, AuxiliaryAgentConfig } from './agent'
 import type { CioCleanupCategoryId } from './cio-cleanup'
 import type { InferenceMode, PermissionLevel, ThinkingLevel } from './common'
 import type { GitPullPreference, PrMergeMethod } from './git'
-import type { MediaProviderId } from '../media-generation'
 import type { BrowserSearchEngine } from '../browser-search-engines'
 
 export interface WorkflowStage {
@@ -262,36 +261,6 @@ export interface ModelProfile {
 }
 
 /**
- * The backend that turns a prompt into an image, a clip or a track.
- *
- * One provider at a time, because one aggregator token already reaches many
- * models: the user's real choice is the model they assign to each craft, which
- * lives on the design assignment rather than here. The token itself is kept in
- * the secure vault and never in this config.
- */
-export interface MediaGenerationConfig {
-  /** The backend the app calls, or null while the user has not chosen one. */
-  providerId: MediaProviderId | null
-  /**
-   * The model each kind of media is made with, in the backend's own spelling
-   * (`black-forest-labs/flux-1.1-pro`, `owner/name`, or a version hash).
-   *
-   * One aggregator token reaches many models, and a picture, a clip and a track
-   * are not made by the same one, so the choice is per kind. A kind with no model
-   * is not offered to the agent: the capability refuses the request instead of
-   * picking something plausible.
-   */
-  models: MediaGenerationModels
-}
-
-/** The model each kind of generated media is made with. */
-export interface MediaGenerationModels {
-  image?: string
-  video?: string
-  audio?: string
-}
-
-/**
  * Bounds for `AppConfig.steerToStartWorkMinutes`: how long a turn may run
  * without changing a single file before the app steers the agent to start
  * working. Kept well under an hour so the nudge still lands in a live turn.
@@ -409,8 +378,6 @@ export interface AppConfig {
   auxiliaryAgents: AuxiliaryAgentConfig
   /** Named presets the user can apply from the model picker to shape a whole run. */
   modelProfiles: ModelProfile[]
-  /** Backend that generates images, clips and sound for a design or a composition. */
-  mediaGeneration: MediaGenerationConfig
   /** Editable default behavior prompt for project Engineering implementation turns. */
   agentBehaviorPrompt: string
   /** Automatically download available updates in the background. */
@@ -596,7 +563,6 @@ export type AppConfigPatch = Partial<
     | 'agentDefaults'
     | 'auxiliaryAgents'
     | 'modelProfiles'
-    | 'mediaGeneration'
     | 'agentBehaviorPrompt'
     | 'autoDownloadUpdates'
     | 'autoInstallUpdates'

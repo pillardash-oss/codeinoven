@@ -16,61 +16,6 @@ import { videoStudioTools } from '../../video/video-studio-tools'
 export const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
 
 /**
- * The `generate` operation, shared by the design and video capabilities.
- *
- * One tool in two capabilities, because making an asset is the same act whether a
- * page or a composition needs it, and the model is the user's assignment either
- * way. It exists because the app had no way to produce media at all: a craft
- * could only staff a text completion, so an agent that needed a music bed had to
- * improvise one.
- */
-export function generateMediaTool(roots: WorkRoots): McpTool {
-  const designRoot = workRootForKind(roots, 'design')
-  const videoRoot = workRootForKind(roots, 'video')
-  return {
-    name: 'generate',
-    description: `Generate an image, a video clip or an audio file with the model the user assigned to that craft, and save it into the project as a file. The user names the model in Settings, Design, so never choose one yourself: a craft with no assigned model is refused and you should ask the user to assign one. Write the complete brief in prompt. Pass options only when the model needs a provider-specific field (an aspect ratio, a duration, and so on). The reply carries the project-relative path; reference it from the markup and preview to check it renders.`,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        kind: {
-          type: 'string',
-          enum: ['image', 'video', 'audio'],
-          description:
-            'Which craft answers: an image, a video clip, or audio such as a music bed or a voice line.'
-        },
-        prompt: {
-          type: 'string',
-          description:
-            'The complete brief for the generation model: the subject, the style, the mood, the framing, and every constraint, written as if to someone who has seen none of this work.'
-        },
-        prompt_field: {
-          type: 'string',
-          description:
-            'Only when the model documents its prompt input under another name, such as "text". The prompt is sent under this field instead of "prompt", never under both.'
-        },
-        name: {
-          type: 'string',
-          description:
-            'Optional file name without an extension, such as hero or music-bed. The model name is used when you omit it.'
-        },
-        directory: {
-          type: 'string',
-          description: `Project-relative folder to save into. Defaults to the folder of this thread's session (${videoRoot} for a video session, ${designRoot} otherwise), so name the design's or the composition's own folder when the asset belongs to one.`
-        },
-        options: {
-          type: 'object',
-          description:
-            'Provider-specific input fields passed through as written, such as an aspect ratio or a duration. Only the fields the model documents.'
-        }
-      },
-      required: ['kind', 'prompt'],
-      additionalProperties: false
-    }
-  }
-}
-
-/**
  * Absolute cap on one gateway call, enforced by the bridge itself.
  *
  * The harness's own request timeout is the real lifetime bound, because it also sends
@@ -731,9 +676,8 @@ function authoredWorkCheckpointTool(): McpTool {
  * Operations of the app-owned design capability (`cio:design`).
  *
  * These operations are things the agent cannot do with its own tools: show
- * the design on the app's own origin, run the model the user assigned to a piece
- * of design work, save a named checkpoint, generate an asset with the model assigned to a media craft, and
- * turn a generated asset into a file beside the design. Looking at the result is
+ * the design on the app's own origin, save a named checkpoint, and turn a
+ * generated asset into a file beside the design. Looking at the result is
  * deliberately not repeated here: the browser capability already owns
  * screenshots, viewports and console reads, and the docs point at it.
  */
@@ -781,7 +725,6 @@ export function designUtilityTools(roots: WorkRoots): McpTool[] {
         additionalProperties: false
       }
     },
-    generateMediaTool(roots),
     authoredWorkCheckpointTool(),
     {
       name: 'history',
@@ -942,14 +885,14 @@ export function designUtilityTools(roots: WorkRoots): McpTool[] {
     },
     {
       name: 'save-media',
-      description: `Save a generated image, video or sound file into the project, so the design references a file of its own instead of a link that expires. Give it the https link the generation service answered with; the file is named after the source unless you name it. The reply carries the relative path to use in the markup.`,
+      description: `Save an image, video or sound file from an https link into the project, so the design references a file of its own instead of a link that expires. Give it the link; the file is named after the source unless you name it. The reply carries the relative path to use in the markup.`,
       inputSchema: {
         type: 'object',
         properties: {
           source: {
             type: 'string',
             description:
-              'The https link the generation service returned for the asset. Only an https link with a media type, from a public host, is accepted.'
+              'The https link for the asset. Only an https link with a media type, from a public host, is accepted.'
           },
           name: {
             type: 'string',
@@ -976,16 +919,13 @@ export function designUtilityTools(roots: WorkRoots): McpTool[] {
  * where the page runs and the tab refreshes itself as the agent writes. `capture`
  * freezes the composition at one second and answers with the picture, which is
  * the only way an agent can tell whether the frame it wrote is the frame it
- * meant. `generate` produces a clip, a still or a music bed with the model the
- * user assigned to that craft, which is what a composition's audio track and its
- * b-roll clips need.
+ * meant.
  */
 export function videoUtilityTools(roots: WorkRoots): McpTool[] {
   const videoRoot = workRootForKind(roots, 'video')
   return [
     ...videoStudioTools(),
     authoredWorkCritiqueTool('video'),
-    generateMediaTool(roots),
     authoredWorkCheckpointTool(),
     {
       name: 'history',

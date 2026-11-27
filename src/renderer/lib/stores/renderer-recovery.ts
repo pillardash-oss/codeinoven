@@ -238,7 +238,6 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'browser',
   'memory',
   'audits',
-  'design',
   'cio-prompts',
   'heartbeat',
   'harnesses',

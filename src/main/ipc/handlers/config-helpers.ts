@@ -13,11 +13,6 @@ import {
   normalizePrototypeCdnOrigin
 } from '../../../lib/prototypes/prototype-cdn'
 import {
-  MEDIA_PROVIDER_IDS,
-  isValidMediaModel,
-  isMediaProviderId
-} from '../../../lib/media-generation'
-import {
   MAX_BROWSER_CUSTOM_SEARCH_ENGINES,
   MAX_BROWSER_SEARCH_ENGINE_NAME_LENGTH,
   isBuiltInBrowserSearchEngineId,
@@ -68,8 +63,6 @@ import type {
   LocalProfileAnalyticsRange,
   LocalUsageClearInput,
   LocalUsageRecordStore,
-  MediaGenerationConfig,
-  MediaGenerationModels,
   ModelProfile,
   PermissionLevel,
   ThinkingLevel
@@ -172,9 +165,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'memory',
   'agentDefaults',
   'auxiliaryAgents',
-  'design',
   'modelProfiles',
-  'mediaGeneration',
   'agentBehaviorPrompt',
   'autoDownloadUpdates',
   'autoInstallUpdates',
@@ -433,53 +424,6 @@ function validateThinkingLevel(value: unknown, label: string): ThinkingLevel {
     throw new TypeError(`${label} must be one of ${THINKING_LEVEL_ORDER.join(', ')}`)
   }
   return value as ThinkingLevel
-}
-
-/**
- * Validate the generation backend choice and the model each kind is made with.
- *
- * The token lives in the secure vault, so what is left here is the backend, and
- * one model per kind of media. A kind is optional: a user who makes pictures and
- * never clips configures one model. A model is a plain reference string
- * (`owner/name`, a version hash, a provider's own spelling), validated by the
- * same rule the executor applies, so nothing here can point at a model the
- * capability would refuse.
- */
-function validateMediaGenerationConfig(value: unknown): MediaGenerationConfig {
-  if (!isRecord(value)) throw new TypeError('Generation settings must be an object')
-  for (const field of Object.keys(value)) {
-    if (field !== 'providerId' && field !== 'models') {
-      throw new TypeError(`Unsupported generation settings field: ${field}`)
-    }
-  }
-  const providerId = value.providerId
-  if (providerId !== undefined && providerId !== null && !isMediaProviderId(providerId)) {
-    throw new TypeError(`Generation provider must be one of ${MEDIA_PROVIDER_IDS.join(', ')}`)
-  }
-  const models = validateMediaModels(value.models)
-  return { providerId: providerId ?? null, models }
-}
-
-/** The per-kind media models a patch may carry. */
-function validateMediaModels(value: unknown): MediaGenerationModels {
-  if (value === undefined || value === null) return {}
-  if (!isRecord(value)) throw new TypeError('Generation models must be an object')
-  const read = (key: 'image' | 'video' | 'audio'): string | undefined => {
-    const model = value[key]
-    if (model === undefined) return undefined
-    if (!isValidMediaModel(model)) {
-      throw new TypeError(`The ${key} model must be a model reference like "owner/name"`)
-    }
-    return model.trim()
-  }
-  const image = read('image')
-  const video = read('video')
-  const audio = read('audio')
-  return {
-    ...(image ? { image } : {}),
-    ...(video ? { video } : {}),
-    ...(audio ? { audio } : {})
-  }
 }
 
 const FONT_FAMILIES = new Set(APP_FONT_OPTIONS.map((font) => font.id))
@@ -994,10 +938,6 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
 
   if ('modelProfiles' in value) {
     patch.modelProfiles = validateModelProfiles(value.modelProfiles)
-  }
-
-  if ('mediaGeneration' in value) {
-    patch.mediaGeneration = validateMediaGenerationConfig(value.mediaGeneration)
   }
 
   if ('agentBehaviorPrompt' in value) {

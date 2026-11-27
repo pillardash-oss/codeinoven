@@ -40,7 +40,6 @@ export const defaultConfig: AppConfig = {
   agentDefaults: {},
   auxiliaryAgents: {},
   modelProfiles: [],
-  mediaGeneration: { providerId: null, models: {} },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
   autoInstallUpdates: true,

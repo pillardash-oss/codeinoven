@@ -641,7 +641,6 @@ export class UtilityOrchestrationService {
   followUpExecutor: FollowUpExecutor | null = null
   designPreviewExecutor: DesignCapabilityExecutor | null = null
   designMediaExecutor: DesignCapabilityExecutor | null = null
-  mediaGenerationExecutor: DesignCapabilityExecutor | null = null
   videoPreviewExecutor: VideoCapabilityExecutor | null = null
   videoCaptureExecutor: VideoCapabilityExecutor | null = null
   scopeToolExecutor: ScopeToolExecutor | null = null
@@ -728,9 +727,6 @@ export class UtilityOrchestrationService {
   }
   setDesignMediaExecutor(executor: DesignCapabilityExecutor | null): void {
     return this.units['executors'].setDesignMediaExecutor(executor)
-  }
-  setMediaGenerationExecutor(executor: DesignCapabilityExecutor | null): void {
-    return this.units['executors'].setMediaGenerationExecutor(executor)
   }
   setVideoPreviewExecutor(executor: VideoCapabilityExecutor | null): void {
     return this.units['executors'].setVideoPreviewExecutor(executor)
