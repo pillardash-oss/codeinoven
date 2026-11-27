@@ -387,25 +387,25 @@ export class ThreadViewUnmirroredTraceStartTime extends BoardUnit<ThreadView> {
       }))
   )
 
-  /** True when any card sits on the composer's top edge, so the composer's top
-   *  rule breaks into the dashed line that carries the join and it stops opening
-   *  a gap above itself. */
-  composerStackedAbove = $derived(this.root.submitBrainstormDecision.composerStackSlots.length > 0)
-
   /** Whether a card sits above the named slot, so its own top rule is the broken
    *  join rather than a solid edge. */
   stackedAboveSlot(slot: ComposerStackSlot): boolean {
     return this.root.submitBrainstormDecision.composerStackSlots.indexOf(slot) > 0
   }
 
+  /** True when any card sits on the composer's top edge, so the composer's top
+   *  rule breaks into the dashed line that carries the join and it stops opening
+   *  a gap above itself. */
+  composerStackedAbove = $derived(this.root.submitBrainstormDecision.composerStackSlots.length > 0)
+
   /** Where the scroll-to-latest button floats within the bottom-chrome wrapper.
-   *  The button is 1.75rem tall. A stack on the composer starts at the wrapper's
-   *  top edge (the cards are flush, with no top padding), so the button centres
-   *  on that edge at half its own height: -0.875rem. With nothing above the
-   *  composer the wrapper's top edge *is* the composer's top rule, so the button
-   *  floats clear of it, its lower edge 0.5rem above: -(1.75rem + 0.5rem).
-   *  Change the button's height and both spots move with it. */
-  scrollButtonTop = $derived(this.composerStackedAbove ? '-0.875rem' : '-2.25rem')
+   *  The button is 1.75rem tall and always clears the wrapper's top edge by
+   *  0.5rem: -(1.75rem + 0.5rem). It used to centre on that edge whenever a card
+   *  sat above the composer, but the cards are surfaces painted over the band,
+   *  so the pill was left half buried under the task list with only its top
+   *  half readable. Flush above the edge keeps it whole whatever the stack is.
+   *  Change the button's height and this offset moves with it. */
+  scrollButtonTop = '-2.25rem'
 
   /** Send a CodeInOven utility turn   the slash spelling of the @cio-utility
    *  composer tag. The main process owns the utility contract for that turn. */
