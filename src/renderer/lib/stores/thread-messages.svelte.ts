@@ -457,6 +457,7 @@ class ThreadMessagesStore {
     // that makes the rows renderable. `window` separates a bounded tail read
     // from an unbounded transcript read, and `attempt` shows a retry, which is
     // the difference between a slow boot and a failed one.
+    const generation = this.#openGeneration
     const span = perfSpan('thread.messages.load', {
       projectId,
       threadId,
@@ -508,6 +509,13 @@ class ThreadMessagesStore {
               entry.hasOlder = aligned.hasOlder
             }
           }
+          // Another thread was opened while this read was in flight: the reader
+          // is looking at that one now, so this answer is dropped unfinished
+          // instead of reconciled, published and rendered off screen.
+          if (generation !== this.#openGeneration) {
+            span.end('abandoned', { messages: serverMessages.length, attempts: attempt + 1 })
+            return
+          }
           this.reconcile(projectId, threadId, serverMessages)
           entry.loaded = true
           entry.error = ''
@@ -522,6 +530,10 @@ class ThreadMessagesStore {
           this.cache.notify(projectId, threadId)
           if (attempt > 0) {
             span.fail(err, { attempts: attempt + 1 })
+            return
+          }
+          if (generation !== this.#openGeneration) {
+            span.end('abandoned', { attempts: attempt + 1 })
             return
           }
           await new Promise((resolve) => setTimeout(resolve, 200))
@@ -631,8 +643,20 @@ class ThreadMessagesStore {
    * app falls back to an empty state, where nothing on screen may keep working.
    */
   setActive(projectId: string | null, threadId: string | null): void {
+    // A newer open supersedes whatever was still loading: the read in flight for
+    // the thread the user left is abandoned where its own work would land, so it
+    // can neither publish a transcript nobody is looking at nor spend the
+    // renderer reconciling one. The main-process read still finishes (an IPC call
+    // cannot be recalled), but nothing waits for it and nothing is done with it.
+    this.#openGeneration += 1
     this.cache.setActive(projectId, threadId)
   }
+
+  /**
+   * The open that owns the screen. A load records this when it starts and drops
+   * its work if another thread has been opened since.
+   */
+  #openGeneration = 0
 
   /**
    * Take a conversation off the stack of what is on screen, handing the live

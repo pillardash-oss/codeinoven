@@ -90,7 +90,29 @@ export interface ThreadStudioOpenRequest {
 const SOURCE_PROCESS_COUNT_TTL_MS = 30_000
 
 class WorkspaceState {
-  /** Currently open thread, if any. */
+  /**
+   * The thread the conversation pane is showing.
+   *
+   * This is the selection the click makes, published immediately: it is the one
+   * surface the user asked to see, and everything else in the app reads
+   * {@link selectedThread}, which follows one task later. The difference is not
+   * cosmetic. Svelte applies every reaction to a state change in one flush, in
+   * component order, so publishing the selection to the whole app at once meant
+   * the sidebar, the dock, the git panel and the board all re-derived and fired
+   * their own work *before* the pane that answers the click could mount. On the
+   * real app that flush measured 1.4 s for a blank thread: a six millisecond
+   * template waiting a second for the rest of the app to finish reacting.
+   *
+   * The pane is the only reader of this value that has to be current, so it is
+   * the only reader given a value that is current.
+   */
+  paneThread: Thread | null = $state.raw(null)
+  /**
+   * The open thread as the rest of the app sees it.
+   *
+   * Published one task after {@link paneThread}, so a click paints its
+   * conversation before anything else reacts to the same selection.
+   */
   selectedThread: Thread | null = $state(null)
   /**
    * True while the launch's saved thread is still being restored.
@@ -301,7 +323,13 @@ class WorkspaceState {
     // so opening a thread re-reads it on the spot: the row the user just entered
     // is measured against this moment instead of the last shared tick.
     relativeTimeClock.refresh()
-    this.selectedThread = thread
+    // The pane gets the thread now; the rest of the app gets it one task later,
+    // after the conversation is on screen (see `paneThread`).
+    this.paneThread = thread
+    afterShellPaint(() => {
+      if (this.paneThread !== thread) return
+      this.selectedThread = thread
+    })
     // Exactly one transcript is live at a time; the other slots are frozen
     // snapshots that must not be fed events while they are off screen.
     threadMessages.setActive(thread.projectId, thread.id)
@@ -436,7 +464,11 @@ class WorkspaceState {
 
   /** Update the selected thread object in place (e.g. after a status change). */
   updateThread(thread: Thread): void {
-    if (this.selectedThread?.id === thread.id) {
+    if (this.paneThread?.id === thread.id) {
+      // Both surfaces follow: this republishes the row the open conversation is
+      // already reading, which is not a selection change and must not wait a
+      // task (a lagging row would re-render the pane twice).
+      this.paneThread = thread
       this.selectedThread = thread
       if (!thread.settings?.ovenId || thread.settings.ovenId === 'local')
         contextSidebarState.close(`oven:${thread.projectId}:${thread.id}`)
@@ -469,7 +501,8 @@ class WorkspaceState {
    * at.
    */
   adoptConfirmedThread(thread: Thread): void {
-    if (this.selectedThread?.id !== thread.id) return
+    if (this.paneThread?.id !== thread.id) return
+    this.paneThread = thread
     this.selectedThread = thread
   }
 
@@ -653,6 +686,7 @@ class WorkspaceState {
       this.contentViewThreadRefs = { ...this.contentViewThreadRefs, [family]: null }
     }
     this.sourceProcessCountRequestId += 1
+    this.paneThread = null
     this.selectedThread = null
     // Nothing is on screen, so no transcript stays live and no frozen slot is
     // kept: the reader is not coming back to any of them from here.

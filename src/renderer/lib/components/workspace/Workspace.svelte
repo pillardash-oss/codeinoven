@@ -644,6 +644,19 @@
    * inside an `{#if}` and a narrowed property access does not survive the callback
    * Svelte compiles that branch into.
    */
+  /**
+   * What the conversation shows, and what everything else reacts to.
+   *
+   * The pane reads the selection the click made (`paneThread`), which exists
+   * immediately. Every other surface in this view reads `selectedThread`, which
+   * the store publishes one task later: Svelte applies every reaction to a state
+   * change in one flush in component order, so a selection published to the whole
+   * app at once made the sidebar, the dock and the git panel all re-derive and
+   * fire their own work before the pane could mount. Measured on the real app,
+   * that flush took 1.4 s for a blank thread - a six millisecond template behind
+   * a second of unrelated reactions.
+   */
+  const paneThread = $derived(workspaceState.paneThread)
   const selectedThread = $derived(board.openThreadFromSwitcher.selectedThread)
   const activeProject = $derived(board.openThreadFromSwitcher.activeProject)
 
@@ -793,7 +806,7 @@
       <WorkspaceConversationPane
         mode={board.props.mode}
         active={board.props.active}
-        {selectedThread}
+        selectedThread={paneThread}
         visibleProjects={board.mergeThreadsInList.visibleProjects}
         projectIcons={board.createThreadInProject.projectIcons}
         threadsByProject={board.markThreadReadAndApply.threadsByProject}
