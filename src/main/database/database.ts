@@ -84,6 +84,7 @@ export class Database {
     this.asyncReads = new DatabaseAsyncReads(file, workerFactory)
     this.queries = new DatabaseQueries({
       getWorker: () => this.maintenance.getWorker(),
+      getReadWorker: () => this.asyncReads.getReadWorker(),
       getAsyncWorker: () => this.asyncReads.getWorker(),
       all: (sql, ...params) => this.connection.all(sql, ...params),
       syncProviderDeltas: (threadId, sessionId, messages) =>

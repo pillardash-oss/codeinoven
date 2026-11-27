@@ -21,6 +21,12 @@ export interface DatabaseQueriesHost {
   /** The running maintenance worker, or null when this database has none. */
   getWorker(): DatabaseWorker | null
   /**
+   * A read connection from the read pool, or null when this database has none
+   * (an in-memory test database). Reads routed here cannot occupy the connection
+   * a click is waiting on, and they do not queue behind each other either.
+   */
+  getReadWorker(): DatabaseWorker | null
+  /**
    * The async lane's own worker and read connection, or null when this database
    * has none (an in-memory test database). Reads routed here cannot occupy the
    * connection a click is waiting on.
@@ -50,6 +56,18 @@ export class DatabaseQueries {
 
   constructor(host: DatabaseQueriesHost) {
     this.host = host
+  }
+
+  /**
+   * The connection a read may use: a pool reader when there is one, the
+   * maintenance worker otherwise.
+   *
+   * Reads are the only traffic that never conflicts with another read, so they
+   * are handed a connection of their own instead of joining the writer's queue.
+   */
+  private readWorker(): DatabaseWorker | null {
+    const reader = this.host.getReadWorker()
+    return reader?.isRunning() ? reader : this.host.getWorker()
   }
 
   /**
@@ -92,7 +110,15 @@ export class DatabaseQueries {
     // cannot make a click wait. It asks for the interactive queue of ITS worker,
     // which is a single queue: there is nothing on that thread to be behind.
     const asyncWorker = lane === 'async' ? this.host.getAsyncWorker() : null
-    const worker = asyncWorker?.isRunning() ? asyncWorker : this.host.getWorker()
+    // Reads go to the read pool, not to the writer: a read never conflicts with
+    // another read, and the writer's queue is where a maintenance pass can hold
+    // one for as long as it takes.
+    const readWorker = asyncWorker === null ? this.host.getReadWorker() : null
+    const worker = asyncWorker?.isRunning()
+      ? asyncWorker
+      : readWorker?.isRunning()
+        ? readWorker
+        : this.host.getWorker()
     if (worker?.isRunning()) {
       const response = await raceWorkerQuery(
         worker.query(
@@ -146,7 +172,7 @@ export class DatabaseQueries {
     maxRows: number,
     includeTransport = false
   ): Promise<{ ok: boolean; messages: AgentMessage[]; truncated: boolean; error?: string }> {
-    const worker = this.host.getWorker()
+    const worker = this.readWorker()
     if (worker?.isRunning()) {
       const response = await worker.queryMessages(sql, params, maxRows, includeTransport)
       if (response.ok) {
@@ -180,7 +206,7 @@ export class DatabaseQueries {
     params: unknown[],
     maxRows: number
   ): Promise<{ ok: boolean; messages: UserMessageSummary[]; truncated: boolean; error?: string }> {
-    const worker = this.host.getWorker()
+    const worker = this.readWorker()
     if (worker?.isRunning()) {
       const response = await worker.queryUserMessages(sql, params, maxRows)
       if (response.ok) {
@@ -223,7 +249,7 @@ export class DatabaseQueries {
     failed: string[]
     error?: string
   }> {
-    const worker = this.host.getWorker()
+    const worker = this.readWorker()
     if (!worker?.isRunning()) {
       return { ok: false, summaries: [], failed: [], error: 'no maintenance worker' }
     }
