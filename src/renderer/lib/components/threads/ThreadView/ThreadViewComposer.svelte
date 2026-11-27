@@ -16,7 +16,7 @@
   import CardNotice from '../../shared/CardNotice.svelte'
   import { cardArrive, dismissSlide } from '../../shared/card-motion'
   import AgentTodoCard from '../AgentTodoCard.svelte'
-  import ComposerQueuedCard from '../ComposerQueuedCard.svelte'
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import { queuedResourceWait } from '$lib/stores/queued-resource-wait.svelte'
   import AgentQuestionCard from '../DeferredAgentQuestionCard.svelte'
   import AgentSecretCard from '../AgentSecretCard.svelte'
@@ -136,44 +136,49 @@
 </script>
 
 <!-- One queued-message card, rendered in two places: over the bottom chrome in
-     every layout, and inside the composer's own column in the centered one. -->
+     every layout, and inside the composer's own column in the centered one.
+     A card only exists once the user has queued something, so its chunk loads at
+     that moment instead of riding the first screen; the wait is one cached file
+     read behind an already-visible card slot. -->
 {#snippet queuedMessageCard()}
-  <ComposerQueuedCard
-    text={board.steerQueuedMessage.queuedMessage}
-    hasContent={board.steerQueuedMessage.queuedHasContent}
-    attachments={board.steerQueuedMessage.queuedAttachments}
-    previewUrls={board.studioTemporaryChatContext.attachmentPreview.urls}
-    queue={board.unmirroredTraceStartTime.queuedRows}
-    promptReferences={board.steerQueuedMessage.queuedPromptReferences}
-    presentation={board.steerQueuedMessage.queuedPresentation}
-    startAfterThreads={board.steerQueuedMessage.queuedStartAfterThreads}
-    resourceWait={queuedResourceWait.for(
-      board.handleAgentEvent.thread.projectId,
-      board.handleAgentEvent.thread.id
-    )?.decision ?? null}
-    delivering={board.steerQueuedMessage.queuedDelivering}
-    resourceWaitTarget={queuedResourceWait.for(
-      board.handleAgentEvent.thread.projectId,
-      board.handleAgentEvent.thread.id
-    )?.target ?? null}
-    steerModifierLabel={board.state.steerModifierLabel}
-    threadId={board.handleAgentEvent.thread.id}
-    stackedAbove={board.unmirroredTraceStartTime.stackedAboveSlot('queued')}
-    onPreviewAttachment={board.studioTemporaryChatContext.openQueuedAttachment}
-    onSteer={() => void board.steerQueuedMessage.steerQueuedMessage()}
-    onSendQueued={(id) => void board.steerQueuedMessage.steerQueuedMessage(id)}
-    onEdit={board.steerQueuedMessage.editQueuedMessage}
-    onEditQueued={board.steerQueuedMessage.editQueuedMessage}
-    onDelete={board.steerQueuedMessage.deleteQueuedMessage}
-    onDeleteQueued={board.steerQueuedMessage.deleteQueuedMessage}
-    onDeleteAll={board.steerQueuedMessage.deleteAllQueuedMessages}
-    onReorder={board.steerQueuedMessage.moveQueuedMessage}
-    onAddStartAfter={() => (board.state.queuedStartAfterPickerOpen = true)}
-    onRemoveStartAfter={(dependency) =>
-      (board.steerQueuedMessage.queuedStartAfterPendingRemoval = dependency)}
-    onOpenStartAfter={(id) => void board.unmirroredTraceStartTime.openStartAfterThread(id)}
-    onPreloadStartAfter={board.unmirroredTraceStartTime.preloadStartAfterThread}
-  />
+  {#await loadCachedPanelModule('module:lib/components/threads/ComposerQueuedCard.svelte', () => import('../ComposerQueuedCard.svelte')) then { default: ComposerQueuedCard }}
+    <ComposerQueuedCard
+      text={board.steerQueuedMessage.queuedMessage}
+      hasContent={board.steerQueuedMessage.queuedHasContent}
+      attachments={board.steerQueuedMessage.queuedAttachments}
+      previewUrls={board.studioTemporaryChatContext.attachmentPreview.urls}
+      queue={board.unmirroredTraceStartTime.queuedRows}
+      promptReferences={board.steerQueuedMessage.queuedPromptReferences}
+      presentation={board.steerQueuedMessage.queuedPresentation}
+      startAfterThreads={board.steerQueuedMessage.queuedStartAfterThreads}
+      resourceWait={queuedResourceWait.for(
+        board.handleAgentEvent.thread.projectId,
+        board.handleAgentEvent.thread.id
+      )?.decision ?? null}
+      delivering={board.steerQueuedMessage.queuedDelivering}
+      resourceWaitTarget={queuedResourceWait.for(
+        board.handleAgentEvent.thread.projectId,
+        board.handleAgentEvent.thread.id
+      )?.target ?? null}
+      steerModifierLabel={board.state.steerModifierLabel}
+      threadId={board.handleAgentEvent.thread.id}
+      stackedAbove={board.unmirroredTraceStartTime.stackedAboveSlot('queued')}
+      onPreviewAttachment={board.studioTemporaryChatContext.openQueuedAttachment}
+      onSteer={() => void board.steerQueuedMessage.steerQueuedMessage()}
+      onSendQueued={(id) => void board.steerQueuedMessage.steerQueuedMessage(id)}
+      onEdit={board.steerQueuedMessage.editQueuedMessage}
+      onEditQueued={board.steerQueuedMessage.editQueuedMessage}
+      onDelete={board.steerQueuedMessage.deleteQueuedMessage}
+      onDeleteQueued={board.steerQueuedMessage.deleteQueuedMessage}
+      onDeleteAll={board.steerQueuedMessage.deleteAllQueuedMessages}
+      onReorder={board.steerQueuedMessage.moveQueuedMessage}
+      onAddStartAfter={() => (board.state.queuedStartAfterPickerOpen = true)}
+      onRemoveStartAfter={(dependency) =>
+        (board.steerQueuedMessage.queuedStartAfterPendingRemoval = dependency)}
+      onOpenStartAfter={(id) => void board.unmirroredTraceStartTime.openStartAfterThread(id)}
+      onPreloadStartAfter={board.unmirroredTraceStartTime.preloadStartAfterThread}
+    />
+  {/await}
 {/snippet}
 
 <!-- The bottom chrome takes the composer's own rung (z-40). A card here answers
