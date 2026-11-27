@@ -223,11 +223,59 @@ export class ChatComposerCaptureComposerRoot extends BoardUnit<ChatComposer> {
    * message go rather than hold it. The read happens on a user send, not in a
    * render loop, so it costs one indexed lookup and one small config read.
    */
+  /**
+   * The expert gate's answer for this thread, kept warm.
+   *
+   * The send path asks this question before every message, and asking it over IPC
+   * at submit time is exactly the wrong moment: the words were already handed
+   * over, so the message waited a round trip - a whole second when the main
+   * process is busy - before it could appear in the transcript. The question never
+   * changes without the user staffing an expert, so it is read once when the
+   * composer mounts and again after a window of use, and the send path answers
+   * from here.
+   *
+   * `undefined` is "not read yet", which is why the send path can tell a warm
+   * answer from none and fall back to reading when the reader types and sends
+   * faster than one round trip.
+   */
+  private expertState: ThreadExpertState | null | undefined = undefined
+  private expertStateReadAt = 0
+  private static readonly EXPERT_STATE_FRESH_MS = 30_000
+
+  /** Read the expert gate's answer before a send needs it. */
+  prefetchExpertState(): void {
+    if (!this.root.props.projectId || !this.root.props.threadId) return
+    if (this.cachedExpertState() !== undefined) return
+    void this.readExpertState()
+  }
+
+  /** The warm answer, or `undefined` when there is none to decide with. */
+  cachedExpertState(): ThreadExpertState | null | undefined {
+    if (this.expertState === undefined) return undefined
+    if (
+      Date.now() - this.expertStateReadAt >
+      ChatComposerCaptureComposerRoot.EXPERT_STATE_FRESH_MS
+    ) {
+      return undefined
+    }
+    return this.expertState
+  }
+
   async readExpertState(): Promise<ThreadExpertState | null> {
     if (!this.root.props.projectId || !this.root.props.threadId) return null
     try {
-      return await invoke('experts:state', this.root.props.projectId, this.root.props.threadId)
+      const state = await invoke(
+        'experts:state',
+        this.root.props.projectId,
+        this.root.props.threadId
+      )
+      this.expertState = state
+      this.expertStateReadAt = Date.now()
+      return state
     } catch {
+      // A read that fails answers nothing; the gate then just lets the send go.
+      this.expertState = null
+      this.expertStateReadAt = Date.now()
       return null
     }
   }
@@ -258,12 +306,18 @@ export class ChatComposerCaptureComposerRoot extends BoardUnit<ChatComposer> {
     const input: ExpertDecisionInput = { choice, silent }
     if (this.root.props.projectId && this.root.props.threadId) {
       try {
-        this.expertGateState = await invoke(
+        const decided = await invoke(
           'experts:decide',
           this.root.props.projectId,
           this.root.props.threadId,
           input
         )
+        this.expertGateState = decided
+        // The send path answers from the warm copy, so the answer the user just
+        // gave has to land in it: a card that asked twice for one decision would
+        // be asking a question it already had.
+        this.expertState = decided
+        this.expertStateReadAt = Date.now()
       } catch {
         // The decision is remembered for the next send; it must not block this one.
       }

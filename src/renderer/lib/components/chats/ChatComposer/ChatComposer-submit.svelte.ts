@@ -1,4 +1,5 @@
 import { flushSync, tick } from 'svelte'
+import type { ThreadExpertState } from '$shared/ipc-contract'
 import { placeCaretAtEnd } from '../../shared/rich-markdown'
 import { type ComposerKeydownContext } from '../chat-composer-keydown'
 import { isSlashRoutedAction, composerReadingSurface } from '../chat-composer-slash.svelte'
@@ -264,7 +265,17 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
    * sends straight through.
    */
   async offerExpertCardOrSend(msg: string, direct?: boolean): Promise<void> {
-    const state = await this.root.captureComposerRoot.readExpertState()
+    this.decideWithExpertState(await this.root.captureComposerRoot.readExpertState(), msg, direct)
+  }
+
+  /**
+   * The same decision, from an answer that is already in hand.
+   *
+   * Synchronous on purpose: this is the path a normal send takes, and it must not
+   * be able to wait for anything. The words are the user's; the card, the turn
+   * and the dispatch follow.
+   */
+  decideWithExpertState(state: ThreadExpertState | null, msg: string, direct?: boolean): void {
     const session = expertSessionFor(sessionTagKind(msg), state?.session ?? null)
     if (
       !state ||
@@ -490,9 +501,17 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
       return
     }
     // A design or video session holds its send once, so the expert card can ask.
-    // Reading the answer is one call on the user's own action, and the common
-    // case (a thread that already answered, or a plain message) sends through.
+    // The answer is read when the composer mounts, not here: a send asks a
+    // question that was already answered, and waiting for it put a round trip
+    // between the click and the message on screen. A reader who types and sends
+    // inside the composer's first round trip is the only case left that waits,
+    // and it waits for the same answer it would have got anyway.
     if (this.root.props.projectId && this.root.props.threadId) {
+      const warm = this.root.captureComposerRoot.cachedExpertState()
+      if (warm !== undefined) {
+        this.decideWithExpertState(warm, msg, direct)
+        return
+      }
       void this.offerExpertCardOrSend(msg, direct)
       return
     }
