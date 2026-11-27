@@ -1028,6 +1028,23 @@ describe.skipIf(process.platform === 'win32')('mapClaudeCodeRecord usage-cap not
   it('classifies the five-hour cap notice as a quota issue', () => {
     const issue = completedIssue(resultRecord("You've hit your 5-hour limit · resets 3:40pm"))
     expect(issue).toMatchObject({ kind: 'quota', retryable: true })
+    expect(issue?.retryAt).toBeGreaterThan(Date.now())
+  })
+
+  it('keeps a reset time from the notice when the record carries no rate-limit window', () => {
+    const issue = completedIssue(
+      resultRecord("You've hit your weekly limit · resets 6am (Africa/Lagos)")
+    )
+    expect(issue).toMatchObject({ kind: 'quota', retryable: true })
+    // The notice states the clock in its own zone, so the scheduled reset must
+    // land on 6am there no matter what zone this machine runs in.
+    expect(
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: 'Africa/Lagos',
+        hour: '2-digit',
+        hourCycle: 'h23'
+      }).format(new Date(issue?.retryAt ?? 0))
+    ).toBe('06')
   })
 })
 

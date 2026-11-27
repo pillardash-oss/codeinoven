@@ -3,6 +3,7 @@ import {
   classifyProviderIssue,
   isUsageLimitNoticeText,
   isUsageResetWaitIssue,
+  parseClockResetAt,
   RATE_LIMIT_COOLDOWN_MAX_ATTEMPTS,
   rateLimitCooldownMs
 } from '../../src/lib/provider-issue'
@@ -83,6 +84,55 @@ describe('classifyProviderIssue usage-limit detection', () => {
   it('classifies rate-limit wording and 429 status as rate_limit', () => {
     expect(classifyProviderIssue('Rate limit exceeded', 429)).toBe('rate_limit')
     expect(classifyProviderIssue('Too many requests')).toBe('rate_limit')
+  })
+})
+
+describe('parseClockResetAt', () => {
+  // 06:16 UTC on Nov 27 is 07:16 in Africa/Lagos, so today's 6am there has
+  // already passed and the next occurrence is the 28th at 05:00 UTC.
+  const now = Date.parse('2026-11-27T06:16:40Z')
+
+  function localReset(hour: number, minute: number): number {
+    const reset = new Date(now)
+    reset.setHours(hour, minute, 0, 0)
+    if (reset.getTime() <= now) reset.setDate(reset.getDate() + 1)
+    return reset.getTime()
+  }
+
+  it("parses the weekly cap notice's zone-less-minutes clock in the zone it names", () => {
+    expect(parseClockResetAt("You've hit your weekly limit · resets 6am (Africa/Lagos)", now)).toBe(
+      Date.parse('2026-11-28T05:00:00Z')
+    )
+  })
+
+  it('keeps minutes when the notice states them', () => {
+    expect(
+      parseClockResetAt("You've hit your 5-hour limit · resets 6:05pm (Africa/Lagos)", now)
+    ).toBe(Date.parse('2026-11-27T17:05:00Z'))
+  })
+
+  it('reads midnight and noon as 12 rather than 0', () => {
+    expect(parseClockResetAt('resets 12am (Africa/Lagos)', now)).toBe(
+      Date.parse('2026-11-27T23:00:00Z')
+    )
+    expect(parseClockResetAt('resets 12pm (Africa/Lagos)', now)).toBe(
+      Date.parse('2026-11-27T11:00:00Z')
+    )
+  })
+
+  it('resolves the wall clock in the machine zone when the notice names none', () => {
+    expect(parseClockResetAt('resets 6am', now)).toBe(localReset(6, 0))
+    expect(parseClockResetAt('resets at 6:30am', now)).toBe(localReset(6, 30))
+  })
+
+  it('falls back to the machine zone when the named zone is unknown', () => {
+    expect(parseClockResetAt('resets 6am (Not/AZone)', now)).toBe(localReset(6, 0))
+  })
+
+  it('ignores text without a clock time or with an impossible one', () => {
+    expect(parseClockResetAt("You've hit your weekly limit", now)).toBeUndefined()
+    expect(parseClockResetAt('resets 13pm', now)).toBeUndefined()
+    expect(parseClockResetAt('resets 6:75am', now)).toBeUndefined()
   })
 })
 
