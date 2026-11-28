@@ -205,7 +205,14 @@ function expandShellSegment(
 }
 
 /** Commands that run another command from a string. A scratch-confined call
- *  cannot vouch for what these evaluate, so they always ask. */
+ *  cannot vouch for what these evaluate, so they always ask.
+ *
+ *  This is also where the delete gate stops: detection reads the command text,
+ *  so a delete that is written into a file (`bun run cleanup.ts`) or built from
+ *  a string (`node -e "fs.rmSync(…, { recursive: true })"`) is not seen at all.
+ *  Inspecting what a program does is undecidable, so Auto Review stops only for
+ *  text that names the removal, and a script is trusted the way running the
+ *  project's own task is. */
 const SHELL_INTERPRETERS = new Set([
   'sh',
   'bash',
@@ -280,7 +287,10 @@ const MAX_PROVEN_COMMAND_LENGTH = 8192
  *  A newline ends a command exactly as `;` does, so every verb is anchored on
  *  one too. Without it, `echo start` and a following line `rm -rf /` read as a
  *  single command with no destructive verb in it, and the delete ran without a
- *  card. */
+ *  card.
+ *
+ *  These run over `shellExecutableText`, so a heredoc body full of examples is
+ *  not read as a command. */
 const DESTRUCTIVE_COMMAND_PATTERNS = [
   /(?:^|[;&|\n]\s*)rm\s+(?=[^\n;&|]*(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?:\s|$))/u,
   /(?:^|[;&|\n]\s*)find\s+[^\n;&|]+\s-delete(?:\s|$)/u,
@@ -509,9 +519,10 @@ export class PermissionPolicy {
       return this.createDecision('ask', false, destructiveReason, risk, scope)
     }
 
-    const destructiveCommands = commands.filter((command) =>
-      DESTRUCTIVE_COMMAND_PATTERNS.some((pattern) => pattern.test(command))
-    )
+    const destructiveCommands = commands.filter((command) => {
+      const executable = shellExecutableText(command)
+      return DESTRUCTIVE_COMMAND_PATTERNS.some((pattern) => pattern.test(executable))
+    })
     if (destructiveCommands.length > 0) {
       // The command still runs on the user's machine, but a removal that
       // provably stays inside the folder this session was handed (its own
@@ -1178,6 +1189,91 @@ function containsLiveShellCharacter(
     if (characters.includes(character)) return true
   }
   return false
+}
+
+/** Whether anything in a command could run code that a heredoc body holds: an
+ *  interpreter named as a command, a script run by path (`./deploy.sh`,
+ *  `/usr/local/bin/task`, which starts a segment), or a script-named file. */
+const SHELL_EXECUTION_MENTION =
+  /\b(?:sh|bash|zsh|dash|fish|ksh|csh|tcsh|cmd|powershell|pwsh|node|nodejs|deno|python|python3|perl|ruby|eval|source|xargs|bun)\b|\S\.(?:sh|bash|zsh|py|js|mjs|cjs|ts|mts|rb|pl|php|lua|ps1)\b|(?:^|[;&|(\n]\s*)(?:\/|\.\.?\/)/u
+/** One heredoc the scan can read: where its body starts and where its terminator
+ *  line starts. */
+interface HeredocBody {
+  readonly bodyStart: number
+  readonly terminatorStart: number
+}
+const HEREDOC_OPERATOR = /^<<(-?)[ \t]*(?:"([^"\n]*)"|'([^'\n]*)'|([^\s;&|<>()]+))/u
+
+/** The body of the heredoc whose `<<` sits at `index`, or undefined when the
+ *  operator or its terminator cannot be read. */
+function heredocBody(command: string, index: number): HeredocBody | undefined {
+  const match = HEREDOC_OPERATOR.exec(command.slice(index))
+  if (match === null) return undefined
+  const delimiter = match[2] ?? match[3] ?? match[4] ?? ''
+  if (match[0].includes('\n') || delimiter === '') return undefined
+  const operatorLineEnd = command.indexOf('\n', index + match[0].length)
+  if (operatorLineEnd === -1) return undefined
+  const tabs = match[1] === '-'
+  let lineStart = operatorLineEnd + 1
+  while (lineStart <= command.length) {
+    const lineEnd = command.indexOf('\n', lineStart)
+    const end = lineEnd === -1 ? command.length : lineEnd
+    const line = command.slice(lineStart, end)
+    if ((tabs ? line.replace(/^\t+/u, '') : line) === delimiter) {
+      return { bodyStart: operatorLineEnd + 1, terminatorStart: lineStart }
+    }
+    if (lineEnd === -1) break
+    lineStart = lineEnd + 1
+  }
+  return undefined
+}
+
+/** The part of a command a destructive verb can appear in: the same text with
+ *  heredoc bodies removed.
+ *
+ *  A body is data written into a file, so `cat > probe.md <<'EOF'` followed by a
+ *  line that quotes `rm -rf` as an example removes nothing and must not raise a
+ *  card. The body is code only when something left in the command can run it,
+ *  so a command that still names an interpreter, a script run by path, or a
+ *  script-named file keeps every body — a body is never dropped on a guess. An
+ *  operator or terminator this module cannot read keeps the text as written. */
+function shellExecutableText(command: string): string {
+  const stripped = stripHeredocBodies(command)
+  if (stripped === command || SHELL_EXECUTION_MENTION.test(stripped)) return command
+  return stripped
+}
+
+/** The command text with every readable heredoc body cut out. */
+function stripHeredocBodies(command: string): string {
+  const pieces: string[] = []
+  let copiedTo = 0
+  let quote: '"' | "'" | null = null
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]!
+    if (quote !== null) {
+      if (character === '\\' && quote === '"' && command[index + 1] !== undefined) index += 1
+      else if (character === quote) quote = null
+      continue
+    }
+    if (character === '\\' && command[index + 1] !== undefined) {
+      index += 1
+      continue
+    }
+    if (character === '"' || character === "'") {
+      quote = character
+      continue
+    }
+    // `<<<` is a here-string and names no body.
+    if (character !== '<' || command[index + 1] !== '<' || command[index + 2] === '<') continue
+    const body = heredocBody(command, index)
+    if (body === undefined) return command
+    pieces.push(command.slice(copiedTo, body.bodyStart))
+    copiedTo = body.terminatorStart
+    index = body.terminatorStart - 1
+  }
+  if (copiedTo === 0) return command
+  pieces.push(command.slice(copiedTo))
+  return pieces.join('')
 }
 
 function isReadableTarget(operand: string): boolean {
