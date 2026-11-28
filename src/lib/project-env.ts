@@ -392,6 +392,22 @@ export function parseProjectEnvFile(contents: string): ProjectEnvLine[] {
   })
 }
 
+/**
+ * A document reduced to the lines the key list can hold.
+ *
+ * The editor keeps comments and blank lines because they belong to the file. The
+ * key list writes assignments alone, so it compares and saves a file through this
+ * form; that is what keeps a switch between the two surfaces from reading as an
+ * unsaved edit on a file that carries a comment.
+ */
+export function projectEnvKeysText(contents: string): string {
+  return parseProjectEnvFile(contents)
+    .flatMap((line) =>
+      line.kind === 'assignment' ? [formatProjectEnvLine(line.name, line.value, line.disabled)] : []
+    )
+    .join('\n')
+}
+
 /** The name and value of one `NAME=value` line, or null when the line is not one. */
 function parseAssignment(body: string): { name: string; value: string } | null {
   const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/u.exec(body)

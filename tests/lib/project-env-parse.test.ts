@@ -3,6 +3,7 @@ import {
   formatProjectEnvLine,
   isEnvFileNameTaken,
   parseProjectEnvFile,
+  projectEnvKeysText,
   PROJECT_ENV_DISABLED_PREFIX,
   sameEnvFileName,
   suggestEnvFileName
@@ -77,5 +78,28 @@ describe('env file names', () => {
       suggestEnvFileName(['.env', '.env.local', '.env.development', '.env.production', '.env.test'])
     ).toBe('.env.2')
     expect(suggestEnvFileName(['.env', '.env.2'])).toBe('.env.local')
+  })
+})
+
+describe('projectEnvKeysText', () => {
+  it('keeps the keys and drops the lines the key list cannot hold', () => {
+    const text = ['# deployment note', 'PORT=3000', '', '#cio-cmt FEATURE_FLAG=off'].join('\n')
+    expect(projectEnvKeysText(text)).toBe(
+      ['PORT=3000', `${PROJECT_ENV_DISABLED_PREFIX} FEATURE_FLAG=off`].join('\n')
+    )
+  })
+
+  it('reports a file with comments as unchanged when its keys are', () => {
+    // The panel compares the key surface against this form, so a comment a row can
+    // never reproduce must not read as an edit after a save in the editor.
+    const saved = ['# note', 'PORT=3000', '', 'DEBUG=1'].join('\n')
+    expect(projectEnvKeysText(saved)).toBe(projectEnvKeysText(['PORT=3000', 'DEBUG=1'].join('\n')))
+  })
+
+  it('still reports a changed key', () => {
+    const saved = ['# note', 'PORT=3000'].join('\n')
+    expect(projectEnvKeysText(saved)).not.toBe(
+      projectEnvKeysText(['# note', 'PORT=4000'].join('\n'))
+    )
   })
 })

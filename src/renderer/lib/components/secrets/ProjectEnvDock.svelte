@@ -23,6 +23,7 @@
     compareEnvFileNames,
     formatProjectEnvLine,
     parseProjectEnvFile,
+    projectEnvKeysText,
     suggestEnvFileName,
     validateEnvFileName,
     type ProjectEnvFile
@@ -245,7 +246,17 @@
    * saves; serializing simply leaves it out of the file.
    */
   const draft = $derived(surface === 'keys' ? serializeRows(rows) : body)
-  const dirty = $derived(draft !== savedBody)
+  /**
+   * The stored document in the shape the current surface writes it.
+   *
+   * The editor writes every line, comments and blank lines included, while the key
+   * list writes the assignments alone. Comparing each surface against its own shape
+   * of the stored file is what keeps a mode switch from reading as an unsaved edit:
+   * a file that carries a comment looked dirty the moment it was shown as keys,
+   * because the rows could never reproduce that line.
+   */
+  const savedForSurface = $derived(surface === 'keys' ? projectEnvKeysText(savedBody) : savedBody)
+  const dirty = $derived(draft !== savedForSurface)
   /** A key whose name is still being typed: not in the file, but not disposable. */
   const hasUnnamedRow = $derived(
     surface === 'keys' && rows.some((row) => row.name.trim().length === 0)
@@ -597,7 +608,9 @@
       surface = 'keys'
       return
     }
-    body = serializeRows(rows)
+    // Every key edit writes `body` as well, so the rows are already in it. Rebuilding
+    // the body from the rows here would drop the comment and blank lines the editor
+    // holds, and the file would then read as edited when nothing had been touched.
     surface = 'editor'
   }
 
@@ -1255,14 +1268,17 @@
             <p class="px-3 py-3 text-xs text-muted">No keys match this search.</p>
           {/if}
         </div>
+        <!-- A quiet dashed row rather than a filled primary button: adding a key is
+             the secondary action here, so Save keeps the only bright control. -->
         <div class="px-3 py-2">
           <button
             type="button"
-            class="mx-auto flex h-8 w-full max-w-64 items-center justify-center bg-primary text-xs font-medium text-on-primary disabled:opacity-40"
+            class="mx-auto flex h-7 w-full max-w-56 items-center justify-center gap-1.5 border border-dashed border-border text-[0.6875rem] font-medium text-muted transition-colors hover:border-border-strong hover:bg-elevated hover:text-foreground disabled:opacity-40"
             disabled={saving || writing}
             title="Add another key to {groupPrefix}{fileName}"
             onclick={() => void addRow()}
           >
+            <CioPlus size={12} />
             New Key
           </button>
         </div>
