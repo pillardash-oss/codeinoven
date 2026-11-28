@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { piUtilityGatewayExtension } from '../../../src/main/drivers/pi-utility-gateway-extension'
 import {
   CORE_GATEWAY_TOOL_NAMES,
+  SESSION_ENVIRONMENT_ROUTE,
   PROCESS_LIST_TOOL_NAME,
   PROCESS_START_TOOL_NAME,
   PROCESS_STOP_TOOL_NAME
@@ -28,6 +29,7 @@ interface RegisteredTool {
 
 interface FakePi {
   registerTool: (tool: RegisteredTool) => void
+  on: (event: string, handler: (event: Record<string, unknown>, ctx: unknown) => unknown) => void
 }
 
 interface LoadedExtension {
@@ -39,6 +41,7 @@ let server: Server
 let endpoint: string
 let posted: Record<string, unknown>[]
 let tools: Map<string, RegisteredTool>
+let handlers: Map<string, (event: Record<string, unknown>, ctx: unknown) => unknown>
 
 beforeEach(async () => {
   root = await mkdtemp(resolve('.cio/tmp/pi-gateway-invoke-'))
@@ -48,8 +51,21 @@ beforeEach(async () => {
     incoming.on('data', (chunk: Buffer) => chunks.push(chunk))
     incoming.on('end', () => {
       const raw = Buffer.concat(chunks).toString('utf8')
-      posted.push(raw.length > 0 ? (JSON.parse(raw) as Record<string, unknown>) : {})
+      const body = raw.length > 0 ? (JSON.parse(raw) as Record<string, unknown>) : {}
+      posted.push(body)
       outgoing.writeHead(200, { 'content-type': 'application/json' })
+      if (incoming.url === SESSION_ENVIRONMENT_ROUTE) {
+        const command = typeof body['command'] === 'string' ? body['command'] : ''
+        outgoing.end(
+          JSON.stringify({
+            environment: {
+              ...(command === 'strict' ? {} : { CIO_TEST_COMMAND: command }),
+              CIO_TEST_CWD: body['cwd']
+            }
+          })
+        )
+        return
+      }
       outgoing.end(JSON.stringify({ ok: true }))
     })
   })
@@ -76,14 +92,20 @@ beforeEach(async () => {
   )
   const loaded = (await import(pathToFileURL(modulePath).href)) as LoadedExtension
   tools = new Map()
+  handlers = new Map()
   loaded.default({
     registerTool: (tool) => {
       tools.set(tool.name, tool)
+    },
+    on: (event, handler) => {
+      handlers.set(event, handler)
     }
   })
 })
 
 afterEach(async () => {
+  delete process.env['CIO_TEST_COMMAND']
+  delete process.env['CIO_TEST_CWD']
   await new Promise<void>((closed) => server.close(() => closed()))
   await rm(root, { recursive: true, force: true })
 })
@@ -169,5 +191,37 @@ describe('generated pi process tools', () => {
   it('stops an owned pid by number', async () => {
     await tool(PROCESS_STOP_TOOL_NAME).execute('call-7', { pid: 37337, force: true })
     expect(posted[0]).toEqual({ pid: 37337, force: true })
+  })
+})
+
+describe('generated pi session environment', () => {
+  const project = '/projects/demo'
+
+  it('resolves the command about to run, not only the turn start', async () => {
+    const handler = handlers.get('tool_call')
+    expect(handler).toBeDefined()
+    await handler?.(
+      { toolName: 'bash', input: { command: 'cd packages/api && bun test' } },
+      {
+        cwd: project
+      }
+    )
+
+    expect(posted.at(-1)).toEqual({
+      cwd: project,
+      command: 'cd packages/api && bun test'
+    })
+    expect(process.env['CIO_TEST_COMMAND']).toBe('cd packages/api && bun test')
+    expect(process.env['CIO_TEST_CWD']).toBe(project)
+  })
+
+  it('unsets a value the next command no longer admits', async () => {
+    const handler = handlers.get('tool_call')
+    await handler?.({ toolName: 'bash', input: { command: 'ls' } }, { cwd: project })
+    expect(process.env['CIO_TEST_COMMAND']).toBe('ls')
+
+    await handler?.({ toolName: 'bash', input: { command: 'strict' } }, { cwd: project })
+    expect(process.env['CIO_TEST_COMMAND']).toBeUndefined()
+    expect(process.env['CIO_TEST_CWD']).toBe(project)
   })
 })

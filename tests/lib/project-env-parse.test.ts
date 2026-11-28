@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  commandCdTargets,
   formatProjectEnvLine,
   injectRuleAllows,
   injectRuleTargets,
@@ -178,6 +179,15 @@ describe('inject rule matching', () => {
       { group: 'packages/convex-backend', command: 'bun run deploy' },
       { group: 'packages/convex-backend', command: 'bun run lint' }
     ])
+  })
+
+  it('reports every directory a command line cds into', () => {
+    expect(commandCdTargets('cd packages/api && bun run api')).toEqual(['packages/api'])
+    expect(commandCdTargets('bun run build\ncd packages/a; cd ../b && bun test')).toEqual([
+      'packages/a',
+      '../b'
+    ])
+    expect(commandCdTargets('bun run build')).toEqual([])
   })
 
   it('keeps a quoted separator inside its argument instead of splitting it', () => {

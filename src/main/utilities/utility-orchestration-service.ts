@@ -349,13 +349,24 @@ export type SecretRequestExecutor = (
 
 /**
  * Resolves the environment an in-process gateway transport (Pi) applies to its
- * own session at the start of every agent run: the project's ENV files and the
- * thread's collected secrets, which a harness the app spawns per turn receives
- * through its launch environment instead.
+ * own session: the project's ENV files and the thread's collected secrets, which
+ * a harness the app spawns per turn receives through its launch environment.
+ *
+ * A turn-start refresh names no command; a per-command refresh names the command
+ * and the directory it runs in, so an inject rule and a package group can narrow
+ * the values the way they do for a terminal line.
  */
 export type SessionEnvironmentExecutor = (
-  context: SecretRequestContext
+  context: SessionEnvironmentContext
 ) => Promise<Record<string, string>>
+
+/** Which turn is asking, and the command when one is already known. */
+export interface SessionEnvironmentContext extends SecretRequestContext {
+  /** Working directory the command will run in. */
+  cwd?: string
+  /** The command about to run, when the transport announces it first. */
+  command?: string
+}
 
 /** Which turn is asking, so the card is bound to the right thread and session. */
 export interface SecretRequestContext {

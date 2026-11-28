@@ -98,6 +98,10 @@ export interface ProjectEnvironmentContext {
   projectId: string
   threadId: string
   projectPath: string
+  /** Working directory of the command being resolved, when one is known. */
+  cwd?: string
+  /** The command about to run, so its directories and inject rule can be honoured. */
+  command?: string
 }
 
 /** Resolves the project-owned ENV values one agent turn should run with. */

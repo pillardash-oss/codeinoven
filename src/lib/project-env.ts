@@ -497,6 +497,29 @@ export function parseInjectRule(lines: readonly string[]): EnvInjectRuleTarget[]
 }
 
 /**
+ * Every directory a command line `cd`s into, exactly as the shell spelled it.
+ *
+ * A terminal line is handed over before it runs, so the shell's own `$PWD` still
+ * holds the directory it started in. The targets are what the command will move
+ * into, and the caller resolves them against that directory: the env file a
+ * command should see is the one for the place it really runs.
+ */
+export function commandCdTargets(script: string): string[] {
+  const targets: string[] = []
+  for (const raw of splitScriptCommands(script)) {
+    let command = raw
+    for (;;) {
+      const cd = LEADING_CD.exec(command)
+      if (!cd) break
+      const target = (cd[1] ?? cd[2] ?? cd[3] ?? '').trim()
+      if (target && target !== '.' && target !== '..') targets.push(target)
+      command = command.slice(cd[0].length).trim()
+    }
+  }
+  return targets
+}
+
+/**
  * The commands a launch will run, each with the directory it runs in.
  *
  * An action script starts at the project root and `cd`s into packages, so the

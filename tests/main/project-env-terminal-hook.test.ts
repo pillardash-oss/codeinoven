@@ -148,3 +148,65 @@ describe('projectEnvTerminalHook', () => {
     )
   })
 })
+
+describe('projectEnvTerminalHook command directories', () => {
+  const projectRoot = '/repo'
+  let root: string
+  let dispose: (() => Promise<void>) | null
+
+  beforeEach(async () => {
+    root = join(SCRATCH, `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    await mkdir(root, { recursive: true })
+    dispose = null
+  })
+
+  afterEach(async () => {
+    await dispose?.()
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('passes the package a line cds into, so the line sees that package env', async () => {
+    const service = {
+      interactiveEnvironment: vi.fn().mockResolvedValue({
+        environment: {},
+        preview: { entries: [], disabled: [], skipped: [] },
+        deferred: ['API_ONLY'],
+        ruleDeferred: []
+      }),
+      deferredEnvironment: vi.fn().mockResolvedValue({ environment: {}, deferred: [] })
+    }
+    const hook = projectEnvTerminalHook({
+      service,
+      resolveProjectPath: async () => projectRoot,
+      hookRoot: root
+    })
+    const session = await hook({
+      sessionId: 'term-4',
+      shell: '/bin/zsh',
+      projectId: 'p1',
+      threadId: 't1',
+      cwd: projectRoot,
+      directory: ''
+    })
+    dispose = session?.dispose ?? null
+    const directory = session?.variables['CIO_ENV_HOOK_DIR'] ?? ''
+    await writeFile(
+      join(directory, 'req.1.tmp'),
+      `${projectRoot}\ncd packages/api && bun run api\n`
+    )
+    await rename(join(directory, 'req.1.tmp'), join(directory, 'req.1'))
+
+    await waitFor(async () => {
+      const names = await readdir(directory)
+      return names.includes('res.1') ? names : null
+    })
+    expect(service.deferredEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: projectRoot,
+        directories: expect.arrayContaining(['packages/api']),
+        command: 'cd packages/api && bun run api'
+      }),
+      ['API_ONLY']
+    )
+  })
+})

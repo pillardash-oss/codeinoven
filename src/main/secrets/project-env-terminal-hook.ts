@@ -13,6 +13,8 @@
  * opened for.
  */
 
+import { isAbsolute, resolve } from 'node:path'
+import { commandCdTargets } from '../../lib/project-env'
 import {
   installTerminalEnvHook,
   type TerminalEnvHookRequest,
@@ -66,16 +68,30 @@ export function projectEnvTerminalHook(
       environment: interactive.environment,
       ...(dependencies.hookRoot ? { root: dependencies.hookRoot } : {}),
       resolve: async ({ pwd, command }) => {
-        const inside = projectRoot
-          ? await projectRelativeDirectories(projectRoot, pwd || context.cwd)
-          : []
+        const start = pwd || context.cwd
+        const inside = projectRoot ? await projectRelativeDirectories(projectRoot, start) : []
+        // The shell reports the directory it is standing in, but the line it just
+        // accepted may `cd` into a package before it runs anything. Resolving those
+        // targets against the shell's directory is what gives `cd packages/api && …`
+        // the env file of `packages/api`, not the one of the prompt it was typed at.
+        const directories: string[] = []
+        if (projectRoot) {
+          for (const target of commandCdTargets(command)) {
+            if (target.startsWith('~') || target.includes('$')) continue
+            const absolute = isAbsolute(target) ? target : resolve(start, target)
+            for (const directory of await projectRelativeDirectories(projectRoot, absolute)) {
+              if (!directories.includes(directory)) directories.push(directory)
+            }
+          }
+        }
         const next: LaunchEnvironmentContext = {
           projectId: context.projectId,
           threadId: context.threadId,
-          cwd: pwd || context.cwd,
+          cwd: start,
           // A shell that moved outside the project is a worktree: it keeps asking
           // about the directory the session was opened for.
           ...(inside.length === 0 ? { directory: context.directory } : {}),
+          ...(directories.length === 0 ? {} : { directories }),
           command
         }
         const resolved = await dependencies.service.deferredEnvironment(next, interactive.deferred)

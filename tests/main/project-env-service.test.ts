@@ -7,6 +7,7 @@ import {
   type ProjectEnvSecretsPort
 } from '../../src/main/secrets/project-env-service'
 import { ProjectEnvStore } from '../../src/main/secrets/project-env-store'
+import { resolveCommandEnvironment } from '../../src/main/secrets/project-env-command'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
 import { parseProjectEnvFile, projectEnvFileText } from '../../src/lib/project-env'
 
@@ -1116,5 +1117,76 @@ describe('ProjectEnvService interactive shell deferral', () => {
       command: 'cd packages/api && bun run api'
     })
     expect(rightDirectory.environment).toEqual({ API_ONLY: 'api' })
+  })
+})
+
+describe('resolveCommandEnvironment', () => {
+  it('applies the package an agent command cds into, even from the project root', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'ROOT_URL',
+      value: 'root'
+    })
+    await service.createProjectEnvFile({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env',
+      name: 'API_ONLY',
+      value: 'api'
+    })
+
+    const environment = await resolveCommandEnvironment(service, {
+      projectId: PROJECT_ID,
+      cwd: projectRoot,
+      directory: '',
+      command: 'cd packages/api && bun run start'
+    })
+
+    expect(environment).toEqual({ ROOT_URL: 'root', API_ONLY: 'api' })
+  })
+
+  it('honours an inject rule for the command the agent is about to run', async () => {
+    await service.createProjectEnvFile({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env',
+      name: 'DEPLOY_KEY',
+      value: 'sk-deploy'
+    })
+    await service.setProjectEnvInjectRule({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env',
+      text: 'cd packages/api && bun run deploy'
+    })
+
+    const allowed = await resolveCommandEnvironment(service, {
+      projectId: PROJECT_ID,
+      cwd: projectRoot,
+      directory: '',
+      command: 'cd packages/api && bun run deploy'
+    })
+    expect(allowed).toEqual({ DEPLOY_KEY: 'sk-deploy' })
+
+    const withheld = await resolveCommandEnvironment(service, {
+      projectId: PROJECT_ID,
+      cwd: projectRoot,
+      directory: '',
+      command: 'cd packages/api && bun run test'
+    })
+    expect(withheld).toEqual({})
   })
 })

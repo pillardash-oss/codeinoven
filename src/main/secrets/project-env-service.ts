@@ -98,6 +98,16 @@ export interface LaunchEnvironmentContext {
    * command yet (an interactive shell), and then no rule narrows the launch.
    */
   command?: string
+  /**
+   * Extra project-relative directories this launch reaches, when the caller can
+   * already see them.
+   *
+   * A terminal line is resolved before it runs, so a `cd packages/api` in it has
+   * not moved the shell's `$PWD` yet. The terminal hook resolves those targets and
+   * passes them here, so the command sees the env file of the directory it is
+   * about to enter.
+   */
+  directories?: readonly string[]
 }
 
 export interface LaunchEnvironment {
@@ -678,6 +688,9 @@ export class ProjectEnvService {
       projectRoot,
       launcherDirectory(context, projectRoot)
     )
+    for (const directory of context.directories ?? []) {
+      if (!relativeDirectories.includes(directory)) relativeDirectories.push(directory)
+    }
 
     const winners = new Map<
       string,
