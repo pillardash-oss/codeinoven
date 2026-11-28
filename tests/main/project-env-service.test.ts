@@ -921,3 +921,141 @@ describe('ProjectEnvService inject rule enforcement', () => {
     expect(other.environment).toEqual({})
   })
 })
+
+describe('ProjectEnvService interactive shell deferral', () => {
+  async function ruledFile(): Promise<void> {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'STRIPE_KEY',
+      value: 'sk_live_1'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'APP_NAME',
+      value: 'Oven'
+    })
+    await service.setProjectEnvInjectRule({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: 'bun run deploy'
+    })
+  }
+
+  it('keeps every open key at spawn and names a ruled file key as deferred', async () => {
+    await ruledFile()
+
+    const open = await service.environmentForLaunch({ projectId: PROJECT_ID, cwd: projectRoot })
+    expect(open.environment).toEqual({ STRIPE_KEY: 'sk_live_1', APP_NAME: 'Oven' })
+    expect(open.deferred).toEqual([])
+
+    const shell = await service.interactiveEnvironment({ projectId: PROJECT_ID, cwd: projectRoot })
+    expect(shell.environment).toEqual({})
+    expect(shell.deferred.sort()).toEqual(['APP_NAME', 'STRIPE_KEY'])
+    expect(shell.preview.skipped.map((entry) => entry.name).sort()).toEqual([
+      'APP_NAME',
+      'STRIPE_KEY'
+    ])
+  })
+
+  it('supplies only the names a shell command is admitted to', async () => {
+    await ruledFile()
+    const shell = await service.interactiveEnvironment({ projectId: PROJECT_ID, cwd: projectRoot })
+
+    const admitted = await service.deferredEnvironment(
+      { projectId: PROJECT_ID, cwd: projectRoot, command: 'bun run deploy' },
+      shell.deferred
+    )
+    expect(admitted.environment).toEqual({ STRIPE_KEY: 'sk_live_1', APP_NAME: 'Oven' })
+
+    const refused = await service.deferredEnvironment(
+      { projectId: PROJECT_ID, cwd: projectRoot, command: 'bun run deploy:prod' },
+      shell.deferred
+    )
+    expect(refused.environment).toEqual({})
+  })
+
+  it('never hands a command a value the spawn already injected', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'PLAIN',
+      value: 'plain'
+    })
+    await service.createProjectEnvFile({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env',
+      name: 'API_ONLY',
+      value: 'api'
+    })
+    await service.setProjectEnvInjectRule({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env',
+      text: 'bun run api'
+    })
+    const shell = await service.interactiveEnvironment({ projectId: PROJECT_ID, cwd: projectRoot })
+    expect(shell.environment).toEqual({ PLAIN: 'plain' })
+    expect(shell.deferred).toEqual(['API_ONLY'])
+
+    const admitted = await service.deferredEnvironment(
+      {
+        projectId: PROJECT_ID,
+        cwd: projectRoot,
+        directory: 'packages/api',
+        command: 'bun run api'
+      },
+      shell.deferred
+    )
+    expect(admitted.environment).toEqual({ API_ONLY: 'api' })
+  })
+
+  it('matches a shell command against the directory its own cd left behind', async () => {
+    await service.createProjectEnvFile({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env',
+      name: 'API_ONLY',
+      value: 'api'
+    })
+    await service.setProjectEnvInjectRule({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env',
+      text: 'cd packages/api && bun run api'
+    })
+
+    const wrongDirectory = await service.environmentForLaunch({
+      projectId: PROJECT_ID,
+      cwd: projectRoot,
+      command: 'bun run api'
+    })
+    expect(wrongDirectory.environment).toEqual({})
+
+    const rightDirectory = await service.environmentForLaunch({
+      projectId: PROJECT_ID,
+      cwd: join(projectRoot, 'packages', 'api'),
+      directory: 'packages/api',
+      command: 'cd packages/api && bun run api'
+    })
+    expect(rightDirectory.environment).toEqual({ API_ONLY: 'api' })
+  })
+})

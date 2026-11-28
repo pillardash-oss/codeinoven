@@ -1299,12 +1299,17 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     // IPC the Secrets page edits them through. Built before the terminal service,
     // because every process the app starts for a project resolves its environment
     // here, and a terminal must open whether or not the vault can answer.
-    const [{ ProjectEnvStore }, { ProjectEnvService }, { registerProjectEnvIpc }] =
-      await Promise.all([
-        import('../secrets/project-env-store'),
-        import('../secrets/project-env-service'),
-        import('../secrets/project-env-ipc')
-      ])
+    const [
+      { ProjectEnvStore },
+      { ProjectEnvService },
+      { registerProjectEnvIpc },
+      { projectEnvTerminalHook }
+    ] = await Promise.all([
+      import('../secrets/project-env-store'),
+      import('../secrets/project-env-service'),
+      import('../secrets/project-env-ipc'),
+      import('../secrets/project-env-terminal-hook')
+    ])
     const projectEnvService = new ProjectEnvService({
       store: new ProjectEnvStore(storage),
       secrets: vault,
@@ -1413,7 +1418,14 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
               environment = { ...environment, ...packageEnv.environment }
             }
             return environment
-          }
+          },
+          projectEnvTerminalHook({
+            service: projectEnvService,
+            resolveProjectPath: async (projectId) => {
+              const project = await projectManager.getProject(projectId)
+              return project?.source === 'local' && project.path ? project.path : null
+            }
+          })
         )
       : null
     // A probe that changes a harness's install state (new install, version

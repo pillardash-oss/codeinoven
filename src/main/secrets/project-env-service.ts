@@ -103,6 +103,12 @@ export interface LaunchEnvironmentContext {
 export interface LaunchEnvironment {
   environment: Record<string, string>
   preview: ProjectEnvLaunchPreview
+  /**
+   * Names a ruled file kept out of this launch, because no injected value was
+   * admitted but a form of the launch might still admit one. An interactive shell
+   * fills these per command through its terminal env hook.
+   */
+  deferred: string[]
 }
 
 /**
@@ -596,7 +602,7 @@ export class ProjectEnvService {
    * server starts and behaves unexpectedly.
    */
   async previewLaunch(context: LaunchEnvironmentContext): Promise<ProjectEnvLaunchPreview> {
-    return (await this.resolveLaunch(context, false)).preview
+    return (await this.resolveLaunch(context, { withValues: false })).preview
   }
 
   /**
@@ -613,18 +619,51 @@ export class ProjectEnvService {
    * with it yet.
    */
   async environmentForLaunch(context: LaunchEnvironmentContext): Promise<LaunchEnvironment> {
-    return this.resolveLaunch(context, true)
+    return this.resolveLaunch(context, { withValues: true })
+  }
+
+  /**
+   * The environment an interactive shell starts with, and what waits for a command.
+   *
+   * A terminal is spawned before the user has typed anything, so no command can be
+   * compared with a rule yet. A ruled file's keys therefore stay out of the spawn
+   * environment and are named in `deferred`: the shell's terminal env hook supplies
+   * them for the one command a rule admits, and takes them back afterwards. Every
+   * key no rule governs is injected the ordinary way.
+   */
+  async interactiveEnvironment(context: LaunchEnvironmentContext): Promise<LaunchEnvironment> {
+    return this.resolveLaunch(context, { withValues: true, deferRuled: true })
+  }
+
+  /**
+   * The values one shell command is admitted to, out of the names kept back.
+   *
+   * Only the named keys are returned, so a command receives exactly what its rule
+   * admits and never a value the spawn already injected. A name no rule admits is
+   * absent rather than empty, which is what the hook expects.
+   */
+  async deferredEnvironment(
+    context: LaunchEnvironmentContext,
+    names: readonly string[]
+  ): Promise<LaunchEnvironment> {
+    return this.resolveLaunch(context, { withValues: true, names })
   }
 
   private async resolveLaunch(
     context: LaunchEnvironmentContext,
-    withValues: boolean
+    options: {
+      withValues: boolean
+      /** A ruled file waits for a command instead of contributing to the spawn. */
+      deferRuled?: boolean
+      /** Return only these names, so a hook supplies what it took back. */
+      names?: readonly string[]
+    }
   ): Promise<LaunchEnvironment> {
     const projectRoot = await this.requireProjectPath(context.projectId)
     const files = await this.dependencies.store.readProject(context.projectId)
     const relativeDirectory =
       context.directory === undefined
-        ? projectRelativeDirectory(projectRoot, context.cwd)
+        ? (projectRelativeDirectory(projectRoot, context.cwd) ?? '')
         : normalizeGroup(context.directory)
 
     const winners = new Map<
@@ -650,21 +689,43 @@ export class ProjectEnvService {
         : injectRuleTargets(context.command, [...new Set(files.map((file) => file.group))])
     /** Names a ruled file withholds from this launch, so no other file supplies them. */
     const withheld = new Map<string, string>()
+    /** Names only a command can admit, which an interactive shell settles per line. */
+    const deferred = new Set<string>()
     const skipped: { name: string; reason: string }[] = []
+    const only = options.names ? new Set(options.names) : null
+
+    /**
+     * A shell may `cd` anywhere, so every ruled file in the project keeps its keys
+     * back at spawn, not only the files above the directory it opened in. One the
+     * shell never reaches simply contributes nothing.
+     */
+    if (options.deferRuled) {
+      for (const file of files) {
+        if (!file.injectRule || file.injectRule.length === 0) continue
+        for (const entry of file.entries) {
+          withheld.set(entry.name, withHeldReason(file))
+          deferred.add(entry.name)
+        }
+      }
+    }
 
     for (const file of groupsFor(files, relativeDirectory)) {
-      if (injectTargets && file.injectRule && file.injectRule.length > 0) {
-        if (!injectRuleAllows(parseInjectRule(file.injectRule), injectTargets)) {
-          for (const entry of file.entries) {
-            withheld.set(
-              entry.name,
-              `Only injected into the scripts ${file.group ? `${file.group}/` : ''}${file.fileName} names.`
-            )
-          }
+      const ruled = file.injectRule !== undefined && file.injectRule.length > 0
+      if (ruled) {
+        // Already deferred for this shell, or narrowed out of this exact launch.
+        if (options.deferRuled) continue
+        if (
+          injectTargets &&
+          !injectRuleAllows(parseInjectRule(file.injectRule ?? []), injectTargets)
+        ) {
+          for (const entry of file.entries) withheld.set(entry.name, withHeldReason(file))
           continue
         }
       }
       for (const entry of file.entries) {
+        if (only && !only.has(entry.name)) continue
+        // A name another file's rule kept back is not supplied by a shallower file.
+        if (options.deferRuled && withheld.has(entry.name)) continue
         winners.set(entry.name, {
           entry,
           group: file.group,
@@ -679,6 +740,7 @@ export class ProjectEnvService {
     for (const name of withheld.keys()) winners.delete(name)
     if (context.threadId) {
       for (const entry of await this.dependencies.store.readThread(context.threadId)) {
+        if (only && !only.has(entry.name)) continue
         winners.set(entry.name, {
           entry,
           group: '',
@@ -719,7 +781,7 @@ export class ProjectEnvService {
       }
       try {
         const value = await this.dependencies.secrets.resolve(winner.entry.secretRef)
-        if (withValues) environment[name] = value
+        if (options.withValues) environment[name] = value
         entries.push({
           name,
           group: winner.group,
@@ -734,7 +796,8 @@ export class ProjectEnvService {
 
     return {
       environment,
-      preview: { entries: sortPreview(entries), disabled: sortPreview(disabled), skipped }
+      preview: { entries: sortPreview(entries), disabled: sortPreview(disabled), skipped },
+      deferred: [...deferred]
     }
   }
 
@@ -884,10 +947,17 @@ function groupsFor(
   })
 }
 
+/** Why a ruled file contributed nothing to this launch, in the user's terms. */
+function withHeldReason(file: StoredProjectEnvFile): string {
+  const path = file.group ? `${file.group}/${file.fileName}` : file.fileName
+  return `Only injected into the scripts ${path} names.`
+}
+
 /** The project-relative directory of a working directory, '' at the root. */
-function projectRelativeDirectory(projectRoot: string, cwd: string): string {
+export function projectRelativeDirectory(projectRoot: string, cwd: string): string | null {
   const rel = relative(projectRoot, cwd)
-  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return ''
+  if (!rel) return ''
+  if (rel.startsWith('..') || isAbsolute(rel)) return null
   return rel.split(sep).join('/')
 }
 

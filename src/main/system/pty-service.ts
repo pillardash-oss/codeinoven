@@ -187,6 +187,35 @@ export interface PtyUserInputHook {
   (projectId: string, projectPath: string): void
 }
 
+/** A prepared terminal env hook, and what it contributes to one spawn. */
+export interface PtyTerminalEnvHookSession {
+  /** Project env values that are not waiting on a rule. */
+  environment: Record<string, string>
+  /** Environment that points the shell at its hook directory. */
+  variables: Record<string, string>
+  /** Shell arguments that install the hook. */
+  args: string[]
+  /** Stop answering and delete the hook directory. */
+  dispose: () => Promise<void>
+}
+
+/** Prepare the env hook for one interactive shell, when this project needs one.
+ *
+ * Returns null when nothing is waiting on a command, and then the plain
+ * environment hook is used. A session that does install a hook spawns with the
+ * hook's arguments and environment instead.
+ */
+export interface PtyTerminalEnvHook {
+  (context: {
+    sessionId: string
+    shell: string
+    projectId: string
+    threadId: string
+    cwd: string
+    directory: string
+  }): Promise<PtyTerminalEnvHookSession | null>
+}
+
 export interface PtyTrackedProcess {
   scopeId?: string
   projectId?: string
@@ -326,7 +355,8 @@ export class PtyService {
     private readonly onUserInput?: PtyUserInputHook,
     private readonly remoteLaunch?: PtyRemoteLaunchHook,
     private readonly ovenShellLaunch?: PtyOvenShellLaunchHook,
-    private readonly projectEnvironment?: PtyProjectEnvironmentHook
+    private readonly projectEnvironment?: PtyProjectEnvironmentHook,
+    private readonly terminalEnvHook?: PtyTerminalEnvHook
   ) {
     this.projectManager = new ProjectManager(_database)
     this.scopeRoots = scopeResolver ? scopeRootProvider(scopeResolver) : undefined
@@ -611,6 +641,20 @@ export class PtyService {
     }
   }
 
+  /** Hook directories and their watchers, keyed by the process that owns them,
+   *  so a reused session id can never dispose a live shell's hook. */
+  private readonly terminalHooks = new Map<
+    string,
+    { process: pty.IPty; dispose: () => Promise<void> }
+  >()
+
+  private disposeTerminalHook(id: string, process: pty.IPty): void {
+    const hook = this.terminalHooks.get(id)
+    if (!hook || hook.process !== process) return
+    this.terminalHooks.delete(id)
+    void hook.dispose().catch(() => Logger.dev('A terminal env hook could not be removed'))
+  }
+
   private async createSession(
     id: string,
     projectId: string,
@@ -659,21 +703,41 @@ export class PtyService {
     const shell = await resolveShell()
     const createdAt = Date.now()
 
-    const projectEnv = await this.resolveProjectEnvironment(
-      projectId,
-      threadId,
-      cwd,
-      directory ?? ''
-    )
+    let hook: PtyTerminalEnvHookSession | null = null
+    if (this.terminalEnvHook) {
+      try {
+        hook = await this.terminalEnvHook({
+          sessionId: id,
+          shell,
+          projectId,
+          threadId,
+          cwd,
+          directory: directory ?? ''
+        })
+      } catch (error: unknown) {
+        // A terminal must always open: a hook that cannot be prepared falls back
+        // to the un-narrowed environment.
+        Logger.error('Project env hook could not be installed for this terminal:', error)
+      }
+    }
     ensureActive()
-    const env = { ...(await buildShellEnv()), ...projectEnv }
-    const proc = pty.spawn(shell, resolveShellArgs(shell), {
+    const projectEnv = hook
+      ? hook.environment
+      : await this.resolveProjectEnvironment(projectId, threadId, cwd, directory ?? '')
+    ensureActive()
+    const env = {
+      ...(await buildShellEnv()),
+      ...projectEnv,
+      ...(hook?.variables ?? {})
+    }
+    const proc = pty.spawn(shell, hook?.args ?? resolveShellArgs(shell), {
       name: 'xterm-256color',
       cols,
       rows,
       cwd,
       env
     })
+    if (hook) this.terminalHooks.set(id, { process: proc, dispose: hook.dispose })
     this.trackProcess?.({
       scopeId: `pty:${id}`,
       projectId,
@@ -689,6 +753,7 @@ export class PtyService {
     })
 
     proc.onExit(({ exitCode }) => {
+      this.disposeTerminalHook(id, proc)
       if (this.sessions.get(id)?.process !== proc) return
       this.sessions.delete(id)
       this.flushTerminalOutput(id)
@@ -1236,6 +1301,7 @@ export class PtyService {
     const session = this.sessions.get(id)
     if (!session) return
     this.sessions.delete(id)
+    this.disposeTerminalHook(id, session.process)
     await stopPtyProcesses(session.process.pid)
   }
 
