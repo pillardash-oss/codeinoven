@@ -334,6 +334,86 @@ describe('permission policy', () => {
     ).toBe(false)
   })
 
+  it('reads a delete on its own line as a destructive command', () => {
+    const scratch = resolve(projectRoot, '.cio')
+    const policy = new PermissionPolicy({
+      projectRoot,
+      mode: 'auto_review',
+      scratchPaths: [scratch]
+    })
+
+    // A newline ends a command exactly as `;` does, so the delete on the second
+    // line is not part of the first line's arguments and still asks.
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: ['echo start\nrm -rf /Users/me/Documents/notes']
+      })
+    ).toMatchObject({ decision: 'ask', risk: 'critical' })
+    expect(
+      policy.evaluate({ permission: 'bash', commands: ['cd /Users/me/Downloads\nrm -rf build'] })
+    ).toMatchObject({ decision: 'ask' })
+    expect(
+      policy.evaluate({ permission: 'bash', commands: ['echo start\ngit clean -fdx'] })
+    ).toMatchObject({ decision: 'ask' })
+    // The same delete separated by `;` asks the same way, so neither separator
+    // is a way around the card.
+    expect(
+      policy.evaluate({ permission: 'bash', commands: ['echo start; rm -rf build'] }).approved
+    ).toBe(false)
+    // A confined delete written across lines keeps its card too: the proof
+    // reads one command per line, so it proves nothing instead of guessing.
+    expect(
+      policy.evaluate({ permission: 'bash', commands: ['cd .cio/tmp\nrm -rf stage'] }).approved
+    ).toBe(false)
+  })
+
+  it('does not read a backtick inside single quotes as a substitution', () => {
+    const scratch = resolve(projectRoot, '.cio')
+    const policy = new PermissionPolicy({
+      projectRoot,
+      mode: 'auto_review',
+      scratchPaths: [scratch]
+    })
+
+    // The backticks name text in a `sed` expression, not a command to run, so a
+    // chain that removes only its own scratch still proves.
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: ["cd .cio && rm -rf tmp/stage && sed -i 's/`a`/b/' plan.md"]
+      })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
+    // Inside double quotes a backtick still substitutes, so nothing is proven.
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: ['cd .cio && rm -rf tmp/stage && echo "`date`"']
+      }).approved
+    ).toBe(false)
+    // A brace is live outside quotes, so brace expansion still keeps the card:
+    // `tmp/{..,..}` names a directory the static token never shows.
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: ['cd .cio && rm -rf tmp/{stage,other}']
+      }).approved
+    ).toBe(false)
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: ['cd .cio && rm -rf tmp/{..,x}']
+      }).approved
+    ).toBe(false)
+    // The same brace inside single quotes is a name, not an expansion.
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: ["cd .cio && rm -rf tmp/stage && echo '{a,b}'"]
+      })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
+  })
+
   it('proves a delete glob by the directory it enumerates', () => {
     const scratch = resolve(projectRoot, '.cio')
     const policy = new PermissionPolicy({

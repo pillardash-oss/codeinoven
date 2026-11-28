@@ -140,35 +140,58 @@ function recordShellAssignment(tokens: readonly string[], variables: Map<string,
   return true
 }
 
+/** One token as the shell hands it to a command, with the positions the shell
+ *  reads literally recorded: single-quoted text, and a character a backslash
+ *  escaped, expand nothing. */
+interface ShellToken {
+  readonly text: string
+  readonly literal: readonly boolean[]
+}
+
 /** One token with the chain's own literal assignments and `$PWD` applied.
  *
  *  `$PWD` is the directory the shell is in at that point, which the caller
- *  tracks through `cd`. Undefined when the token still depends on something
- *  this module cannot read: substitution, an unknown variable, a backtick. */
+ *  tracks through `cd`. A `$` or a backtick the shell would act on is unreadable
+ *  here, so an unknown variable, a substitution, and a `$1` all make the whole
+ *  token undefined. The same characters inside single quotes are plain text, so
+ *  they are kept as written. */
 function expandShellToken(
-  token: string,
+  token: ShellToken,
   variables: ReadonlyMap<string, string>,
   workingDirectory: string
 ): string | undefined {
-  let unresolved = false
-  const expanded = token.replace(
-    /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/gu,
-    (_match: string, braced: string | undefined, bare: string | undefined) => {
-      const name = braced ?? bare ?? ''
-      if (name === 'PWD') return workingDirectory
-      const value = variables.get(name)
-      if (value === undefined) unresolved = true
-      return value ?? ''
+  let expanded = ''
+  for (let index = 0; index < token.text.length; index += 1) {
+    const character = token.text[index]!
+    if (token.literal[index] === true) {
+      expanded += character
+      continue
     }
-  )
-  if (unresolved || /[`$]/u.test(expanded)) return undefined
+    if (character === '`') return undefined
+    if (character !== '$') {
+      expanded += character
+      continue
+    }
+    const rest = token.text.slice(index)
+    const match = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}|^\$([A-Za-z_][A-Za-z0-9_]*)/u.exec(rest)
+    if (match === null) return undefined
+    const name = match[1] ?? match[2] ?? ''
+    if (name === 'PWD') {
+      expanded += workingDirectory
+    } else {
+      const value = variables.get(name)
+      if (value === undefined) return undefined
+      expanded += value
+    }
+    index += match[0].length - 1
+  }
   return expanded
 }
 
 /** Every token of one segment, expanded. Undefined when any of them is
  *  unreadable, because a proof that skips one token proves nothing. */
 function expandShellSegment(
-  segment: readonly string[],
+  segment: readonly ShellToken[],
   variables: ReadonlyMap<string, string>,
   workingDirectory: string
 ): string[] | undefined {
@@ -252,13 +275,18 @@ const MAX_PROVEN_COMMAND_LENGTH = 8192
 /** What each destructive verb looks like. Every lookahead stops at the end of
  *  the verb's own segment (`;`, `&`, `|`) as well as at a newline: a flag on a
  *  later command is that command's, so `rm -f scan/*; git status --porcelain`
- *  is not a recursive delete because `--porcelain` happens to contain an `r`. */
+ *  is not a recursive delete because `--porcelain` happens to contain an `r`.
+ *
+ *  A newline ends a command exactly as `;` does, so every verb is anchored on
+ *  one too. Without it, `echo start` and a following line `rm -rf /` read as a
+ *  single command with no destructive verb in it, and the delete ran without a
+ *  card. */
 const DESTRUCTIVE_COMMAND_PATTERNS = [
-  /(?:^|[;&|]\s*)rm\s+(?=[^\n;&|]*(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?:\s|$))/u,
-  /(?:^|[;&|]\s*)find\s+[^\n;&|]+\s-delete(?:\s|$)/u,
-  /(?:^|[;&|]\s*)git\s+clean\s+(?=[^\n;&|]*-[a-zA-Z]*f)(?=[^\n;&|]*-[a-zA-Z]*d)/u,
-  /(?:^|[;&|]\s*)Remove-Item\b[^\n;&|]*\s-Recurse\b/iu,
-  /(?:^|[;&|]\s*)(?:rmdir|rd|del)\b[^\n;&|]*\s\/(?:s|S)\b/u
+  /(?:^|[;&|\n]\s*)rm\s+(?=[^\n;&|]*(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?:\s|$))/u,
+  /(?:^|[;&|\n]\s*)find\s+[^\n;&|]+\s-delete(?:\s|$)/u,
+  /(?:^|[;&|\n]\s*)git\s+clean\s+(?=[^\n;&|]*-[a-zA-Z]*f)(?=[^\n;&|]*-[a-zA-Z]*d)/u,
+  /(?:^|[;&|\n]\s*)Remove-Item\b[^\n;&|]*\s-Recurse\b/iu,
+  /(?:^|[;&|\n]\s*)(?:rmdir|rd|del)\b[^\n;&|]*\s\/(?:s|S)\b/u
 ]
 const DEFAULT_PROTECTED_PATTERNS = [
   '.git',
@@ -704,7 +732,13 @@ export class PermissionPolicy {
    */
   private isConfinedDestructiveCommand(command: string): boolean {
     if (!command.trim() || command.length > MAX_PROVEN_COMMAND_LENGTH) return false
-    if (/[`\n\r{}]/u.test(command)) return false
+    // A chain written across lines is read one command per line, which the
+    // segment proof below does not do yet, so it keeps its card. A backtick or
+    // a brace outside single quotes can substitute a command or expand into
+    // arguments this module cannot see; the same characters inside single
+    // quotes are plain text the shell hands to the command.
+    if (/\n|\r/u.test(command)) return false
+    if (containsLiveShellCharacter(command, '`{}', '`')) return false
     const segments = shellSegments(command)
     if (!segments) return false
     const variables = new Map<string, string>()
@@ -797,7 +831,11 @@ export class PermissionPolicy {
    */
   private isScratchCommand(command: string): boolean {
     if (!command.trim() || command.length > 8192) return false
-    if (/[`]/u.test(command) || /\n|\r/u.test(command)) return false
+    if (/\n|\r/u.test(command)) return false
+    // Brace expansion happens before a path is resolved, so `tmp/{..,..}` names
+    // a directory this module never sees. Only the literal characters inside
+    // quotes are safe.
+    if (containsLiveShellCharacter(command, '`{}', '`')) return false
     const segments = shellSegments(command)
     if (!segments) return false
     const variables = new Map<string, string>()
@@ -1011,27 +1049,57 @@ function containsTerm(terms: readonly string[], candidates: readonly string[]): 
 }
 
 /** Split a shell command into its pipeline/chain segments, honoring quotes so
- *  an operator inside a quoted argument stays part of that argument. Returns
- *  undefined when the quotes do not balance. */
-function shellSegments(command: string): string[][] | undefined {
-  const segments: string[][] = []
-  let segment: string[] = []
+ *  an operator inside a quoted argument stays part of that argument and
+ *  recording which characters the shell reads literally. Returns undefined
+ *  when the quotes do not balance. */
+function shellSegments(command: string): ShellToken[][] | undefined {
+  const segments: ShellToken[][] = []
+  let segment: ShellToken[] = []
   let token = ''
+  let literal: boolean[] = []
   let quote: '"' | "'" | null = null
+  const push = (character: string, isLiteral: boolean): void => {
+    token += character
+    literal.push(isLiteral)
+  }
   const endToken = (): void => {
-    if (token) segment.push(token)
+    if (token) segment.push({ text: token, literal })
     token = ''
+    literal = []
   }
   const endSegment = (): void => {
     endToken()
     if (segment.length > 0) segments.push(segment)
     segment = []
   }
+  /** Drop a descriptor number a redirection operator was written against, so
+   *  `2>&1` leaves no stray `2` token behind. */
+  const trimDescriptors = (): void => {
+    const trimmed = token.replace(/\d+$/u, '')
+    literal = literal.slice(0, trimmed.length)
+    token = trimmed
+  }
   for (let index = 0; index < command.length; index += 1) {
     const character = command[index]!
     if (quote !== null) {
-      if (character === quote) quote = null
-      else token += character
+      if (character === quote) {
+        quote = null
+        continue
+      }
+      const escapes = character === '\\' && quote === '"' && command[index + 1] !== undefined
+      if (escapes) {
+        index += 1
+        push(command[index]!, true)
+        continue
+      }
+      // A backtick and a `$` expand inside double quotes, so only single-quoted
+      // text expands nothing at all.
+      push(character, quote === "'" || (character !== '$' && character !== '`'))
+      continue
+    }
+    if (character === '\\' && command[index + 1] !== undefined) {
+      index += 1
+      push(command[index]!, true)
       continue
     }
     if (character === '"' || character === "'") {
@@ -1047,7 +1115,7 @@ function shellSegments(command: string): string[][] | undefined {
       // without touching the file system. Dropping the descriptor digits and
       // the duplication keeps the segment whole; treating the `&` as a
       // separator would split the command and leave an unreadable `2>`.
-      token = token.replace(/\d+$/u, '')
+      trimDescriptors()
       index += 1
       while (/\d/u.test(command[index + 1] ?? '')) index += 1
       continue
@@ -1055,7 +1123,7 @@ function shellSegments(command: string): string[][] | undefined {
     if (character === '&' || character === '|' || character === ';') {
       if (character === '&' && command[index + 1] === '>') {
         // `&>file` sends both streams to a file; the target names it below.
-        token = token.replace(/\d+$/u, '')
+        trimDescriptors()
         index += 1
         while (/\d/u.test(command[index + 1] ?? '')) index += 1
         continue
@@ -1064,11 +1132,52 @@ function shellSegments(command: string): string[][] | undefined {
       if ((character === '&' || character === '|') && command[index + 1] === character) index += 1
       continue
     }
-    token += character
+    push(character, false)
   }
   if (quote !== null) return undefined
   endSegment()
   return segments
+}
+
+/** Whether `command` contains one of `characters` where the shell acts on it
+ *  instead of reading it as text.
+ *
+ *  Single quotes make the shell read everything literally, and a backslash
+ *  escapes the next character, so `sed -i 's/^- \[ \] (Move the \`x\`)/…/'`
+ *  names no substitution at all. Double quotes only stop some characters:
+ *  `liveInsideDoubleQuotes` names the ones that still expand there, which is a
+ *  backtick and never a brace. */
+function containsLiveShellCharacter(
+  command: string,
+  characters: string,
+  liveInsideDoubleQuotes: string
+): boolean {
+  let quote: '"' | "'" | null = null
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]!
+    if (quote !== "'" && character === '\\') {
+      index += 1
+      continue
+    }
+    if (quote === "'") {
+      if (character === "'") quote = null
+      continue
+    }
+    if (character === '"') {
+      quote = quote === '"' ? null : '"'
+      continue
+    }
+    if (quote === '"') {
+      if (liveInsideDoubleQuotes.includes(character)) return true
+      continue
+    }
+    if (character === "'") {
+      quote = "'"
+      continue
+    }
+    if (characters.includes(character)) return true
+  }
+  return false
 }
 
 function isReadableTarget(operand: string): boolean {
