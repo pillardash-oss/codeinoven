@@ -10,8 +10,9 @@
  * The transport is files in one private session directory:
  *
  *     <dir>/req.<n>     the shell writes "$PWD\n<command line>" and renames it in
- *     <dir>/res.<n>     the app writes exports and renames it in
- *     <dir>/names.<n>   the names the app exported, one per line
+ *     <dir>/res.<n>     the app writes the values to export, and how to put the
+ *                       shell's own values back, as a sourceable snippet
+ *     <dir>/undo.<n>    the sourceable snippet that restores what res.<n> replaced
  *
  * Renames keep every file whole on both sides, and no FIFO, `nc` or extra binary
  * is needed: `printf`, `mv`, `source` and `rm` exist in every shell that can hold
@@ -85,23 +86,66 @@ function quote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`
 }
 
-/** One name per line, so the hook can record what to take back afterwards. */
-export function namesFileContents(names: readonly string[]): string {
-  return names.length === 0 ? '' : `${names.join('\n')}\n`
-}
-
 /**
- * The sourceable snippet that exports one command's values.
+ * The sourceable snippet that hands one command its values.
  *
- * Written for the shell that asked, because fish spells an export differently.
- * No value is ever interpolated unquoted, and a quote inside a value survives.
+ * Each value is exported for the command alone, so the snippet also remembers what
+ * the shell held under that name before: `${NAME}` may be a value the user's own
+ * profile exported, and a prompt must get it back once the command has run. The
+ * saved copy is a plain assignment, never `eval`, so a value with spaces, quotes or
+ * newlines comes back byte for byte.
+ *
+ * Written for the shell that asked, because fish spells an export differently. No
+ * value is ever interpolated unquoted, and a quote inside a value survives.
  */
 export function responseScript(
   shell: TerminalEnvHookShell,
   values: Readonly<Record<string, string>>
 ): string {
-  const lines = Object.entries(values).map(([name, value]) =>
-    shell === 'fish' ? `set -gx ${name} ${quote(value)}` : `export ${name}=${quote(value)}`
+  const lines = Object.entries(values).flatMap(([name, value]) =>
+    shell === 'fish'
+      ? [
+          `if set -q ${name}`,
+          `  set -g __cio_env_hook_had_${name} 1`,
+          `  set -g __cio_env_hook_saved_${name} $${name}`,
+          'else',
+          `  set -e -g __cio_env_hook_had_${name}`,
+          'end',
+          `set -gx ${name} ${quote(value)}`
+        ]
+      : [
+          `if [ "\${${name}+x}" = x ]; then __cio_env_hook_had_${name}=1; __cio_env_hook_saved_${name}=$${name}; else __cio_env_hook_had_${name}=; fi`,
+          `export ${name}=${quote(value)}`
+        ]
+  )
+  return lines.length === 0 ? '' : `${lines.join('\n')}\n`
+}
+
+/**
+ * The sourceable snippet that gives the shell its own values back.
+ *
+ * Sourced once the command has finished: a name the shell already held is restored
+ * exactly, and a name only the project declared is unset again, so a secret never
+ * outlives the line it was admitted to.
+ */
+export function undoScript(
+  shell: TerminalEnvHookShell,
+  values: Readonly<Record<string, string>>
+): string {
+  const lines = Object.keys(values).flatMap((name) =>
+    shell === 'fish'
+      ? [
+          `if set -q __cio_env_hook_had_${name}`,
+          `  set -gx ${name} $__cio_env_hook_saved_${name}`,
+          'else',
+          `  set -e ${name}`,
+          'end',
+          `set -e -g __cio_env_hook_had_${name} __cio_env_hook_saved_${name}`
+        ]
+      : [
+          `if [ -n "\${__cio_env_hook_had_${name}-}" ]; then ${name}=$__cio_env_hook_saved_${name}; else unset ${name}; fi`,
+          `unset __cio_env_hook_had_${name} __cio_env_hook_saved_${name}`
+        ]
   )
   return lines.length === 0 ? '' : `${lines.join('\n')}\n`
 }
@@ -125,9 +169,9 @@ const POLL_SECONDS = '0.005'
 function zshHook(): string {
   return `__cio_env_hook_dir="$CIO_ENV_HOOK_DIR"
 __cio_env_hook_seq=0
-__cio_env_hook_names=()
+__cio_env_hook_pending=()
 __cio_env_hook_preexec() {
-  local __cio_line="$1" __cio_wait=0 __cio_name __cio_seq
+  local __cio_line="$1" __cio_wait=0 __cio_seq
   [[ -n "$__cio_env_hook_dir" && -d "$__cio_env_hook_dir" ]] || return 0
   __cio_env_hook_seq=$(( __cio_env_hook_seq + 1 ))
   __cio_seq=$__cio_env_hook_seq
@@ -139,17 +183,20 @@ $__cio_line" >| "$__cio_env_hook_dir/req.$__cio_seq.tmp" 2>/dev/null || return 0
     __cio_wait=$(( __cio_wait + 1 ))
   done
   [[ -f "$__cio_env_hook_dir/res.$__cio_seq" ]] || return 0
+  __cio_env_hook_pending+=($__cio_seq)
   source "$__cio_env_hook_dir/res.$__cio_seq" 2>/dev/null
-  while IFS= read -r __cio_name; do
-    [[ -n "$__cio_name" ]] && __cio_env_hook_names+=("$__cio_name")
-  done < "$__cio_env_hook_dir/names.$__cio_seq" 2>/dev/null
-  rm -f "$__cio_env_hook_dir/res.$__cio_seq" "$__cio_env_hook_dir/names.$__cio_seq" 2>/dev/null
+  rm -f "$__cio_env_hook_dir/res.$__cio_seq" 2>/dev/null
   return 0
 }
 __cio_env_hook_precmd() {
-  (( \${#__cio_env_hook_names} )) || return 0
-  unset "\${__cio_env_hook_names[@]}" 2>/dev/null
-  __cio_env_hook_names=()
+  local __cio_seq
+  for __cio_seq in \${(Oa)__cio_env_hook_pending}; do
+    if [[ -f "$__cio_env_hook_dir/undo.$__cio_seq" ]]; then
+      source "$__cio_env_hook_dir/undo.$__cio_seq" 2>/dev/null
+    fi
+    rm -f "$__cio_env_hook_dir/undo.$__cio_seq" 2>/dev/null
+  done
+  __cio_env_hook_pending=()
   return 0
 }
 typeset -ga preexec_functions precmd_functions
@@ -169,7 +216,7 @@ precmd_functions+=(__cio_env_hook_precmd)
 function bashHook(): string {
   return `__cio_env_hook_dir="$CIO_ENV_HOOK_DIR"
 __cio_env_hook_seq=0
-__cio_env_hook_names=()
+__cio_env_hook_pending=()
 __cio_env_hook_armed=1
 __cio_env_hook_running=0
 __cio_env_hook_preexec() {
@@ -192,11 +239,9 @@ __cio_env_hook_preexec() {
         __cio_wait=$(( __cio_wait + 1 ))
       done
       if [ -f "$__cio_env_hook_dir/res.$__cio_seq" ]; then
+        __cio_env_hook_pending+=("$__cio_seq")
         . "$__cio_env_hook_dir/res.$__cio_seq" 2>/dev/null
-        while IFS= read -r __cio_name; do
-          [ -n "$__cio_name" ] && __cio_env_hook_names+=("$__cio_name")
-        done < "$__cio_env_hook_dir/names.$__cio_seq"
-        rm -f "$__cio_env_hook_dir/res.$__cio_seq" "$__cio_env_hook_dir/names.$__cio_seq" 2>/dev/null
+        rm -f "$__cio_env_hook_dir/res.$__cio_seq" 2>/dev/null
       fi
     fi
   fi
@@ -204,11 +249,16 @@ __cio_env_hook_preexec() {
   return 0
 }
 __cio_env_hook_precmd() {
+  local __cio_seq __cio_i
+  for (( __cio_i = \${#__cio_env_hook_pending[@]} - 1; __cio_i >= 0; __cio_i-- )); do
+    __cio_seq=\${__cio_env_hook_pending[__cio_i]}
+    if [ -f "$__cio_env_hook_dir/undo.$__cio_seq" ]; then
+      . "$__cio_env_hook_dir/undo.$__cio_seq" 2>/dev/null
+    fi
+    rm -f "$__cio_env_hook_dir/undo.$__cio_seq" 2>/dev/null
+  done
+  __cio_env_hook_pending=()
   __cio_env_hook_armed=1
-  if [ "\${#__cio_env_hook_names[@]}" -gt 0 ]; then
-    unset "\${__cio_env_hook_names[@]}" 2>/dev/null
-    __cio_env_hook_names=()
-  fi
   return 0
 }
 trap '__cio_env_hook_preexec' DEBUG
@@ -220,7 +270,7 @@ PROMPT_COMMAND="__cio_env_hook_precmd\${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 function fishHook(): string {
   return `set -g __cio_env_hook_dir "$CIO_ENV_HOOK_DIR"
 set -g __cio_env_hook_seq 0
-set -g __cio_env_hook_names
+set -g __cio_env_hook_pending
 function __cio_env_hook_preexec --on-event fish_preexec
   set -l __cio_line $argv[1]
   test -n "$__cio_env_hook_dir" -a -d "$__cio_env_hook_dir"; or return 0
@@ -235,17 +285,19 @@ function __cio_env_hook_preexec --on-event fish_preexec
     set __cio_wait (math $__cio_wait + 1)
   end
   source "$__cio_env_hook_dir/res.$__cio_seq" 2>/dev/null
-  while read -l __cio_name
-    test -n "$__cio_name"; and set -a -g __cio_env_hook_names $__cio_name
-  end < "$__cio_env_hook_dir/names.$__cio_seq"
-  rm -f "$__cio_env_hook_dir/res.$__cio_seq" "$__cio_env_hook_dir/names.$__cio_seq" 2>/dev/null
+  set -a -g __cio_env_hook_pending $__cio_seq
+  rm -f "$__cio_env_hook_dir/res.$__cio_seq" 2>/dev/null
   return 0
 end
 function __cio_env_hook_postexec --on-event fish_postexec
-  for __cio_name in $__cio_env_hook_names
-    set -e -g $__cio_name 2>/dev/null
+  for __cio_i in (seq (count $__cio_env_hook_pending) -1 1)
+    set -l __cio_seq $__cio_env_hook_pending[$__cio_i]
+    if test -f "$__cio_env_hook_dir/undo.$__cio_seq"
+      source "$__cio_env_hook_dir/undo.$__cio_seq" 2>/dev/null
+    end
+    rm -f "$__cio_env_hook_dir/undo.$__cio_seq" 2>/dev/null
   end
-  set -g __cio_env_hook_names
+  set -g __cio_env_hook_pending
   return 0
 end
 `

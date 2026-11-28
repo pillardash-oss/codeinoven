@@ -80,11 +80,18 @@ describe('installTerminalEnvHook', () => {
       const names = await readdir(directory)
       return names.includes('res.1') ? names : null
     })
-    expect(response).toContain('names.1')
+    expect(response).toContain('undo.1')
+    expect(response).not.toContain('names.1')
     expect(await readFile(join(directory, 'res.1'), 'utf8')).toBe(
-      "export STRIPE_KEY='sk_live_1'\\'''\n"
+      'if [ "${STRIPE_KEY+x}" = x ]; then __cio_env_hook_had_STRIPE_KEY=1; ' +
+        '__cio_env_hook_saved_STRIPE_KEY=$STRIPE_KEY; else __cio_env_hook_had_STRIPE_KEY=; fi\n' +
+        "export STRIPE_KEY='sk_live_1'\\'''\n"
     )
-    expect(await readFile(join(directory, 'names.1'), 'utf8')).toBe('STRIPE_KEY\n')
+    expect(await readFile(join(directory, 'undo.1'), 'utf8')).toBe(
+      'if [ -n "${__cio_env_hook_had_STRIPE_KEY-}" ]; then ' +
+        'STRIPE_KEY=$__cio_env_hook_saved_STRIPE_KEY; else unset STRIPE_KEY; fi\n' +
+        'unset __cio_env_hook_had_STRIPE_KEY __cio_env_hook_saved_STRIPE_KEY\n'
+    )
     expect((await stat(join(directory, 'res.1'))).mode & 0o777).toBe(0o600)
     expect(await readdir(directory)).not.toContain('req.1')
   })
@@ -106,7 +113,7 @@ describe('installTerminalEnvHook', () => {
       return names.includes('res.1') ? names : null
     })
     expect(await readFile(join(directory, 'res.1'), 'utf8')).toBe('')
-    expect(await readFile(join(directory, 'names.1'), 'utf8')).toBe('')
+    expect(await readFile(join(directory, 'undo.1'), 'utf8')).toBe('')
   })
 
   it('still answers when the resolver throws, so the shell never waits out its poll', async () => {

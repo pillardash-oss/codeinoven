@@ -23,9 +23,9 @@ import {
   bashRcFile,
   hookEnvironment,
   hookScript,
-  namesFileContents,
   parseHookRequest,
   responseScript,
+  undoScript,
   terminalEnvHookShell,
   zshRcFiles,
   type TerminalEnvHookShell
@@ -156,7 +156,9 @@ export async function installTerminalEnvHook(
       }
     }
     if (disposed) return
-    await writeFile(join(directory, `names.${seq}`), namesFileContents(Object.keys(values)), {
+    // The restore snippet lands first: the shell sources `res.<n>` the moment it
+    // appears, and must find its undo beside it by the time the command ends.
+    await writeFile(join(directory, `undo.${seq}`), undoScript(kind, values), {
       mode: SESSION_FILE_MODE
     }).catch(() => undefined)
     // Written under a temporary name and renamed in, so the shell never sources a

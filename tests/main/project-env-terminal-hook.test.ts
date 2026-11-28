@@ -37,7 +37,8 @@ describe('projectEnvTerminalHook', () => {
       interactiveEnvironment: vi.fn().mockResolvedValue({
         environment: { API_URL: 'https://api' },
         preview: { entries: [], disabled: [], skipped: [] },
-        deferred: []
+        deferred: [],
+        ruleDeferred: []
       }),
       deferredEnvironment: vi.fn()
     }
@@ -65,7 +66,8 @@ describe('projectEnvTerminalHook', () => {
       interactiveEnvironment: vi.fn().mockResolvedValue({
         environment: { API_URL: 'https://api' },
         preview: { entries: [], disabled: [], skipped: [] },
-        deferred: ['STRIPE_KEY']
+        deferred: ['STRIPE_KEY', 'PLAIN'],
+        ruleDeferred: ['STRIPE_KEY']
       }),
       deferredEnvironment: vi
         .fn()
@@ -98,11 +100,15 @@ describe('projectEnvTerminalHook', () => {
       const names = await readdir(directory)
       return names.includes('res.1') ? names : null
     })
+    // The service resolves the directory itself, so a linked folder is read both
+    // as the path the shell walked and as the path it really leads to.
     expect(service.deferredEnvironment).toHaveBeenCalledWith(
-      expect.objectContaining({ directory: 'packages/api', command: 'bun run api' }),
-      ['STRIPE_KEY']
+      expect.objectContaining({ cwd: `${projectRoot}/packages/api`, command: 'bun run api' }),
+      ['STRIPE_KEY', 'PLAIN']
     )
-    expect(await readFile(join(directory, 'res.1'), 'utf8')).toBe("export STRIPE_KEY='sk_live_1'\n")
+    expect(await readFile(join(directory, 'res.1'), 'utf8')).toContain(
+      "export STRIPE_KEY='sk_live_1'"
+    )
   })
 
   it('keeps the session directory for a cwd outside the project, like a worktree', async () => {
@@ -110,7 +116,8 @@ describe('projectEnvTerminalHook', () => {
       interactiveEnvironment: vi.fn().mockResolvedValue({
         environment: {},
         preview: { entries: [], disabled: [], skipped: [] },
-        deferred: ['STRIPE_KEY']
+        deferred: ['STRIPE_KEY'],
+        ruleDeferred: ['STRIPE_KEY']
       }),
       deferredEnvironment: vi.fn().mockResolvedValue({ environment: {}, deferred: [] })
     }

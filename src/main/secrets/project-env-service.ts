@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, writeFile } from 'fs/promises'
+import { chmod, mkdir, readFile, realpath, writeFile } from 'fs/promises'
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'path'
 import {
   compareEnvFileNames,
@@ -104,11 +104,15 @@ export interface LaunchEnvironment {
   environment: Record<string, string>
   preview: ProjectEnvLaunchPreview
   /**
-   * Names a ruled file kept out of this launch, because no injected value was
-   * admitted but a form of the launch might still admit one. An interactive shell
-   * fills these per command through its terminal env hook.
+   * Names this launch kept out, because a command decides whether they apply. An
+   * interactive shell fills these per command through its terminal env hook.
    */
   deferred: string[]
+  /**
+   * The deferred names a ruled file owns. A shell must not inherit one of these from
+   * the user's profile, because the rule is what admits it to a command.
+   */
+  ruleDeferred: string[]
 }
 
 /**
@@ -625,22 +629,28 @@ export class ProjectEnvService {
   /**
    * The environment an interactive shell starts with, and what waits for a command.
    *
-   * A terminal is spawned before the user has typed anything, so no command can be
-   * compared with a rule yet. A ruled file's keys therefore stay out of the spawn
-   * environment and are named in `deferred`: the shell's terminal env hook supplies
-   * them for the one command a rule admits, and takes them back afterwards. Every
-   * key no rule governs is injected the ordinary way.
+   * A terminal is spawned before the user has typed anything, and a shell moves
+   * around: the directory it starts in is not the directory its next command runs
+   * in. Every project key therefore stays out of the spawn environment and is named
+   * in `deferred`, and the shell's terminal env hook asks for the keys the line's
+   * directory admits and takes them back afterwards. Only a shell that cannot hold
+   * the hook falls back to the un-narrowed launch.
+   *
+   * `ruleDeferred` is the subset a ruled file owns. Those names may not survive from
+   * the user's own profile, because the rule is what decides whether the command
+   * sees them at all.
    */
   async interactiveEnvironment(context: LaunchEnvironmentContext): Promise<LaunchEnvironment> {
-    return this.resolveLaunch(context, { withValues: true, deferRuled: true })
+    return this.resolveLaunch(context, { withValues: true, defer: 'all' })
   }
 
   /**
    * The values one shell command is admitted to, out of the names kept back.
    *
-   * Only the named keys are returned, so a command receives exactly what its rule
-   * admits and never a value the spawn already injected. A name no rule admits is
-   * absent rather than empty, which is what the hook expects.
+   * Only the named keys are returned, so a command receives exactly what its
+   * directory admits and never a value the spawn already injected. A name no rule
+   * admits, or one a disabled key withholds, is absent rather than empty, which is
+   * what the hook expects.
    */
   async deferredEnvironment(
     context: LaunchEnvironmentContext,
@@ -653,18 +663,21 @@ export class ProjectEnvService {
     context: LaunchEnvironmentContext,
     options: {
       withValues: boolean
-      /** A ruled file waits for a command instead of contributing to the spawn. */
-      deferRuled?: boolean
+      /**
+       * `all` leaves every project key to a command: an interactive shell starts
+       * without them and its hook supplies the ones the line's directory admits.
+       */
+      defer?: 'all'
       /** Return only these names, so a hook supplies what it took back. */
       names?: readonly string[]
     }
   ): Promise<LaunchEnvironment> {
     const projectRoot = await this.requireProjectPath(context.projectId)
     const files = await this.dependencies.store.readProject(context.projectId)
-    const relativeDirectory =
-      context.directory === undefined
-        ? (projectRelativeDirectory(projectRoot, context.cwd) ?? '')
-        : normalizeGroup(context.directory)
+    const relativeDirectories = await projectRelativeDirectories(
+      projectRoot,
+      launcherDirectory(context, projectRoot)
+    )
 
     const winners = new Map<
       string,
@@ -691,29 +704,37 @@ export class ProjectEnvService {
     const withheld = new Map<string, string>()
     /** Names only a command can admit, which an interactive shell settles per line. */
     const deferred = new Set<string>()
+    /** The deferred names a ruled file owns, which must not survive from the profile. */
+    const ruleDeferred = new Set<string>()
     const skipped: { name: string; reason: string }[] = []
     const only = options.names ? new Set(options.names) : null
 
     /**
-     * A shell may `cd` anywhere, so every ruled file in the project keeps its keys
-     * back at spawn, not only the files above the directory it opened in. One the
-     * shell never reaches simply contributes nothing.
+     * A shell may `cd` anywhere, so an interactive spawn keeps every project key
+     * back, not only the files above the directory it opened in. One the shell never
+     * reaches simply contributes nothing.
      */
-    if (options.deferRuled) {
+    if (options.defer === 'all') {
       for (const file of files) {
-        if (!file.injectRule || file.injectRule.length === 0) continue
+        const ruled = file.injectRule !== undefined && file.injectRule.length > 0
         for (const entry of file.entries) {
+          // A name the OS would not accept is never written into a shell snippet.
+          try {
+            validateProcessEnvironmentVariable(entry.name)
+          } catch {
+            continue
+          }
           withheld.set(entry.name, withHeldReason(file))
           deferred.add(entry.name)
+          if (ruled) ruleDeferred.add(entry.name)
         }
       }
     }
 
-    for (const file of groupsFor(files, relativeDirectory)) {
+    const applicable = options.defer === 'all' ? [] : groupsFor(files, relativeDirectories)
+    for (const file of applicable) {
       const ruled = file.injectRule !== undefined && file.injectRule.length > 0
       if (ruled) {
-        // Already deferred for this shell, or narrowed out of this exact launch.
-        if (options.deferRuled) continue
         if (
           injectTargets &&
           !injectRuleAllows(parseInjectRule(file.injectRule ?? []), injectTargets)
@@ -724,8 +745,6 @@ export class ProjectEnvService {
       }
       for (const entry of file.entries) {
         if (only && !only.has(entry.name)) continue
-        // A name another file's rule kept back is not supplied by a shallower file.
-        if (options.deferRuled && withheld.has(entry.name)) continue
         winners.set(entry.name, {
           entry,
           group: file.group,
@@ -797,7 +816,8 @@ export class ProjectEnvService {
     return {
       environment,
       preview: { entries: sortPreview(entries), disabled: sortPreview(disabled), skipped },
-      deferred: [...deferred]
+      deferred: [...deferred],
+      ruleDeferred: [...ruleDeferred]
     }
   }
 
@@ -929,28 +949,46 @@ function sortPreview(entries: ProjectEnvLaunchPreviewEntry[]): ProjectEnvLaunchP
 /**
  * Every file that applies to a working directory, in the order it is applied:
  * shallower groups first, and inside one group the name order.
+ *
+ * A launch may answer to more than one directory: the path the shell reports and
+ * the path a symlink resolves to can name the same place, and the user's env file
+ * may have been filed under either. Every matching directory contributes, so a
+ * project reached through a symlink still picks up the group that is really there.
  */
 function groupsFor(
   files: readonly StoredProjectEnvFile[],
-  relativeDirectory: string
+  relativeDirectories: readonly string[]
 ): StoredProjectEnvFile[] {
   const applies = files.filter(
     (file) =>
       file.group === '' ||
-      relativeDirectory === file.group ||
-      relativeDirectory.startsWith(`${file.group}/`)
+      relativeDirectories.some(
+        (directory) => directory === file.group || directory.startsWith(`${file.group}/`)
+      )
   )
-  return [...applies].sort((left, right) => {
+  const unique = new Map(applies.map((file) => [`${file.group}\n${file.fileName}`, file]))
+  return [...unique.values()].sort((left, right) => {
     const depth = groupDepth(left.group) - groupDepth(right.group)
     if (depth !== 0) return depth
     return compareEnvFileNames(left.fileName, right.fileName)
   })
 }
 
-/** Why a ruled file contributed nothing to this launch, in the user's terms. */
+/** Why a file contributed nothing to this launch, in the user's terms. */
 function withHeldReason(file: StoredProjectEnvFile): string {
   const path = file.group ? `${file.group}/${file.fileName}` : file.fileName
-  return `Only injected into the scripts ${path} names.`
+  if (file.injectRule && file.injectRule.length > 0) {
+    return `Only injected into the scripts ${path} names.`
+  }
+  const where = file.group ? `the ${file.group} directory` : 'the project root'
+  return `Injected into a command run in ${where}.`
+}
+
+/** The absolute directory a launch is based in, whichever form the caller used. */
+function launcherDirectory(context: LaunchEnvironmentContext, projectRoot: string): string {
+  return context.directory === undefined
+    ? context.cwd
+    : resolve(projectRoot, ...normalizeGroup(context.directory).split('/'))
 }
 
 /** The project-relative directory of a working directory, '' at the root. */
@@ -959,6 +997,32 @@ export function projectRelativeDirectory(projectRoot: string, cwd: string): stri
   if (!rel) return ''
   if (rel.startsWith('..') || isAbsolute(rel)) return null
   return rel.split(sep).join('/')
+}
+
+/**
+ * Every project-relative directory a working directory can be named by.
+ *
+ * A shell keeps the path the user walked (`$PWD` follows a symlink), while the env
+ * files were filed by the real path the folder has on disk, or the other way round.
+ * Both are returned, in the order a path should be trusted: the one the user is
+ * standing in, then the one it resolves to. A directory outside the project answers
+ * with nothing, which is what keeps a worktree on the directory it was opened for.
+ */
+export async function projectRelativeDirectories(
+  projectRoot: string,
+  cwd: string
+): Promise<string[]> {
+  const directories: string[] = []
+  const remember = (directory: string | null): void => {
+    if (directory !== null && !directories.includes(directory)) directories.push(directory)
+  }
+  remember(projectRelativeDirectory(projectRoot, cwd))
+  const [realRoot, realCwd] = await Promise.all([
+    realpath(projectRoot).catch(() => null),
+    realpath(cwd).catch(() => null)
+  ])
+  if (realRoot !== null && realCwd !== null) remember(projectRelativeDirectory(realRoot, realCwd))
+  return directories
 }
 
 function resolveProjectFile(projectRoot: string, projectRelativePath: string): string {

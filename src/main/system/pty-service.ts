@@ -189,7 +189,7 @@ export interface PtyUserInputHook {
 
 /** A prepared terminal env hook, and what it contributes to one spawn. */
 export interface PtyTerminalEnvHookSession {
-  /** Project env values that are not waiting on a rule. */
+  /** Project env values that need no command to decide them. */
   environment: Record<string, string>
   /** Environment that points the shell at its hook directory. */
   variables: Record<string, string>

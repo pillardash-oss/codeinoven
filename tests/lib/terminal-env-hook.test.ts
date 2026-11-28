@@ -3,9 +3,9 @@ import {
   bashRcFile,
   hookEnvironment,
   hookScript,
-  namesFileContents,
   parseHookRequest,
   responseScript,
+  undoScript,
   terminalEnvHookBypass,
   terminalEnvHookShell,
   zshRcFiles
@@ -46,7 +46,7 @@ describe('terminal env hook shells', () => {
     const script = hookScript('zsh')
     expect(script).toContain('preexec_functions+=(__cio_env_hook_preexec)')
     expect(script).toContain('precmd_functions+=(__cio_env_hook_precmd)')
-    expect(script).toContain('unset "${__cio_env_hook_names[@]}"')
+    expect(script).toContain('source "$__cio_env_hook_dir/undo.$__cio_seq"')
   })
 
   it('installs bash on a DEBUG trap that only answers the first command of a line', () => {
@@ -64,27 +64,49 @@ describe('terminal env hook shells', () => {
 })
 
 describe('terminal env hook response', () => {
+  const saved = '__cio_env_hook_saved_STRIPE_KEY'
+  const had = '__cio_env_hook_had_STRIPE_KEY'
+
   it('quotes a value so a shell reads it back unchanged', () => {
+    const exportLine = "export STRIPE_KEY='sk_live_1'\n"
     expect(responseScript('zsh', { STRIPE_KEY: 'sk_live_1' })).toBe(
-      "export STRIPE_KEY='sk_live_1'\n"
+      'if [ "${STRIPE_KEY+x}" = x ]; then ' +
+        `${had}=1; ${saved}=$STRIPE_KEY; else ${had}=; fi\n` +
+        exportLine
     )
-    expect(responseScript('bash', { STRIPE_KEY: "it's" })).toBe("export STRIPE_KEY='it'\\''s'\n")
-    expect(responseScript('fish', { STRIPE_KEY: 'a b' })).toBe("set -gx STRIPE_KEY 'a b'\n")
+    expect(responseScript('bash', { STRIPE_KEY: "it's" })).toContain("export STRIPE_KEY='it'\\''s'")
+    expect(responseScript('fish', { STRIPE_KEY: 'a b' })).toContain("set -gx STRIPE_KEY 'a b'")
+  })
+
+  it('remembers what the shell held, so a command never keeps a value it did not set', () => {
+    const zsh = responseScript('zsh', { STRIPE_KEY: 'sk_live_1' })
+    expect(zsh).toContain(`${had}=1`)
+    expect(zsh).toContain(`${saved}=$STRIPE_KEY`)
+    const fish = responseScript('fish', { STRIPE_KEY: 'sk_live_1' })
+    expect(fish).toContain(`set -g ${saved} $STRIPE_KEY`)
+    expect(fish).toContain(`set -e -g ${had}`)
   })
 
   it('keeps a value that spans lines inside one export', () => {
-    expect(responseScript('zsh', { KEY: 'line one\nline two' })).toBe(
-      "export KEY='line one\nline two'\n"
+    expect(responseScript('zsh', { KEY: 'line one\nline two' })).toContain(
+      "export KEY='line one\nline two'"
     )
   })
 
   it('writes no snippet when nothing is admitted', () => {
     expect(responseScript('zsh', {})).toBe('')
-    expect(namesFileContents([])).toBe('')
+    expect(undoScript('zsh', {})).toBe('')
   })
 
-  it('lists the names it exported, one per line', () => {
-    expect(namesFileContents(['A', 'B'])).toBe('A\nB\n')
+  it('gives the shell its own value back, or unsets a name it never held', () => {
+    expect(undoScript('zsh', { STRIPE_KEY: 'sk_live_1' })).toBe(
+      'if [ -n "${' +
+        `${had}-}" ]; then STRIPE_KEY=$__cio_env_hook_saved_STRIPE_KEY; else unset STRIPE_KEY; fi\n` +
+        `unset ${had} ${saved}\n`
+    )
+    expect(undoScript('fish', { STRIPE_KEY: 'sk_live_1' })).toContain(
+      'set -gx STRIPE_KEY $__cio_env_hook_saved_STRIPE_KEY'
+    )
   })
 
   it('reads the working directory and the command back from a request', () => {

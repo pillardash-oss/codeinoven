@@ -1,15 +1,16 @@
 /**
- * Bind a project's inject rules to one interactive terminal.
+ * Bind a project's env files to one interactive terminal.
  *
  * The terminal env hook in `system/terminal-env-hook` knows how to talk to a shell
  * but nothing about secrets. This module is the bridge: at spawn it asks the env
  * service what waits for a command, and for each line the shell announces it asks
- * only for the names that a rule admits in that line's directory.
+ * for the names that line's directory admits.
  *
- * The directory is taken from the shell's own `$PWD`, so `cd packages/api` typed
- * inside the terminal changes which env group a rule is compared against, exactly
- * as it would for a managed action. A shell inside a worktree (a cwd outside the
- * project directory) keeps the directory the session was opened for.
+ * The directory is taken from the shell's own `$PWD`, resolved both as the path the
+ * user walked and as the path a symlink leads to, so `cd` into a linked folder
+ * changes which env group applies exactly as the real folder would. A shell inside a
+ * worktree (a cwd outside the project directory) keeps the directory the session was
+ * opened for.
  */
 
 import {
@@ -17,7 +18,7 @@ import {
   type TerminalEnvHookRequest,
   type TerminalEnvHookSession
 } from '../system/terminal-env-hook'
-import { projectRelativeDirectory, type LaunchEnvironmentContext } from './project-env-service'
+import { projectRelativeDirectories, type LaunchEnvironmentContext } from './project-env-service'
 import type { ProjectEnvService } from './project-env-service'
 
 /** What one terminal already knows about the process it is about to start. */
@@ -39,10 +40,10 @@ export interface ProjectEnvTerminalHookDependencies {
 }
 
 /**
- * A hook factory for `PtyService`, or undefined for a project with no rules.
+ * A hook factory for `PtyService`, or undefined for a project with no env files.
  *
  * Returning null from the factory keeps the terminal on the plain spawn: a shell
- * with nothing to defer needs no startup file, no watcher and no per-command wait.
+ * with nothing to wait for needs no startup file, no watcher and no per-command wait.
  */
 export function projectEnvTerminalHook(
   dependencies: ProjectEnvTerminalHookDependencies
@@ -61,16 +62,23 @@ export function projectEnvTerminalHook(
     const request: TerminalEnvHookRequest = {
       sessionId: context.sessionId,
       shell: context.shell,
-      deferred: interactive.deferred,
+      deferred: interactive.ruleDeferred,
       environment: interactive.environment,
       ...(dependencies.hookRoot ? { root: dependencies.hookRoot } : {}),
       resolve: async ({ pwd, command }) => {
-        const inside = projectRoot ? projectRelativeDirectory(projectRoot, pwd) : null
-        const directory = inside === null || inside === undefined ? context.directory : inside
-        const resolved = await dependencies.service.deferredEnvironment(
-          { ...launch, cwd: pwd || context.cwd, directory, command },
-          interactive.deferred
-        )
+        const inside = projectRoot
+          ? await projectRelativeDirectories(projectRoot, pwd || context.cwd)
+          : []
+        const next: LaunchEnvironmentContext = {
+          projectId: context.projectId,
+          threadId: context.threadId,
+          cwd: pwd || context.cwd,
+          // A shell that moved outside the project is a worktree: it keeps asking
+          // about the directory the session was opened for.
+          ...(inside.length === 0 ? { directory: context.directory } : {}),
+          command
+        }
+        const resolved = await dependencies.service.deferredEnvironment(next, interactive.deferred)
         return resolved.environment
       }
     }

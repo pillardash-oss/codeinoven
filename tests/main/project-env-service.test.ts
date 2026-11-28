@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import {
@@ -953,10 +953,12 @@ describe('ProjectEnvService interactive shell deferral', () => {
     const open = await service.environmentForLaunch({ projectId: PROJECT_ID, cwd: projectRoot })
     expect(open.environment).toEqual({ STRIPE_KEY: 'sk_live_1', APP_NAME: 'Oven' })
     expect(open.deferred).toEqual([])
+    expect(open.ruleDeferred).toEqual([])
 
     const shell = await service.interactiveEnvironment({ projectId: PROJECT_ID, cwd: projectRoot })
     expect(shell.environment).toEqual({})
     expect(shell.deferred.sort()).toEqual(['APP_NAME', 'STRIPE_KEY'])
+    expect(shell.ruleDeferred.sort()).toEqual(['APP_NAME', 'STRIPE_KEY'])
     expect(shell.preview.skipped.map((entry) => entry.name).sort()).toEqual([
       'APP_NAME',
       'STRIPE_KEY'
@@ -980,7 +982,7 @@ describe('ProjectEnvService interactive shell deferral', () => {
     expect(refused.environment).toEqual({})
   })
 
-  it('never hands a command a value the spawn already injected', async () => {
+  it('keeps even an unruled key back, so a cd into a group decides what a command sees', async () => {
     await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
     await service.setProjectEnvValue({
       projectId: PROJECT_ID,
@@ -1001,26 +1003,83 @@ describe('ProjectEnvService interactive shell deferral', () => {
       name: 'API_ONLY',
       value: 'api'
     })
-    await service.setProjectEnvInjectRule({
-      projectId: PROJECT_ID,
-      group: 'packages/api',
-      fileName: '.env',
-      text: 'bun run api'
-    })
-    const shell = await service.interactiveEnvironment({ projectId: PROJECT_ID, cwd: projectRoot })
-    expect(shell.environment).toEqual({ PLAIN: 'plain' })
-    expect(shell.deferred).toEqual(['API_ONLY'])
 
-    const admitted = await service.deferredEnvironment(
+    const shell = await service.interactiveEnvironment({ projectId: PROJECT_ID, cwd: projectRoot })
+    expect(shell.environment).toEqual({})
+    expect(shell.deferred.sort()).toEqual(['API_ONLY', 'PLAIN'])
+    expect(shell.ruleDeferred).toEqual([])
+
+    const atRoot = await service.deferredEnvironment(
+      { projectId: PROJECT_ID, cwd: projectRoot, command: 'bun run dev' },
+      shell.deferred
+    )
+    expect(atRoot.environment).toEqual({ PLAIN: 'plain' })
+
+    const inPackage = await service.deferredEnvironment(
       {
         projectId: PROJECT_ID,
-        cwd: projectRoot,
-        directory: 'packages/api',
-        command: 'bun run api'
+        cwd: join(projectRoot, 'packages', 'api'),
+        command: 'bun run dev'
       },
       shell.deferred
     )
-    expect(admitted.environment).toEqual({ API_ONLY: 'api' })
+    expect(inPackage.environment).toEqual({ PLAIN: 'plain', API_ONLY: 'api' })
+  })
+
+  it('injects into a package reached through a symlink, whichever path was filed', async () => {
+    if (process.platform === 'win32') return
+    await service.createProjectEnvFile({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env',
+      name: 'API_ONLY',
+      value: 'api'
+    })
+    await symlink(join(projectRoot, 'packages', 'api'), join(projectRoot, 'api-link'), 'dir')
+
+    const shell = await service.interactiveEnvironment({ projectId: PROJECT_ID, cwd: projectRoot })
+    const throughLink = await service.deferredEnvironment(
+      { projectId: PROJECT_ID, cwd: join(projectRoot, 'api-link'), command: 'bun run dev' },
+      shell.deferred
+    )
+    expect(throughLink.environment).toEqual({ API_ONLY: 'api' })
+  })
+
+  it('reads a project opened through a symlinked directory', async () => {
+    if (process.platform === 'win32') return
+    await service.createProjectEnvFile({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env',
+      name: 'API_ONLY',
+      value: 'api'
+    })
+    const projectLink = join(root, 'project-link')
+    await symlink(projectRoot, projectLink, 'dir')
+
+    const shell = await service.interactiveEnvironment({
+      projectId: PROJECT_ID,
+      cwd: projectLink
+    })
+    const launch = await service.deferredEnvironment(
+      {
+        projectId: PROJECT_ID,
+        cwd: join(projectLink, 'packages', 'api'),
+        command: 'bun run dev'
+      },
+      shell.deferred
+    )
+    expect(launch.environment).toEqual({ API_ONLY: 'api' })
   })
 
   it('matches a shell command against the directory its own cd left behind', async () => {
