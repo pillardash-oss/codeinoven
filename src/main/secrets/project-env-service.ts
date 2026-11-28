@@ -3,6 +3,7 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from 'path'
 import {
   compareEnvFileNames,
   formatProjectEnvLine,
+  normalizeInjectRuleLines,
   parseProjectEnvFile,
   PROJECT_ENV_DISABLED_PREFIX,
   projectEnvReference,
@@ -181,6 +182,28 @@ export class ProjectEnvService {
     file.updatedAt = Date.now()
     await this.dependencies.store.writeProject(input.projectId, files)
     if (entry) await this.dropRefIfUnused(input.projectId, entry.secretRef)
+    return this.listProjectEnv(input.projectId)
+  }
+
+  /**
+   * Replace the commands one managed env file is limited to.
+   *
+   * A rule is one script per line. The lines are stored, not the typed body, so a
+   * blank line at the end of a textarea never counts as a change. An empty rule is
+   * stored as no rule at all: a file nobody limited stays unlimited.
+   */
+  async setProjectEnvInjectRule(
+    input: EnvFileKeyInput & { text: string }
+  ): Promise<ProjectEnvFile[]> {
+    const group = normalizeGroup(input.group)
+    const fileName = validateEnvFileName(input.fileName)
+    const files = await this.dependencies.store.readProject(input.projectId)
+    const file = requireFile(files, group, fileName)
+    const rule = normalizeInjectRuleLines(input.text)
+    if (rule.length > 0) file.injectRule = rule
+    else delete file.injectRule
+    file.updatedAt = Date.now()
+    await this.dependencies.store.writeProject(input.projectId, files)
     return this.listProjectEnv(input.projectId)
   }
 
@@ -667,6 +690,7 @@ export class ProjectEnvService {
       entries: await Promise.all(
         sortEntries(file.entries).map((entry) => this.describeEntry(entry))
       ),
+      ...(file.injectRule && file.injectRule.length > 0 ? { injectRule: file.injectRule } : {}),
       ...(file.importedFrom ? { importedFrom: file.importedFrom } : {}),
       ...(file.writtenTo ? { writtenTo: file.writtenTo } : {})
     }

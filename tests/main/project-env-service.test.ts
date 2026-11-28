@@ -664,3 +664,72 @@ describe('ProjectEnvService creating a file', () => {
     expect(files[0]?.entries.map((entry) => entry.name)).toEqual(['API_URL', 'PORT'])
   })
 })
+
+describe('ProjectEnvService inject rule', () => {
+  it('stores the script lines, dropping blanks, comments and trailing spaces', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+
+    const files = await service.setProjectEnvInjectRule({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: '  bunx convex deploy  \n\n# only on deploy\nbun run deploy\ncd packages/convex-backend bun run deploy\n'
+    })
+
+    expect(files[0]?.injectRule).toEqual([
+      'bunx convex deploy',
+      'bun run deploy',
+      'cd packages/convex-backend bun run deploy'
+    ])
+
+    // A rule is manifest state, so it reads back from disk with no value in sight.
+    const reopened = await service.listProjectEnv(PROJECT_ID)
+    expect(reopened[0]?.injectRule).toEqual([
+      'bunx convex deploy',
+      'bun run deploy',
+      'cd packages/convex-backend bun run deploy'
+    ])
+  })
+
+  it('clears the limit when the rule is emptied, leaving the keys alone', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'API_URL',
+      value: 'https://api.example.com'
+    })
+    await service.setProjectEnvInjectRule({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: 'bun run deploy'
+    })
+
+    const files = await service.setProjectEnvInjectRule({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: '\n  \n'
+    })
+
+    expect(files[0]?.injectRule).toBeUndefined()
+    expect(files[0]?.entries.map((entry) => entry.name)).toEqual(['API_URL'])
+
+    // An unlimited file still injects everything, which is what it did before.
+    const launch = await service.environmentForLaunch({ projectId: PROJECT_ID, cwd: projectRoot })
+    expect(launch.environment).toEqual({ API_URL: 'https://api.example.com' })
+  })
+
+  it('refuses a file that does not exist instead of inventing one', async () => {
+    await expect(
+      service.setProjectEnvInjectRule({
+        projectId: PROJECT_ID,
+        group: '',
+        fileName: '.env',
+        text: 'bun run deploy'
+      })
+    ).rejects.toThrow(/no longer exists/u)
+  })
+})

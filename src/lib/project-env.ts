@@ -142,6 +142,23 @@ export interface ProjectEnvWriteResult {
   changed: boolean
 }
 
+/** Longest inject rule body one env file may carry, in characters. */
+export const ENV_INJECT_RULE_TEXT_LIMIT = 8_192
+
+/**
+ * The commands an inject rule names, one per line, blanks and comments dropped.
+ *
+ * The rule is stored as its lines rather than as the typed body, so the stored
+ * shape never depends on trailing whitespace or a blank line at the end of a
+ * textarea, and a future launch check can compare commands directly.
+ */
+export function normalizeInjectRuleLines(text: string): string[] {
+  return text
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('#'))
+}
+
 /** One managed ENV file: a directory group plus a file name. */
 export interface ProjectEnvFile {
   /** Project-relative directory, '' for the project root. */
@@ -150,10 +167,41 @@ export interface ProjectEnvFile {
   fileName: string
   entries: ProjectEnvEntry[]
   updatedAt: number
+  /**
+   * The commands this file's keys may be injected into, one per line.
+   *
+   * Empty means the file is not limited to any command, which is how every file
+   * behaves until its owner writes a rule.
+   */
+  injectRule?: string[]
   /** Project-relative path the values were imported from, when they were. */
   importedFrom?: string
   /** Project-relative path this file was last written to in the repository. */
   writtenTo?: string
+  /**
+   * The file's own line ordering, so the editor can show it again.
+   *
+   * A manifest holds names, not a body, so the comments and blank lines a user wrote
+   * would otherwise be gone the next time the file is opened. Absent means the file
+   * has no layout yet and its keys are simply listed.
+   */
+  layout?: ProjectEnvLayoutLine[]
+}
+
+/**
+ * One line of a stored file's layout.
+ *
+ * Only the shape is kept: a line the app does not own keeps its text, and a key
+ * keeps its place by name. Values live in the vault, so a layout is value-free and
+ * the store can keep a user's comments without ever holding a secret.
+ */
+export type ProjectEnvLayoutLine = { kind: 'text'; text: string } | { kind: 'key'; name: string }
+
+/** What one key of a file stands for while the text is being rebuilt. */
+export interface ProjectEnvKeyInput {
+  name: string
+  value: string
+  disabled?: boolean
 }
 
 /** What a launch will inject, described without any value. */
@@ -231,6 +279,12 @@ export interface ProjectEnvEntryRequest extends ProjectEnvFileRequest {
 /** A request that turns one key on or off without losing its value. */
 export interface ProjectEnvEntryToggleRequest extends ProjectEnvEntryRequest {
   disabled: boolean
+}
+
+/** A request that replaces the commands one managed env file is limited to. */
+export interface ProjectEnvInjectRuleRequest extends ProjectEnvFileRequest {
+  /** The scripts, one per line, as the rule editor holds them. */
+  text: string
 }
 
 /** A request that replaces one managed file with the lines of a `.env` body. */
@@ -406,6 +460,104 @@ export function projectEnvKeysText(contents: string): string {
       line.kind === 'assignment' ? [formatProjectEnvLine(line.name, line.value, line.disabled)] : []
     )
     .join('\n')
+}
+
+function appendEnvLines(lines: string[], appended: readonly string[]): string {
+  if (appended.length === 0) return lines.join('\n')
+  // New keys go after the file's last real line, not below a blank tail.
+  let at = lines.length
+  while (at > 0 && (lines[at - 1] ?? '').trim().length === 0) at -= 1
+  lines.splice(at, 0, ...appended)
+  return lines.join('\n')
+}
+
+/**
+ * The layout of a body: its own lines, with each key reduced to its name and place.
+ *
+ * This is what the store keeps instead of the body. It holds no value, so saving a
+ * file with a comment in it stays as value-free as saving one without.
+ */
+export function projectEnvLayout(contents: string): ProjectEnvLayoutLine[] {
+  return parseProjectEnvFile(contents).map((line) =>
+    line.kind === 'assignment'
+      ? { kind: 'key', name: line.name }
+      : { kind: 'text', text: line.text }
+  )
+}
+
+/**
+ * Render a stored file back into the body the editor shows.
+ *
+ * The layout decides the order and keeps every comment and blank line its owner
+ * wrote, and each key line is filled with the value the vault holds for that name. A
+ * key added since the last save is appended, and a layout key whose entry is gone is
+ * dropped, so the file never declares something the manifest does not hold.
+ */
+export function projectEnvFileText(
+  file: { layout?: readonly ProjectEnvLayoutLine[]; entries: readonly ProjectEnvEntry[] },
+  values: ReadonlyMap<string, string | null>
+): string {
+  const lines: string[] = []
+  const written = new Set<string>()
+  const byName = new Map(file.entries.map((entry) => [entry.name, entry]))
+  for (const line of file.layout ?? []) {
+    if (line.kind === 'text') {
+      lines.push(line.text)
+      continue
+    }
+    const entry = byName.get(line.name)
+    // The entry's own name is written, never the layout's, so a stored manifest can
+    // never put a line in the file that it does not actually hold as a key.
+    if (!entry || written.has(entry.name)) continue
+    written.add(entry.name)
+    lines.push(
+      formatProjectEnvLine(entry.name, values.get(entry.name) ?? '', entry.disabled === true)
+    )
+  }
+  const appended = file.entries
+    .filter((entry) => !written.has(entry.name))
+    .map((entry) =>
+      formatProjectEnvLine(entry.name, values.get(entry.name) ?? '', entry.disabled === true)
+    )
+  return appendEnvLines(lines, appended)
+}
+
+/**
+ * Write key rows into a body, keeping every line the rows do not own.
+ *
+ * Comments, blank lines and lines that cannot be read belong to the user, so they
+ * stay exactly where they are and a save no longer drops them. A row takes the place
+ * of the line that declared its name, a name no row holds loses its line, and a new
+ * key is appended after the last line the file already has.
+ */
+export function mergeProjectEnvRows(
+  contents: string,
+  rows: readonly ProjectEnvKeyInput[]
+): string {
+  const pending = new Map<string, ProjectEnvKeyInput>()
+  for (const row of rows) {
+    const name = row.name.trim()
+    if (!name || pending.has(name)) continue
+    pending.set(name, { name, value: row.value, disabled: row.disabled === true })
+  }
+  const lines: string[] = []
+  const written = new Set<string>()
+  for (const line of parseProjectEnvFile(contents)) {
+    if (line.kind !== 'assignment') {
+      lines.push(line.text)
+      continue
+    }
+    const row = pending.get(line.name)
+    // A name no row holds any more was removed; a name the file declared twice is
+    // one key, so only its first line keeps the slot.
+    if (!row || written.has(line.name)) continue
+    written.add(line.name)
+    lines.push(formatProjectEnvLine(row.name, row.value, row.disabled === true))
+  }
+  const appended = [...pending.values()]
+    .filter((row) => !written.has(row.name))
+    .map((row) => formatProjectEnvLine(row.name, row.value, row.disabled === true))
+  return appendEnvLines(lines, appended)
 }
 
 /** The name and value of one `NAME=value` line, or null when the line is not one. */

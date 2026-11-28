@@ -8,6 +8,7 @@ import type {
   ProjectEnvFileRequest,
   ProjectEnvImportRequest,
   ProjectEnvImportResult,
+  ProjectEnvInjectRuleRequest,
   ProjectEnvLaunchPreview,
   ProjectEnvPreviewRequest,
   ProjectEnvThreadEntryRequest,
@@ -37,6 +38,11 @@ export const invokeSecretsContract = {
     ProjectEnvFile[]
   >,
   'secrets:envCreateFile': {} as Contract<[request: ProjectEnvFileRequest], ProjectEnvFile[]>,
+  /** Replace the commands an env file's keys may be injected into, one per line. */
+  'secrets:envSetInjectRule': {} as Contract<
+    [request: ProjectEnvInjectRuleRequest],
+    ProjectEnvFile[]
+  >,
   /** Replace one managed file with the lines of a typed `.env` body. */
   'secrets:envApplyText': {} as Contract<
     [request: ProjectEnvApplyTextRequest],
