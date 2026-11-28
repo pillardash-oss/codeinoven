@@ -21,10 +21,10 @@
   import {
     DEFAULT_ENV_FILE_NAME,
     compareEnvFileNames,
-    formatProjectEnvLine,
+    mergeProjectEnvRows,
     normalizeInjectRuleLines,
     parseProjectEnvFile,
-    projectEnvKeysText,
+    projectEnvFileText,
     suggestEnvFileName,
     validateEnvFileName,
     type ProjectEnvFile
@@ -259,23 +259,13 @@
   /**
    * The document as the current surface holds it.
    *
-   * In `Keys` the rows are authoritative, so an unnamed row survives until the user
-   * saves; serializing simply leaves it out of the file. In `Editor` and on the rule
-   * page the typed body is the file.
+   * In `Keys` the rows are written into the body the panel already holds, so every
+   * comment and blank line the user wrote stays where it is; an unnamed row simply
+   * never reaches the file. In `Editor` and on the rule page the body is the file.
    */
-  const draft = $derived(surface === 'keys' ? serializeRows(rows) : body)
-  /**
-   * The stored document in the shape the current surface writes it.
-   *
-   * The editor writes every line, comments and blank lines included, while the key
-   * list writes the assignments alone. Comparing each surface against its own shape
-   * of the stored file is what keeps a mode switch from reading as an unsaved edit:
-   * a file that carries a comment looked dirty the moment it was shown as keys,
-   * because the rows could never reproduce that line.
-   */
-  const savedForSurface = $derived(surface === 'keys' ? projectEnvKeysText(savedBody) : savedBody)
+  const draft = $derived(surface === 'keys' ? mergeProjectEnvRows(body, rows) : body)
   /** Whether the env file itself holds edits, whichever page is showing. */
-  const envDirty = $derived(draft !== savedForSurface)
+  const envDirty = $derived(draft !== savedBody)
   /** The rule as the file stores it, so a trailing blank line is never an edit. */
   const ruleLines = $derived(normalizeInjectRuleLines(ruleText))
   const ruleDirty = $derived(ruleLines.join('\n') !== savedRuleText)
@@ -305,26 +295,14 @@
     )
   }
 
-  /**
-   * Comment and blank lines belong to the file, so the key rows never rewrite them.
-   *
-   * A turned-off key is written as `#cio-cmt NAME=value`, which is the one comment
-   * shape the parser reads back as a key. Without it a switch could not survive a
-   * save, because the row would come back as a comment and vanish from the list.
-   */
-  function serializeRows(list: readonly KeyRow[]): string {
-    return list
-      .filter((row) => row.name.trim().length > 0)
-      .map((row) => formatProjectEnvLine(row.name.trim(), row.value, row.disabled))
-      .join('\n')
-  }
-
   function currentSnapshot(): Snapshot {
     return { body, rows: rows.map((row) => ({ ...row })) }
   }
 
   function stateFor(next: { body?: string; rows?: KeyRow[] }): Snapshot {
-    if (next.rows) return { body: serializeRows(next.rows), rows: next.rows }
+    // A row edit is written into the body the panel holds rather than replacing it,
+    // so a save keeps the comments and blank lines the user wrote around its keys.
+    if (next.rows) return { body: mergeProjectEnvRows(body, next.rows), rows: next.rows }
     const text = next.body ?? body
     return { body: text, rows: parseRows(text) }
   }
@@ -457,11 +435,9 @@
       fileName: file.fileName
     })
     const byName = new Map(values.entries.map((entry) => [entry.name, entry.value ?? '']))
-    return file.entries
-      .map((entry) =>
-        formatProjectEnvLine(entry.name, byName.get(entry.name) ?? '', entry.disabled === true)
-      )
-      .join('\n')
+    // The stored layout puts the keys back where they were written, so a file saved
+    // from this panel opens again with the comments its owner put around them.
+    return projectEnvFileText(file, byName)
   }
 
   /** Read a target into both surfaces, preferring the draft parked there. */
@@ -872,8 +848,9 @@ cd packages/convex-backend bun run deploy`
 
   async function save(): Promise<void> {
     if (!projectId) return
-    // In the editor the body is the file, comments included; in Keys the rows are.
-    const text = surface === 'keys' ? serializeRows(rows) : body
+    // The document is the file on every page: the editor's own text, or the key rows
+    // written back into it, which keeps the comments and blank lines around its keys.
+    const text = draft
     // An unnamed row is a key still being typed; it stays in the panel and is
     // reported rather than silently discarded.
     const unnamed = rows.filter((row) => row.name.trim().length === 0).length
@@ -894,6 +871,7 @@ cd packages/convex-backend bun run deploy`
       drafts.delete(targetKey(group, fileName))
       savedBody = text
       if (surface === 'keys') {
+        body = text
         rows = parseRows(text)
         revealed.clear()
       }

@@ -8,7 +8,7 @@ import {
 } from '../../src/main/secrets/project-env-service'
 import { ProjectEnvStore } from '../../src/main/secrets/project-env-store'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
-import { parseProjectEnvFile } from '../../src/lib/project-env'
+import { parseProjectEnvFile, projectEnvFileText } from '../../src/lib/project-env'
 
 /** Windows has no POSIX mode bits: chmod only toggles the read-only flag there. */
 async function expectOwnerOnly(path: string): Promise<void> {
@@ -393,6 +393,60 @@ describe('ProjectEnvService writing the file into the project', () => {
     await expect(
       service.writeEnvFileToProject({ projectId: PROJECT_ID, group: '', fileName: '.env' })
     ).rejects.toThrow(/Add a key/u)
+  })
+})
+
+describe('ProjectEnvService keeping the user lines', () => {
+  it('stores the comments around a key and gives them back with the values', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.applyEnvText({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: ['# deployment', 'PORT=3000', '', '# rotated weekly', 'DEBUG=1', ''].join('\n')
+    })
+
+    const [file] = await service.listProjectEnv(PROJECT_ID)
+    expect(file?.layout).toEqual([
+      { kind: 'text', text: '# deployment' },
+      { kind: 'key', name: 'PORT' },
+      { kind: 'text', text: '' },
+      { kind: 'text', text: '# rotated weekly' },
+      { kind: 'key', name: 'DEBUG' },
+      { kind: 'text', text: '' }
+    ])
+    // The manifest holds the shape of the file, never a value from it.
+    expect(JSON.stringify(file?.layout)).not.toContain('3000')
+
+    const values = await service.readEnvValues({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env'
+    })
+    const byName = new Map(values.entries.map((entry) => [entry.name, entry.value]))
+    expect(projectEnvFileText({ layout: file?.layout, entries: values.entries }, byName)).toBe(
+      ['# deployment', 'PORT=3000', '', '# rotated weekly', 'DEBUG=1', ''].join('\n')
+    )
+  })
+
+  it('writes no comment into the project file', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.applyEnvText({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: ['# deployment note', 'PORT=3000', ''].join('\n')
+    })
+
+    const written = await service.writeEnvFileToProject({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env'
+    })
+    expect(written.changed).toBe(true)
+    const content = await readFile(join(projectRoot, '.env'), 'utf8')
+    expect(content).not.toContain('deployment note')
+    expect(content).toMatch(/^PORT=cio:\/\/secret_/mu)
   })
 })
 

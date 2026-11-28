@@ -204,6 +204,12 @@ export interface ProjectEnvKeyInput {
   disabled?: boolean
 }
 
+/** What rebuilding a file's text has to know about one stored key. */
+export interface ProjectEnvTextKey {
+  name: string
+  disabled?: boolean
+}
+
 /** What a launch will inject, described without any value. */
 export interface ProjectEnvLaunchPreviewEntry {
   name: string
@@ -446,22 +452,6 @@ export function parseProjectEnvFile(contents: string): ProjectEnvLine[] {
   })
 }
 
-/**
- * A document reduced to the lines the key list can hold.
- *
- * The editor keeps comments and blank lines because they belong to the file. The
- * key list writes assignments alone, so it compares and saves a file through this
- * form; that is what keeps a switch between the two surfaces from reading as an
- * unsaved edit on a file that carries a comment.
- */
-export function projectEnvKeysText(contents: string): string {
-  return parseProjectEnvFile(contents)
-    .flatMap((line) =>
-      line.kind === 'assignment' ? [formatProjectEnvLine(line.name, line.value, line.disabled)] : []
-    )
-    .join('\n')
-}
-
 function appendEnvLines(lines: string[], appended: readonly string[]): string {
   if (appended.length === 0) return lines.join('\n')
   // New keys go after the file's last real line, not below a blank tail.
@@ -494,7 +484,7 @@ export function projectEnvLayout(contents: string): ProjectEnvLayoutLine[] {
  * dropped, so the file never declares something the manifest does not hold.
  */
 export function projectEnvFileText(
-  file: { layout?: readonly ProjectEnvLayoutLine[]; entries: readonly ProjectEnvEntry[] },
+  file: { layout?: readonly ProjectEnvLayoutLine[]; entries: readonly ProjectEnvTextKey[] },
   values: ReadonlyMap<string, string | null>
 ): string {
   const lines: string[] = []
@@ -530,10 +520,7 @@ export function projectEnvFileText(
  * of the line that declared its name, a name no row holds loses its line, and a new
  * key is appended after the last line the file already has.
  */
-export function mergeProjectEnvRows(
-  contents: string,
-  rows: readonly ProjectEnvKeyInput[]
-): string {
+export function mergeProjectEnvRows(contents: string, rows: readonly ProjectEnvKeyInput[]): string {
   const pending = new Map<string, ProjectEnvKeyInput>()
   for (const row of rows) {
     const name = row.name.trim()

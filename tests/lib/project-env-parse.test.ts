@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   formatProjectEnvLine,
   isEnvFileNameTaken,
+  mergeProjectEnvRows,
   parseProjectEnvFile,
-  projectEnvKeysText,
+  projectEnvFileText,
+  projectEnvLayout,
   PROJECT_ENV_DISABLED_PREFIX,
   sameEnvFileName,
   suggestEnvFileName
@@ -81,25 +83,71 @@ describe('env file names', () => {
   })
 })
 
-describe('projectEnvKeysText', () => {
-  it('keeps the keys and drops the lines the key list cannot hold', () => {
-    const text = ['# deployment note', 'PORT=3000', '', '#cio-cmt FEATURE_FLAG=off'].join('\n')
-    expect(projectEnvKeysText(text)).toBe(
-      ['PORT=3000', `${PROJECT_ENV_DISABLED_PREFIX} FEATURE_FLAG=off`].join('\n')
+describe('mergeProjectEnvRows', () => {
+  it('writes the rows in place and keeps the comments around them', () => {
+    const body = ['# deployment', 'PORT=3000', '', '# keep this note', 'DEBUG=1'].join('\n')
+    const merged = mergeProjectEnvRows(body, [
+      { name: 'PORT', value: '4000' },
+      { name: 'DEBUG', value: '1' }
+    ])
+    expect(merged).toBe(['# deployment', 'PORT=4000', '', '# keep this note', 'DEBUG=1'].join('\n'))
+  })
+
+  it('drops the line of a key that is gone and appends a new one above a blank tail', () => {
+    const body = ['# note', 'PORT=3000', ''].join('\n')
+    const merged = mergeProjectEnvRows(body, [{ name: 'DEBUG', value: '1' }])
+    expect(merged).toBe(['# note', 'DEBUG=1', ''].join('\n'))
+  })
+
+  it('keeps a turned-off key off and an unnamed row out of the file', () => {
+    const merged = mergeProjectEnvRows('PORT=3000', [
+      { name: 'PORT', value: '3000', disabled: true },
+      { name: '  ', value: 'ignored' }
+    ])
+    expect(merged).toBe(`${PROJECT_ENV_DISABLED_PREFIX} PORT=3000`)
+    expect(merged).toBe(formatProjectEnvLine('PORT', '3000', true))
+  })
+})
+
+describe('projectEnvLayout and projectEnvFileText', () => {
+  const entries = [
+    { name: 'PORT', secretRef: 'ref-1', updatedAt: 0 },
+    { name: 'DEBUG', secretRef: 'ref-2', updatedAt: 0, disabled: true }
+  ]
+  const values = new Map([
+    ['PORT', '3000'],
+    ['DEBUG', '1']
+  ])
+
+  it('stores the shape of a body, with each key reduced to its name', () => {
+    const layout = projectEnvLayout(['# deployment', 'PORT=3000', '', 'DEBUG=1'].join('\n'))
+    expect(layout).toEqual([
+      { kind: 'text', text: '# deployment' },
+      { kind: 'key', name: 'PORT' },
+      { kind: 'text', text: '' },
+      { kind: 'key', name: 'DEBUG' }
+    ])
+    // Nothing a layout holds can be a value, so a manifest carrying one stays safe.
+    expect(JSON.stringify(layout)).not.toContain('3000')
+  })
+
+  it('rebuilds the body a user wrote, with the stored values in it', () => {
+    const body = ['# deployment', 'PORT=3000', '', 'DEBUG=1'].join('\n')
+    expect(projectEnvFileText({ layout: projectEnvLayout(body), entries }, values)).toBe(
+      ['# deployment', 'PORT=3000', '', `${PROJECT_ENV_DISABLED_PREFIX} DEBUG=1`].join('\n')
     )
   })
 
-  it('reports a file with comments as unchanged when its keys are', () => {
-    // The panel compares the key surface against this form, so a comment a row can
-    // never reproduce must not read as an edit after a save in the editor.
-    const saved = ['# note', 'PORT=3000', '', 'DEBUG=1'].join('\n')
-    expect(projectEnvKeysText(saved)).toBe(projectEnvKeysText(['PORT=3000', 'DEBUG=1'].join('\n')))
+  it('appends a key the layout has never seen and drops one it no longer holds', () => {
+    const layout = projectEnvLayout(['# note', 'PORT=3000', 'GONE=1'].join('\n'))
+    expect(projectEnvFileText({ layout, entries }, values)).toBe(
+      ['# note', 'PORT=3000', `${PROJECT_ENV_DISABLED_PREFIX} DEBUG=1`].join('\n')
+    )
   })
 
-  it('still reports a changed key', () => {
-    const saved = ['# note', 'PORT=3000'].join('\n')
-    expect(projectEnvKeysText(saved)).not.toBe(
-      projectEnvKeysText(['# note', 'PORT=4000'].join('\n'))
+  it('lists the keys of a file that has no layout yet', () => {
+    expect(projectEnvFileText({ entries }, values)).toBe(
+      ['PORT=3000', `${PROJECT_ENV_DISABLED_PREFIX} DEBUG=1`].join('\n')
     )
   })
 })

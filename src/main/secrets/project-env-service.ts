@@ -6,6 +6,7 @@ import {
   normalizeInjectRuleLines,
   parseProjectEnvFile,
   PROJECT_ENV_DISABLED_PREFIX,
+  projectEnvLayout,
   projectEnvReference,
   sameEnvFileName,
   suggestEnvFileName,
@@ -297,6 +298,11 @@ export class ProjectEnvService {
 
     const removedEntries = file.entries.filter((entry) => !typed.has(entry.name))
     file.entries = file.entries.filter((entry) => typed.has(entry.name))
+    // The body's own lines are kept beside the keys, so the comments and blank lines
+    // the user wrote come back the next time the file is opened. Only the shape is
+    // stored: each key line is recorded as its name, and every value stays in the
+    // vault, so a manifest still never carries a secret.
+    file.layout = projectEnvLayout(input.text)
     file.updatedAt = Date.now()
     await this.dependencies.store.writeProject(input.projectId, files)
     for (const entry of removedEntries) {
@@ -546,6 +552,7 @@ export class ProjectEnvService {
       })
     }
     file.importedFrom = input.path
+    file.layout = projectEnvLayout(contents)
     file.updatedAt = Date.now()
     await this.dependencies.store.writeProject(input.projectId, files)
 
@@ -691,6 +698,7 @@ export class ProjectEnvService {
         sortEntries(file.entries).map((entry) => this.describeEntry(entry))
       ),
       ...(file.injectRule && file.injectRule.length > 0 ? { injectRule: file.injectRule } : {}),
+      ...(file.layout ? { layout: file.layout } : {}),
       ...(file.importedFrom ? { importedFrom: file.importedFrom } : {}),
       ...(file.writtenTo ? { writtenTo: file.writtenTo } : {})
     }
