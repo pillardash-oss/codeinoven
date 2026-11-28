@@ -561,11 +561,37 @@ function selectionInside(root: HTMLElement): Selection | null {
   return selection
 }
 
+/**
+ * The editable node a caret at the very end of `root` actually belongs in, or
+ * null when the end of `root` is already a place the browser accepts a caret.
+ *
+ * A code block is a `contenteditable="false"` wrapper whose inner `<code>` is
+ * its own editing host. A range collapsed after the wrapper sits at the editing
+ * frame's outer edge, and the browser drops that selection the moment a key
+ * arrives   so ArrowDown, ArrowUp and typing act on nothing at all. Ending the
+ * caret inside the wrapper's own editable text keeps it a position the browser
+ * honours, which is what makes ArrowDown leave a trailing code block again.
+ */
+function editableEndNode(root: HTMLElement): HTMLElement | null {
+  let last: Node | null = root.lastChild
+  while (
+    last !== null &&
+    last.nodeType === Node.TEXT_NODE &&
+    (last.textContent ?? '').replace(/\u200b/g, '').trim() === ''
+  ) {
+    last = last.previousSibling
+  }
+  if (!(last instanceof HTMLElement)) return null
+  if (last.getAttribute('contenteditable') !== 'false') return null
+  const editable = Array.from(last.querySelectorAll<HTMLElement>('[contenteditable="true"]')).at(-1)
+  return editable ?? null
+}
+
 export function placeCaretAtEnd(root: HTMLElement): void {
   const selection = window.getSelection()
   if (!selection) return
   const range = document.createRange()
-  range.selectNodeContents(root)
+  range.selectNodeContents(editableEndNode(root) ?? root)
   range.collapse(false)
   selection.removeAllRanges()
   selection.addRange(range)
