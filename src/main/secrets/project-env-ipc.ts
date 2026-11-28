@@ -6,10 +6,12 @@ import {
   type ProjectEnvEntryToggleRequest,
   type ProjectEnvFileRequest,
   type ProjectEnvImportRequest,
+  type ProjectEnvInjectRuleRequest,
   type ProjectEnvPreviewRequest,
   type ProjectEnvThreadEntryRequest,
   type ProjectEnvThreadValueRequest,
-  type ProjectEnvValueRequest
+  type ProjectEnvValueRequest,
+  ENV_INJECT_RULE_TEXT_LIMIT
 } from '../../lib/project-env'
 import type { ProjectEnvService } from './project-env-service'
 
@@ -84,6 +86,17 @@ function applyTextRequest(value: unknown): ProjectEnvApplyTextRequest {
   return { ...fileRequest(input), text: body, keep }
 }
 
+function injectRuleRequest(value: unknown): ProjectEnvInjectRuleRequest {
+  const input = record(value, 'Env inject rule')
+  const text = input['text']
+  if (typeof text !== 'string') throw new TypeError('Env inject rule must be a string')
+  if (text.length > ENV_INJECT_RULE_TEXT_LIMIT) {
+    throw new TypeError('This inject rule is too large')
+  }
+  // An empty rule is a real value: it clears the limit on the file.
+  return { ...fileRequest(input), text }
+}
+
 function threadValueRequest(value: unknown): ProjectEnvThreadValueRequest {
   const input = record(value, 'Thread env value request')
   const raw = input['value']
@@ -148,6 +161,9 @@ export function registerProjectEnvIpc(service: ProjectEnvService): void {
   )
   ipcMain.handle('secrets:envSetEntryDisabled', (_, request: unknown) =>
     service.setProjectEnvEntryDisabled(entryToggleRequest(request))
+  )
+  ipcMain.handle('secrets:envSetInjectRule', (_, request: unknown) =>
+    service.setProjectEnvInjectRule(injectRuleRequest(request))
   )
   ipcMain.handle('secrets:envCreateFile', (_, request: unknown) =>
     service.createProjectEnvFile(fileRequest(request))

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import {
@@ -7,8 +7,9 @@ import {
   type ProjectEnvSecretsPort
 } from '../../src/main/secrets/project-env-service'
 import { ProjectEnvStore } from '../../src/main/secrets/project-env-store'
+import { resolveCommandEnvironment } from '../../src/main/secrets/project-env-command'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
-import { parseProjectEnvFile } from '../../src/lib/project-env'
+import { parseProjectEnvFile, projectEnvFileText } from '../../src/lib/project-env'
 
 /** Windows has no POSIX mode bits: chmod only toggles the read-only flag there. */
 async function expectOwnerOnly(path: string): Promise<void> {
@@ -396,6 +397,60 @@ describe('ProjectEnvService writing the file into the project', () => {
   })
 })
 
+describe('ProjectEnvService keeping the user lines', () => {
+  it('stores the comments around a key and gives them back with the values', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.applyEnvText({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: ['# deployment', 'PORT=3000', '', '# rotated weekly', 'DEBUG=1', ''].join('\n')
+    })
+
+    const [file] = await service.listProjectEnv(PROJECT_ID)
+    expect(file?.layout).toEqual([
+      { kind: 'text', text: '# deployment' },
+      { kind: 'key', name: 'PORT' },
+      { kind: 'text', text: '' },
+      { kind: 'text', text: '# rotated weekly' },
+      { kind: 'key', name: 'DEBUG' },
+      { kind: 'text', text: '' }
+    ])
+    // The manifest holds the shape of the file, never a value from it.
+    expect(JSON.stringify(file?.layout)).not.toContain('3000')
+
+    const values = await service.readEnvValues({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env'
+    })
+    const byName = new Map(values.entries.map((entry) => [entry.name, entry.value]))
+    expect(projectEnvFileText({ layout: file?.layout, entries: values.entries }, byName)).toBe(
+      ['# deployment', 'PORT=3000', '', '# rotated weekly', 'DEBUG=1', ''].join('\n')
+    )
+  })
+
+  it('writes no comment into the project file', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.applyEnvText({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: ['# deployment note', 'PORT=3000', ''].join('\n')
+    })
+
+    const written = await service.writeEnvFileToProject({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env'
+    })
+    expect(written.changed).toBe(true)
+    const content = await readFile(join(projectRoot, '.env'), 'utf8')
+    expect(content).not.toContain('deployment note')
+    expect(content).toMatch(/^PORT=cio:\/\/secret_/mu)
+  })
+})
+
 describe('ProjectEnvService import', () => {
   it('previews without writing, then rewrites the file and keeps a private backup', async () => {
     await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
@@ -662,5 +717,476 @@ describe('ProjectEnvService creating a file', () => {
     expect(files).toHaveLength(1)
     expect(files[0]?.fileName).toBe('.env')
     expect(files[0]?.entries.map((entry) => entry.name)).toEqual(['API_URL', 'PORT'])
+  })
+})
+
+describe('ProjectEnvService inject rule', () => {
+  it('stores the script lines, dropping blanks, comments and trailing spaces', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+
+    const files = await service.setProjectEnvInjectRule({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: '  bunx convex deploy  \n\n# only on deploy\nbun run deploy\ncd packages/convex-backend bun run deploy\n'
+    })
+
+    expect(files[0]?.injectRule).toEqual([
+      'bunx convex deploy',
+      'bun run deploy',
+      'cd packages/convex-backend bun run deploy'
+    ])
+
+    // A rule is manifest state, so it reads back from disk with no value in sight.
+    const reopened = await service.listProjectEnv(PROJECT_ID)
+    expect(reopened[0]?.injectRule).toEqual([
+      'bunx convex deploy',
+      'bun run deploy',
+      'cd packages/convex-backend bun run deploy'
+    ])
+  })
+
+  it('clears the limit when the rule is emptied, leaving the keys alone', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'API_URL',
+      value: 'https://api.example.com'
+    })
+    await service.setProjectEnvInjectRule({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: 'bun run deploy'
+    })
+
+    const files = await service.setProjectEnvInjectRule({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: '\n  \n'
+    })
+
+    expect(files[0]?.injectRule).toBeUndefined()
+    expect(files[0]?.entries.map((entry) => entry.name)).toEqual(['API_URL'])
+
+    // An unlimited file still injects everything, which is what it did before.
+    const launch = await service.environmentForLaunch({ projectId: PROJECT_ID, cwd: projectRoot })
+    expect(launch.environment).toEqual({ API_URL: 'https://api.example.com' })
+  })
+
+  it('refuses a file that does not exist instead of inventing one', async () => {
+    await expect(
+      service.setProjectEnvInjectRule({
+        projectId: PROJECT_ID,
+        group: '',
+        fileName: '.env',
+        text: 'bun run deploy'
+      })
+    ).rejects.toThrow(/no longer exists/u)
+  })
+})
+
+describe('ProjectEnvService inject rule enforcement', () => {
+  async function seed(): Promise<void> {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'ROOT_URL',
+      value: 'https://root.example.com'
+    })
+    await service.createProjectEnvFile({
+      projectId: PROJECT_ID,
+      group: 'packages/convex-backend',
+      fileName: '.env'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: 'packages/convex-backend',
+      fileName: '.env',
+      name: 'DEPLOY_KEY',
+      value: 'sk-deploy'
+    })
+    await service.setProjectEnvInjectRule({
+      projectId: PROJECT_ID,
+      group: 'packages/convex-backend',
+      fileName: '.env',
+      text: 'cd packages/convex-backend bun run deploy'
+    })
+  }
+
+  it('injects a ruled file into the script the rule names', async () => {
+    await seed()
+
+    const launch = await service.environmentForLaunch({
+      projectId: PROJECT_ID,
+      cwd: projectRoot,
+      directory: 'packages/convex-backend',
+      command: 'cd packages/convex-backend && bun run deploy'
+    })
+
+    expect(launch.environment).toMatchObject({
+      DEPLOY_KEY: 'sk-deploy',
+      ROOT_URL: 'https://root.example.com'
+    })
+    expect(launch.preview.skipped).toEqual([])
+  })
+
+  it('withholds a ruled file from any other script, and says why', async () => {
+    await seed()
+
+    const launch = await service.environmentForLaunch({
+      projectId: PROJECT_ID,
+      cwd: projectRoot,
+      directory: 'packages/convex-backend',
+      command: 'bun run test'
+    })
+
+    expect(launch.environment).toEqual({ ROOT_URL: 'https://root.example.com' })
+    expect(launch.preview.skipped).toEqual([
+      {
+        name: 'DEPLOY_KEY',
+        reason: expect.stringMatching(
+          /only injected into the scripts packages\/convex-backend\/\.env names/iu
+        )
+      }
+    ])
+  })
+
+  it('does not substitute a shallower value for a withheld name', async () => {
+    await seed()
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'DEPLOY_KEY',
+      value: 'from-the-root'
+    })
+
+    const launch = await service.environmentForLaunch({
+      projectId: PROJECT_ID,
+      cwd: projectRoot,
+      directory: 'packages/convex-backend',
+      command: 'bun run test'
+    })
+
+    expect(launch.environment).not.toHaveProperty('DEPLOY_KEY')
+  })
+
+  it('applies no rule to a launch whose command is not known yet', async () => {
+    await seed()
+
+    const launch = await service.environmentForLaunch({
+      projectId: PROJECT_ID,
+      cwd: projectRoot,
+      directory: 'packages/convex-backend'
+    })
+
+    expect(launch.environment).toMatchObject({ DEPLOY_KEY: 'sk-deploy' })
+  })
+
+  it('matches any of several scripts, and a rule that names no directory', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'REGISTRY_TOKEN',
+      value: 'tok'
+    })
+    await service.setProjectEnvInjectRule({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: 'bunx convex deploy\nbun run deploy'
+    })
+
+    for (const command of ['bunx convex deploy', 'bun run deploy']) {
+      const launch = await service.environmentForLaunch({
+        projectId: PROJECT_ID,
+        cwd: projectRoot,
+        command
+      })
+      expect(launch.environment).toEqual({ REGISTRY_TOKEN: 'tok' })
+    }
+
+    const other = await service.environmentForLaunch({
+      projectId: PROJECT_ID,
+      cwd: projectRoot,
+      command: 'bun run dev'
+    })
+    expect(other.environment).toEqual({})
+  })
+})
+
+describe('ProjectEnvService interactive shell deferral', () => {
+  async function ruledFile(): Promise<void> {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'STRIPE_KEY',
+      value: 'sk_live_1'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'APP_NAME',
+      value: 'Oven'
+    })
+    await service.setProjectEnvInjectRule({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: 'bun run deploy'
+    })
+  }
+
+  it('keeps every open key at spawn and names a ruled file key as deferred', async () => {
+    await ruledFile()
+
+    const open = await service.environmentForLaunch({ projectId: PROJECT_ID, cwd: projectRoot })
+    expect(open.environment).toEqual({ STRIPE_KEY: 'sk_live_1', APP_NAME: 'Oven' })
+    expect(open.deferred).toEqual([])
+    expect(open.ruleDeferred).toEqual([])
+
+    const shell = await service.interactiveEnvironment({ projectId: PROJECT_ID, cwd: projectRoot })
+    expect(shell.environment).toEqual({})
+    expect(shell.deferred.sort()).toEqual(['APP_NAME', 'STRIPE_KEY'])
+    expect(shell.ruleDeferred.sort()).toEqual(['APP_NAME', 'STRIPE_KEY'])
+    expect(shell.preview.skipped.map((entry) => entry.name).sort()).toEqual([
+      'APP_NAME',
+      'STRIPE_KEY'
+    ])
+  })
+
+  it('supplies only the names a shell command is admitted to', async () => {
+    await ruledFile()
+    const shell = await service.interactiveEnvironment({ projectId: PROJECT_ID, cwd: projectRoot })
+
+    const admitted = await service.deferredEnvironment(
+      { projectId: PROJECT_ID, cwd: projectRoot, command: 'bun run deploy' },
+      shell.deferred
+    )
+    expect(admitted.environment).toEqual({ STRIPE_KEY: 'sk_live_1', APP_NAME: 'Oven' })
+
+    const refused = await service.deferredEnvironment(
+      { projectId: PROJECT_ID, cwd: projectRoot, command: 'bun run deploy:prod' },
+      shell.deferred
+    )
+    expect(refused.environment).toEqual({})
+  })
+
+  it('keeps even an unruled key back, so a cd into a group decides what a command sees', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'PLAIN',
+      value: 'plain'
+    })
+    await service.createProjectEnvFile({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env',
+      name: 'API_ONLY',
+      value: 'api'
+    })
+
+    const shell = await service.interactiveEnvironment({ projectId: PROJECT_ID, cwd: projectRoot })
+    expect(shell.environment).toEqual({})
+    expect(shell.deferred.sort()).toEqual(['API_ONLY', 'PLAIN'])
+    expect(shell.ruleDeferred).toEqual([])
+
+    const atRoot = await service.deferredEnvironment(
+      { projectId: PROJECT_ID, cwd: projectRoot, command: 'bun run dev' },
+      shell.deferred
+    )
+    expect(atRoot.environment).toEqual({ PLAIN: 'plain' })
+
+    const inPackage = await service.deferredEnvironment(
+      {
+        projectId: PROJECT_ID,
+        cwd: join(projectRoot, 'packages', 'api'),
+        command: 'bun run dev'
+      },
+      shell.deferred
+    )
+    expect(inPackage.environment).toEqual({ PLAIN: 'plain', API_ONLY: 'api' })
+  })
+
+  it('injects into a package reached through a symlink, whichever path was filed', async () => {
+    if (process.platform === 'win32') return
+    await service.createProjectEnvFile({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env',
+      name: 'API_ONLY',
+      value: 'api'
+    })
+    await symlink(join(projectRoot, 'packages', 'api'), join(projectRoot, 'api-link'), 'dir')
+
+    const shell = await service.interactiveEnvironment({ projectId: PROJECT_ID, cwd: projectRoot })
+    const throughLink = await service.deferredEnvironment(
+      { projectId: PROJECT_ID, cwd: join(projectRoot, 'api-link'), command: 'bun run dev' },
+      shell.deferred
+    )
+    expect(throughLink.environment).toEqual({ API_ONLY: 'api' })
+  })
+
+  it('reads a project opened through a symlinked directory', async () => {
+    if (process.platform === 'win32') return
+    await service.createProjectEnvFile({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env',
+      name: 'API_ONLY',
+      value: 'api'
+    })
+    const projectLink = join(root, 'project-link')
+    await symlink(projectRoot, projectLink, 'dir')
+
+    const shell = await service.interactiveEnvironment({
+      projectId: PROJECT_ID,
+      cwd: projectLink
+    })
+    const launch = await service.deferredEnvironment(
+      {
+        projectId: PROJECT_ID,
+        cwd: join(projectLink, 'packages', 'api'),
+        command: 'bun run dev'
+      },
+      shell.deferred
+    )
+    expect(launch.environment).toEqual({ API_ONLY: 'api' })
+  })
+
+  it('matches a shell command against the directory its own cd left behind', async () => {
+    await service.createProjectEnvFile({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env',
+      name: 'API_ONLY',
+      value: 'api'
+    })
+    await service.setProjectEnvInjectRule({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env',
+      text: 'cd packages/api && bun run api'
+    })
+
+    const wrongDirectory = await service.environmentForLaunch({
+      projectId: PROJECT_ID,
+      cwd: projectRoot,
+      command: 'bun run api'
+    })
+    expect(wrongDirectory.environment).toEqual({})
+
+    const rightDirectory = await service.environmentForLaunch({
+      projectId: PROJECT_ID,
+      cwd: join(projectRoot, 'packages', 'api'),
+      directory: 'packages/api',
+      command: 'cd packages/api && bun run api'
+    })
+    expect(rightDirectory.environment).toEqual({ API_ONLY: 'api' })
+  })
+})
+
+describe('resolveCommandEnvironment', () => {
+  it('applies the package an agent command cds into, even from the project root', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'ROOT_URL',
+      value: 'root'
+    })
+    await service.createProjectEnvFile({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env',
+      name: 'API_ONLY',
+      value: 'api'
+    })
+
+    const environment = await resolveCommandEnvironment(service, {
+      projectId: PROJECT_ID,
+      cwd: projectRoot,
+      directory: '',
+      command: 'cd packages/api && bun run start'
+    })
+
+    expect(environment).toEqual({ ROOT_URL: 'root', API_ONLY: 'api' })
+  })
+
+  it('honours an inject rule for the command the agent is about to run', async () => {
+    await service.createProjectEnvFile({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env',
+      name: 'DEPLOY_KEY',
+      value: 'sk-deploy'
+    })
+    await service.setProjectEnvInjectRule({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env',
+      text: 'cd packages/api && bun run deploy'
+    })
+
+    const allowed = await resolveCommandEnvironment(service, {
+      projectId: PROJECT_ID,
+      cwd: projectRoot,
+      directory: '',
+      command: 'cd packages/api && bun run deploy'
+    })
+    expect(allowed).toEqual({ DEPLOY_KEY: 'sk-deploy' })
+
+    const withheld = await resolveCommandEnvironment(service, {
+      projectId: PROJECT_ID,
+      cwd: projectRoot,
+      directory: '',
+      command: 'cd packages/api && bun run test'
+    })
+    expect(withheld).toEqual({})
   })
 })

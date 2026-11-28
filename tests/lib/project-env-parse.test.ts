@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
+  commandCdTargets,
   formatProjectEnvLine,
+  injectRuleAllows,
+  injectRuleTargets,
   isEnvFileNameTaken,
+  mergeProjectEnvRows,
+  parseInjectRule,
   parseProjectEnvFile,
+  projectEnvFileText,
+  projectEnvLayout,
   PROJECT_ENV_DISABLED_PREFIX,
   sameEnvFileName,
   suggestEnvFileName
@@ -77,5 +84,153 @@ describe('env file names', () => {
       suggestEnvFileName(['.env', '.env.local', '.env.development', '.env.production', '.env.test'])
     ).toBe('.env.2')
     expect(suggestEnvFileName(['.env', '.env.2'])).toBe('.env.local')
+  })
+})
+
+describe('mergeProjectEnvRows', () => {
+  it('writes the rows in place and keeps the comments around them', () => {
+    const body = ['# deployment', 'PORT=3000', '', '# keep this note', 'DEBUG=1'].join('\n')
+    const merged = mergeProjectEnvRows(body, [
+      { name: 'PORT', value: '4000' },
+      { name: 'DEBUG', value: '1' }
+    ])
+    expect(merged).toBe(['# deployment', 'PORT=4000', '', '# keep this note', 'DEBUG=1'].join('\n'))
+  })
+
+  it('drops the line of a key that is gone and appends a new one above a blank tail', () => {
+    const body = ['# note', 'PORT=3000', ''].join('\n')
+    const merged = mergeProjectEnvRows(body, [{ name: 'DEBUG', value: '1' }])
+    expect(merged).toBe(['# note', 'DEBUG=1', ''].join('\n'))
+  })
+
+  it('keeps a turned-off key off and an unnamed row out of the file', () => {
+    const merged = mergeProjectEnvRows('PORT=3000', [
+      { name: 'PORT', value: '3000', disabled: true },
+      { name: '  ', value: 'ignored' }
+    ])
+    expect(merged).toBe(`${PROJECT_ENV_DISABLED_PREFIX} PORT=3000`)
+    expect(merged).toBe(formatProjectEnvLine('PORT', '3000', true))
+  })
+})
+
+describe('projectEnvLayout and projectEnvFileText', () => {
+  const entries = [
+    { name: 'PORT', secretRef: 'ref-1', updatedAt: 0 },
+    { name: 'DEBUG', secretRef: 'ref-2', updatedAt: 0, disabled: true }
+  ]
+  const values = new Map([
+    ['PORT', '3000'],
+    ['DEBUG', '1']
+  ])
+
+  it('stores the shape of a body, with each key reduced to its name', () => {
+    const layout = projectEnvLayout(['# deployment', 'PORT=3000', '', 'DEBUG=1'].join('\n'))
+    expect(layout).toEqual([
+      { kind: 'text', text: '# deployment' },
+      { kind: 'key', name: 'PORT' },
+      { kind: 'text', text: '' },
+      { kind: 'key', name: 'DEBUG' }
+    ])
+    // Nothing a layout holds can be a value, so a manifest carrying one stays safe.
+    expect(JSON.stringify(layout)).not.toContain('3000')
+  })
+
+  it('rebuilds the body a user wrote, with the stored values in it', () => {
+    const body = ['# deployment', 'PORT=3000', '', 'DEBUG=1'].join('\n')
+    expect(projectEnvFileText({ layout: projectEnvLayout(body), entries }, values)).toBe(
+      ['# deployment', 'PORT=3000', '', `${PROJECT_ENV_DISABLED_PREFIX} DEBUG=1`].join('\n')
+    )
+  })
+
+  it('appends a key the layout has never seen and drops one it no longer holds', () => {
+    const layout = projectEnvLayout(['# note', 'PORT=3000', 'GONE=1'].join('\n'))
+    expect(projectEnvFileText({ layout, entries }, values)).toBe(
+      ['# note', 'PORT=3000', `${PROJECT_ENV_DISABLED_PREFIX} DEBUG=1`].join('\n')
+    )
+  })
+
+  it('lists the keys of a file that has no layout yet', () => {
+    expect(projectEnvFileText({ entries }, values)).toBe(
+      ['PORT=3000', `${PROJECT_ENV_DISABLED_PREFIX} DEBUG=1`].join('\n')
+    )
+  })
+})
+
+describe('inject rule matching', () => {
+  const GROUPS = ['', 'packages/api', 'packages/convex-backend']
+
+  it('compiles a rule line into the command and the directory it names', () => {
+    expect(
+      parseInjectRule(['bun run deploy', 'cd packages/convex-backend bun run deploy'])
+    ).toEqual([
+      { group: null, command: 'bun run deploy' },
+      { group: 'packages/convex-backend', command: 'bun run deploy' }
+    ])
+  })
+
+  it('reads every command a script runs, with the directory the cds left behind', () => {
+    const targets = injectRuleTargets(
+      'bun run build\ncd packages/convex-backend && bun run deploy\nbun run lint',
+      GROUPS
+    )
+
+    expect(targets).toEqual([
+      { group: '', command: 'bun run build' },
+      { group: 'packages/convex-backend', command: 'bun run deploy' },
+      { group: 'packages/convex-backend', command: 'bun run lint' }
+    ])
+  })
+
+  it('reports every directory a command line cds into', () => {
+    expect(commandCdTargets('cd packages/api && bun run api')).toEqual(['packages/api'])
+    expect(commandCdTargets('bun run build\ncd packages/a; cd ../b && bun test')).toEqual([
+      'packages/a',
+      '../b'
+    ])
+    expect(commandCdTargets('bun run build')).toEqual([])
+  })
+
+  it('keeps a quoted separator inside its argument instead of splitting it', () => {
+    expect(injectRuleTargets('grep "a|b" file.txt', GROUPS)).toEqual([
+      { group: '', command: 'grep "a|b" file.txt' }
+    ])
+  })
+
+  it('matches whole commands only, never a prefix or a substring', () => {
+    const rule = parseInjectRule(['bun run deploy'])
+
+    expect(injectRuleAllows(rule, injectRuleTargets('bun run deploy', GROUPS))).toBe(true)
+    expect(injectRuleAllows(rule, injectRuleTargets('bun run deploy:prod', GROUPS))).toBe(false)
+    expect(injectRuleAllows(rule, injectRuleTargets('bun run redeploy', GROUPS))).toBe(false)
+    expect(injectRuleAllows(rule, injectRuleTargets('echo bun run deploy', GROUPS))).toBe(false)
+  })
+
+  it('makes a cd in the rule part of what has to match', () => {
+    const rule = parseInjectRule(['cd packages/convex-backend bun run deploy'])
+
+    expect(
+      injectRuleAllows(
+        rule,
+        injectRuleTargets('cd packages/convex-backend && bun run deploy', GROUPS)
+      )
+    ).toBe(true)
+    expect(injectRuleAllows(rule, injectRuleTargets('bun run deploy', GROUPS))).toBe(false)
+  })
+
+  it('lets a rule with no cd apply wherever the command runs', () => {
+    const rule = parseInjectRule(['bun run deploy'])
+
+    expect(
+      injectRuleAllows(rule, injectRuleTargets('cd packages/api && bun run deploy', GROUPS))
+    ).toBe(true)
+  })
+
+  it('collapses spacing, so a rule is not about how the line is spaced', () => {
+    expect(
+      injectRuleAllows(
+        parseInjectRule(['bun   run deploy']),
+        injectRuleTargets('bun run  deploy', [])
+      )
+    ).toBe(true)
   })
 })

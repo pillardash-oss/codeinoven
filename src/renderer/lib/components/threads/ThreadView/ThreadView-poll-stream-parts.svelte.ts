@@ -273,26 +273,40 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
    * rather than flashing through the reading position and jumping back out.
    */
   closingStatementVisible(endIndex: number, isLastTurnEnd: boolean): boolean {
-    const closing = getTurnFinalText(
-      this.root.loadOlderMessages.messages,
-      endIndex,
-      this.isTransparentTurnMessage
-    )
+    const messages = this.root.loadOlderMessages.messages
+    const closing = getTurnFinalText(messages, endIndex, this.isTransparentTurnMessage)
     if (!closing) return false
-    if (closing.phase === 'final_answer') return true
-    // A turn whose answer is already recorded as delivered keeps it on screen.
-    // An automatic retry of a completed turn turns the busy flag back on for a
-    // few seconds at a time, and hiding the answer for that swapped the
-    // transcript between the answer and the live trace on every attempt, which
-    // is the scroll that jumped up and down on its own.
-    if (this.root.loadOlderMessages.messages[endIndex]?.completedAt) return true
-    if (!this.conversationBusy || !isLastTurnEnd) return true
-    return turnEndsOnQuestion(
-      this.root.loadOlderMessages.messages,
-      endIndex,
-      this.isTransparentTurnMessage
-    )
+    // Once a statement has been read in the transcript it is never taken back
+    // out of it. A run can write its answer and then keep working (one more
+    // call, an automatic retry, a follow-up step), and the busy flag flipping
+    // on again used to hand that text back to the trace: the answer appeared
+    // under the trace and was pulled back into it, leaving the reader on empty
+    // space while the trace kept growing. This set is the memory that stops it.
+    if (this.surfacedClosingTextIds[closing.id]) return true
+    const visible =
+      closing.phase === 'final_answer' ||
+      // A turn whose answer is already recorded as delivered keeps it on screen.
+      Boolean(messages[endIndex]?.completedAt) ||
+      !this.conversationBusy ||
+      !isLastTurnEnd ||
+      turnEndsOnQuestion(messages, endIndex, this.isTransparentTurnMessage)
+    if (!visible) return false
+    const surfaced = Object.keys(this.surfacedClosingTextIds)
+    if (surfaced.length > 200) {
+      for (const id of surfaced) delete this.surfacedClosingTextIds[id]
+    }
+    this.surfacedClosingTextIds[closing.id] = true
+    return true
   }
+
+  /**
+   * Closing statements this view already drew in the transcript, by part id.
+   * A retry that writes a new statement has a new id, so it still starts from
+   * the rule above instead of inheriting the old one's place. A plain record,
+   * never a reactive Set: this is memory written while the transcript is being
+   * derived, and nothing on screen subscribes to it.
+   */
+  private surfacedClosingTextIds: Record<string, true> = {}
 
   /** Older backing entries one inner-scroll page pulls in. Bigger than the
    *  render page so a scroll gesture reveals a useful run of steps, small enough

@@ -29,7 +29,6 @@ import { loadProjectWorkRoots } from '../design/work-roots-state'
 import { installAuthoredWorkScopeRoots } from '../design/authored-work'
 import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
 import { recruitedAssistantKnowledge } from '../../lib/assistant-recruit'
-import { actionEnvironmentDirectories } from '../../lib/project-env'
 import { createDonExecutor, delegationAuthor, DonDelegations } from '../chat/chat-engine-don'
 import { answerTeammateQuestion, routeTeammateQuestion } from '../chat/don-question-router'
 import { broadcastAssistantsChanged } from '../scheduler/assistant-events'
@@ -1299,12 +1298,19 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     // IPC the Secrets page edits them through. Built before the terminal service,
     // because every process the app starts for a project resolves its environment
     // here, and a terminal must open whether or not the vault can answer.
-    const [{ ProjectEnvStore }, { ProjectEnvService }, { registerProjectEnvIpc }] =
-      await Promise.all([
-        import('../secrets/project-env-store'),
-        import('../secrets/project-env-service'),
-        import('../secrets/project-env-ipc')
-      ])
+    const [
+      { ProjectEnvStore },
+      { ProjectEnvService },
+      { registerProjectEnvIpc },
+      { projectEnvTerminalHook },
+      { resolveCommandEnvironment }
+    ] = await Promise.all([
+      import('../secrets/project-env-store'),
+      import('../secrets/project-env-service'),
+      import('../secrets/project-env-ipc'),
+      import('../secrets/project-env-terminal-hook'),
+      import('../secrets/project-env-command')
+    ])
     const projectEnvService = new ProjectEnvService({
       store: new ProjectEnvStore(storage),
       secrets: vault,
@@ -1318,7 +1324,20 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     // an action script does, so it sees the root env and then every group's env,
     // deeper groups last so the nearest value wins.
     state.chatEngine?.state.agentSecrets.setProjectEnvironmentSource(
-      async ({ projectId, threadId, projectPath }) => {
+      async ({ projectId, threadId, projectPath, cwd, command }) => {
+        // A command the agent is about to run is described before it starts, so it
+        // gets the same directory-aware, rule-aware values a terminal line or an
+        // action script gets. The turn-start refresh has no command yet and keeps
+        // the merged view, which the per-command refresh narrows again.
+        if (command) {
+          return resolveCommandEnvironment(projectEnvService, {
+            projectId,
+            threadId,
+            cwd: cwd ?? projectPath,
+            directory: '',
+            command
+          })
+        }
         const groups = [
           ...new Set((await projectEnvService.listProjectEnv(projectId)).map((file) => file.group))
         ].sort((left, right) => left.split('/').length - right.split('/').length)
@@ -1384,32 +1403,33 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
           ovenTerminalLaunch(storage, vault, database, context.threadCreation),
           ovenShellLaunch(storage, vault),
           async ({ projectId, threadId, cwd, directory, script }) => {
+            // An action is one launch whose command is known before it runs, so it
+            // gets the same directory-aware, rule-aware values the agent's own
+            // commands get.
+            if (script) {
+              return resolveCommandEnvironment(projectEnvService, {
+                projectId,
+                threadId,
+                cwd,
+                directory,
+                command: script
+              })
+            }
             const resolved = await projectEnvService.environmentForLaunch({
               projectId,
               threadId,
               cwd,
               directory
             })
-            if (!script) return resolved.environment
-            // An action starts at the project root and then moves into a package,
-            // so every group its script reaches contributes too. The package applies
-            // after the root, which is the same nearest-first order a process started
-            // in that directory would see.
-            const groups = (await projectEnvService.listProjectEnv(projectId)).map(
-              (file) => file.group
-            )
-            let environment = resolved.environment
-            for (const group of actionEnvironmentDirectories(script, groups)) {
-              const packageEnv = await projectEnvService.environmentForLaunch({
-                projectId,
-                threadId,
-                cwd,
-                directory: group
-              })
-              environment = { ...environment, ...packageEnv.environment }
+            return resolved.environment
+          },
+          projectEnvTerminalHook({
+            service: projectEnvService,
+            resolveProjectPath: async (projectId) => {
+              const project = await projectManager.getProject(projectId)
+              return project?.source === 'local' && project.path ? project.path : null
             }
-            return environment
-          }
+          })
         )
       : null
     // A probe that changes a harness's install state (new install, version

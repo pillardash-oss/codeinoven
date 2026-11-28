@@ -636,15 +636,22 @@
       // trailing code block (or before a leading one)   e.g. after pasting text
       // that ends in a code block, or when autofocus lands on a draft that ends in
       // one. ArrowDown/ArrowUp must still be able to exit the block then.
+      const atTrailingBlock = editor.lastElementChild?.matches('[data-editor-codeblock]')
+      const atLeadingBlock = editor.firstElementChild?.matches('[data-editor-codeblock]')
+      const strandedEdge =
+        event.key === 'ArrowDown' &&
+        selection !== null &&
+        selection.anchorNode === null &&
+        document.activeElement === editor &&
+        atTrailingBlock
       const stranded =
-        selection?.isCollapsed &&
-        selection.anchorNode === editor &&
-        ((event.key === 'ArrowDown' &&
-          selection.anchorOffset === editor.childNodes.length &&
-          editor.lastElementChild?.matches('[data-editor-codeblock]')) ||
-          (event.key === 'ArrowUp' &&
-            selection.anchorOffset === 0 &&
-            editor.firstElementChild?.matches('[data-editor-codeblock]')))
+        strandedEdge ||
+        (selection?.isCollapsed &&
+          selection.anchorNode === editor &&
+          ((event.key === 'ArrowDown' &&
+            selection.anchorOffset === editor.childNodes.length &&
+            atTrailingBlock) ||
+            (event.key === 'ArrowUp' && selection.anchorOffset === 0 && atLeadingBlock)))
       if (!codeBlock && stranded) {
         codeBlock = (
           event.key === 'ArrowDown' ? editor.lastElementChild : editor.firstElementChild

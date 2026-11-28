@@ -214,3 +214,79 @@ describe('PtyService terminal output pacing', () => {
     rmSync(root, { recursive: true, force: true })
   })
 })
+
+describe('PtyService terminal env hook', () => {
+  it('spawns with the hook arguments and only the values it did not keep back', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cio-pty-hook-'))
+    const storage = new StorageEngine(root)
+    const proc = streamingPty()
+    ptySpawn.mockImplementation(() => proc)
+    const dispose = vi.fn().mockResolvedValue(undefined)
+    const prepare = vi.fn().mockResolvedValue({
+      environment: { PUBLIC_NAME: 'Oven' },
+      variables: { CIO_ENV_HOOK_DIR: '/hook/session', ZDOTDIR: '/hook/session' },
+      args: ['--init-file', '/hook/session/bashrc', '-i'],
+      dispose
+    })
+    // The env hook replaces the plain environment hook, which must not run twice.
+    const plainEnvironment = vi.fn().mockResolvedValue({ WRONG: 'value' })
+    const service = new PtyService(
+      storage,
+      fakeDatabase(root) as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      plainEnvironment,
+      prepare
+    )
+    service.attach(fakeSender() as never)
+
+    await asTest(service).create('term-hook', 'p1', 't1', 80, 24)
+
+    expect(prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: 'term-hook', projectId: 'p1', threadId: 't1' })
+    )
+    expect(plainEnvironment).not.toHaveBeenCalled()
+    const args = ptySpawn.mock.calls[0]?.[1] as string[]
+    expect(args).toEqual(['--init-file', '/hook/session/bashrc', '-i'])
+    const env = (ptySpawn.mock.calls[0]?.[2] as { env: Record<string, string> }).env
+    expect(env['PUBLIC_NAME']).toBe('Oven')
+    expect(env['CIO_ENV_HOOK_DIR']).toBe('/hook/session')
+    expect(env['ZDOTDIR']).toBe('/hook/session')
+    expect(env['WRONG']).toBeUndefined()
+
+    // Closing the terminal removes the session directory, values included.
+    proc.exit(0)
+    expect(dispose).toHaveBeenCalled()
+
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('falls back to the plain environment when no hook is prepared', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cio-pty-nohook-'))
+    const storage = new StorageEngine(root)
+    ptySpawn.mockImplementation(() => streamingPty())
+    const plainEnvironment = vi.fn().mockResolvedValue({ PLAIN: 'yes' })
+    const service = new PtyService(
+      storage,
+      fakeDatabase(root) as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      plainEnvironment,
+      vi.fn().mockResolvedValue(null)
+    )
+
+    await asTest(service).create('term-plain', 'p1', 't1', 80, 24)
+
+    expect(plainEnvironment).toHaveBeenCalled()
+    const env = (ptySpawn.mock.calls[0]?.[2] as { env: Record<string, string> }).env
+    expect(env['PLAIN']).toBe('yes')
+
+    rmSync(root, { recursive: true, force: true })
+  })
+})

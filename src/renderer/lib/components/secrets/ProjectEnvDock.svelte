@@ -21,8 +21,10 @@
   import {
     DEFAULT_ENV_FILE_NAME,
     compareEnvFileNames,
-    formatProjectEnvLine,
+    mergeProjectEnvRows,
+    normalizeInjectRuleLines,
     parseProjectEnvFile,
+    projectEnvFileText,
     suggestEnvFileName,
     validateEnvFileName,
     type ProjectEnvFile
@@ -84,7 +86,9 @@
     return `${domPrefix}-${suffix}`
   }
 
-  type Surface = 'editor' | 'keys'
+  type Surface = 'editor' | 'keys' | 'rule'
+  /** The view the rule page covers, so closing it returns where the user was. */
+  type View = Exclude<Surface, 'rule'>
 
   interface KeyRow {
     id: number
@@ -105,9 +109,13 @@
     body: string
     rows: KeyRow[]
     savedBody: string
+    /** The inject rule as typed, and the stored form it is compared with. */
+    ruleText: string
+    savedRuleText: string
     undoStack: Snapshot[]
     redoStack: Snapshot[]
     surface: Surface
+    lastView: View
     skipped: { line: number; reason: string }[]
   }
 
@@ -139,6 +147,16 @@
   let outcome = $state('')
   let skipped = $state<{ line: number; reason: string }[]>([])
   let surface = $state<Surface>('editor')
+  /**
+   * The view the rule page covers.
+   *
+   * The rule is a page of its own, and the button toggles between it and whatever
+   * was last shown, so the route back is remembered rather than assumed.
+   */
+  let lastView = $state<View>('editor')
+  /** The scripts typed on the rule page, and the stored form they compare with. */
+  let ruleText = $state('')
+  let savedRuleText = $state('')
   let undoStack = $state<Snapshot[]>([])
   let redoStack = $state<Snapshot[]>([])
   const revealed = new SvelteSet<string>()
@@ -241,11 +259,23 @@
   /**
    * The document as the current surface holds it.
    *
-   * In `Keys` the rows are authoritative, so an unnamed row survives until the user
-   * saves; serializing simply leaves it out of the file.
+   * In `Keys` the rows are written into the body the panel already holds, so every
+   * comment and blank line the user wrote stays where it is; an unnamed row simply
+   * never reaches the file. In `Editor` and on the rule page the body is the file.
    */
-  const draft = $derived(surface === 'keys' ? serializeRows(rows) : body)
-  const dirty = $derived(draft !== savedBody)
+  const draft = $derived(surface === 'keys' ? mergeProjectEnvRows(body, rows) : body)
+  /** Whether the env file itself holds edits, whichever page is showing. */
+  const envDirty = $derived(draft !== savedBody)
+  /** The rule as the file stores it, so a trailing blank line is never an edit. */
+  const ruleLines = $derived(normalizeInjectRuleLines(ruleText))
+  const ruleDirty = $derived(ruleLines.join('\n') !== savedRuleText)
+  /**
+   * Unsaved work on either page.
+   *
+   * Saving from the rule page must not drop a key the user typed before switching,
+   * and saving from the editor must not drop a rule, so both sides count.
+   */
+  const dirty = $derived(envDirty || ruleDirty)
   /** A key whose name is still being typed: not in the file, but not disposable. */
   const hasUnnamedRow = $derived(
     surface === 'keys' && rows.some((row) => row.name.trim().length === 0)
@@ -265,26 +295,14 @@
     )
   }
 
-  /**
-   * Comment and blank lines belong to the file, so the key rows never rewrite them.
-   *
-   * A turned-off key is written as `#cio-cmt NAME=value`, which is the one comment
-   * shape the parser reads back as a key. Without it a switch could not survive a
-   * save, because the row would come back as a comment and vanish from the list.
-   */
-  function serializeRows(list: readonly KeyRow[]): string {
-    return list
-      .filter((row) => row.name.trim().length > 0)
-      .map((row) => formatProjectEnvLine(row.name.trim(), row.value, row.disabled))
-      .join('\n')
-  }
-
   function currentSnapshot(): Snapshot {
     return { body, rows: rows.map((row) => ({ ...row })) }
   }
 
   function stateFor(next: { body?: string; rows?: KeyRow[] }): Snapshot {
-    if (next.rows) return { body: serializeRows(next.rows), rows: next.rows }
+    // A row edit is written into the body the panel holds rather than replacing it,
+    // so a save keeps the comments and blank lines the user wrote around its keys.
+    if (next.rows) return { body: mergeProjectEnvRows(body, next.rows), rows: next.rows }
     const text = next.body ?? body
     return { body: text, rows: parseRows(text) }
   }
@@ -395,12 +413,15 @@
     }, 2_400)
   }
 
-  /** Read a file's values into both surfaces and start a clean history. */
+  /** Read a file's values and its inject rule, then start a clean history. */
   async function resetDocument(file: ProjectEnvFile | null): Promise<void> {
     const text = await readBody(file)
     body = text
     rows = parseRows(text)
     savedBody = text
+    const rule = (file?.injectRule ?? []).join('\n')
+    ruleText = rule
+    savedRuleText = normalizeInjectRuleLines(rule).join('\n')
     undoStack = []
     redoStack = []
     revealed.clear()
@@ -414,11 +435,9 @@
       fileName: file.fileName
     })
     const byName = new Map(values.entries.map((entry) => [entry.name, entry.value ?? '']))
-    return file.entries
-      .map((entry) =>
-        formatProjectEnvLine(entry.name, byName.get(entry.name) ?? '', entry.disabled === true)
-      )
-      .join('\n')
+    // The stored layout puts the keys back where they were written, so a file saved
+    // from this panel opens again with the comments its owner put around them.
+    return projectEnvFileText(file, byName)
   }
 
   /** Read a target into both surfaces, preferring the draft parked there. */
@@ -455,9 +474,12 @@
       body,
       rows: rows.map((row) => ({ ...row })),
       savedBody,
+      ruleText,
+      savedRuleText,
+      surface,
+      lastView,
       undoStack: [...undoStack],
       redoStack: [...redoStack],
-      surface,
       skipped: [...skipped]
     }
   }
@@ -466,9 +488,12 @@
     body = draft.body
     rows = draft.rows.map((row) => ({ ...row }))
     savedBody = draft.savedBody
+    ruleText = draft.ruleText
+    savedRuleText = draft.savedRuleText
+    surface = draft.surface
+    lastView = draft.lastView
     undoStack = [...draft.undoStack]
     redoStack = [...draft.redoStack]
-    surface = draft.surface
     skipped = [...draft.skipped]
     revealed.clear()
   }
@@ -591,15 +616,36 @@
 
   function switchSurface(next: Surface): void {
     if (next === surface) return
+    if (next === 'rule') {
+      // The page covers whichever view was showing, so it is that view the toggle
+      // and the header tabs come back to.
+      if (surface !== 'rule') lastView = surface
+      surface = 'rule'
+      return
+    }
+    lastView = next
     if (next === 'keys') {
       rows = parseRows(body)
       revealed.clear()
       surface = 'keys'
       return
     }
-    body = serializeRows(rows)
+    // Every key edit writes `body` as well, so the rows are already in it. Rebuilding
+    // the body from the rows here would drop the comment and blank lines the editor
+    // holds, and the file would then read as edited when nothing had been touched.
     surface = 'editor'
   }
+
+  /** Open the inject rule page, or step back to the view it was covering. */
+  function toggleInjectRule(): void {
+    switchSurface(surface === 'rule' ? lastView : 'rule')
+  }
+
+  /** The rule textarea's hint, so an empty page shows the shape of a rule. */
+  const RULE_PLACEHOLDER = `Write scripts that this secret should only be injected into, you can have multiple per line
+bunx convex deploy
+bun run deploy
+cd packages/convex-backend bun run deploy`
 
   // ─── Find ─────────────────────────────────────────────────────────────────
 
@@ -640,6 +686,9 @@
   const visibleRows = $derived(findFiltersRows ? findRows : rows)
 
   function openFind(): void {
+    // The rule page is a list of commands, not the file, so the find chord has
+    // nothing of its own to walk there.
+    if (surface === 'rule') return
     findOpen = true
     findFocusTrigger += 1
   }
@@ -799,8 +848,9 @@
 
   async function save(): Promise<void> {
     if (!projectId) return
-    // In the editor the body is the file, comments included; in Keys the rows are.
-    const text = surface === 'keys' ? serializeRows(rows) : body
+    // The document is the file on every page: the editor's own text, or the key rows
+    // written back into it, which keeps the comments and blank lines around its keys.
+    const text = draft
     // An unnamed row is a key still being typed; it stays in the panel and is
     // reported rather than silently discarded.
     const unnamed = rows.filter((row) => row.name.trim().length === 0).length
@@ -821,8 +871,23 @@
       drafts.delete(targetKey(group, fileName))
       savedBody = text
       if (surface === 'keys') {
+        body = text
         rows = parseRows(text)
         revealed.clear()
+      }
+      // A rule typed on its own page is part of the same save: the button says Save,
+      // not Save keys, and switching pages must never strand one half of the file.
+      if (ruleDirty) {
+        applyManifest(
+          projectId,
+          await invoke('secrets:envSetInjectRule', {
+            projectId,
+            group,
+            fileName,
+            text: ruleText
+          })
+        )
+        savedRuleText = normalizeInjectRuleLines(ruleText).join('\n')
       }
       undoStack = []
       redoStack = []
@@ -847,6 +912,13 @@
       }
       if (result.kept.length > 0) parts.push(`${result.kept.length} kept`)
       if (result.removed.length > 0) parts.push(`${result.removed.length} removed`)
+      if (ruleDirty) {
+        parts.push(
+          ruleLines.length > 0
+            ? `inject rule limited to ${ruleLines.length} ${ruleLines.length === 1 ? 'script' : 'scripts'}`
+            : 'inject rule cleared'
+        )
+      }
       outcome = parts.length > 0 ? `${parts.join(', ')}.` : 'Nothing changed.'
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not save this env file'
@@ -1141,7 +1213,7 @@
       </div>
     {/if}
 
-    {#if findOpen}
+    {#if findOpen && surface !== 'rule'}
       <div class="shrink-0 border-b p-1.5">
         <FindInBar
           query={findQuery}
@@ -1175,6 +1247,23 @@
           value={body}
           oninput={(event) => commit({ body: event.currentTarget.value })}
           onkeydown={handleEditKeydown}></textarea>
+      {:else if surface === 'rule'}
+        <!-- The rule is a page rather than a field: it is a list of scripts, one per
+             line, and it needs the room the editor has. The env file and its keys are
+             untouched behind it, so the toggle back restores them as they were. -->
+        <textarea
+          id={domId('inject-rule')}
+          class="h-full min-h-64 w-full resize-none overflow-auto bg-app p-3 font-mono text-xs leading-relaxed whitespace-pre text-foreground outline-none placeholder:text-dimmed"
+          spellcheck="false"
+          autocomplete="off"
+          wrap="off"
+          aria-label="Inject rule for {groupPrefix}{fileName}"
+          placeholder={RULE_PLACEHOLDER}
+          value={ruleText}
+          oninput={(event) => {
+            ruleText = event.currentTarget.value
+            outcome = ''
+          }}></textarea>
       {:else}
         <div class="divide-y">
           {#each visibleRows as row (row.id)}
@@ -1255,14 +1344,17 @@
             <p class="px-3 py-3 text-xs text-muted">No keys match this search.</p>
           {/if}
         </div>
+        <!-- A quiet dashed row rather than a filled primary button: adding a key is
+             the secondary action here, so Save keeps the only bright control. -->
         <div class="px-3 py-2">
           <button
             type="button"
-            class="mx-auto flex h-8 w-full max-w-64 items-center justify-center bg-primary text-xs font-medium text-on-primary disabled:opacity-40"
+            class="mx-auto flex h-7 w-full max-w-56 items-center justify-center gap-1.5 border border-dashed border-border text-[0.6875rem] font-medium text-muted transition-colors hover:border-border-strong hover:bg-elevated hover:text-foreground disabled:opacity-40"
             disabled={saving || writing}
             title="Add another key to {groupPrefix}{fileName}"
             onclick={() => void addRow()}
           >
+            <CioPlus size={12} />
             New Key
           </button>
         </div>
@@ -1313,6 +1405,18 @@
       onclick={requestClose}
     >
       Close
+    </button>
+    <button
+      type="button"
+      class="border px-3 py-1.5 text-sm transition-colors {surface === 'rule'
+        ? 'border-warning/40 bg-warning/10 text-warning'
+        : 'text-muted hover:bg-elevated hover:text-foreground'} disabled:opacity-40"
+      aria-pressed={surface === 'rule'}
+      disabled={loading}
+      title="Limit this file's keys to the scripts they are injected into"
+      onclick={toggleInjectRule}
+    >
+      Inject rule
     </button>
     <button
       type="button"

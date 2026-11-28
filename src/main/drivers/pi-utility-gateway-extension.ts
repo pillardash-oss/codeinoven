@@ -370,19 +370,11 @@ function applySecretEnvironment(result) {
 const appliedSessionNames = new Set()
 
 /**
- * Apply the project's ENV files and this thread's secrets to the pi process
- * before the agent runs, so every shell it starts sees them. The process
- * outlives a turn, so a name that left the project env is unset again. A
- * gateway that cannot answer leaves the environment as it was.
+ * Apply one resolved environment to the pi process, replacing whatever the
+ * previous refresh put there: a name the new answer no longer admits is unset,
+ * so a package's secret cannot survive into a command in another directory.
  */
-async function refreshSessionEnvironment() {
-  let result
-  try {
-    result = await callGateway(${JSON.stringify(SESSION_ENVIRONMENT_ROUTE)}, {})
-  } catch {
-    return
-  }
-  const environment = result && typeof result === 'object' ? result.environment : null
+function applySessionEnvironment(environment) {
   if (!environment || typeof environment !== 'object') return
   for (const name of appliedSessionNames) {
     if (!(name in environment)) delete process.env[name]
@@ -396,11 +388,46 @@ async function refreshSessionEnvironment() {
   }
 }
 
+/**
+ * The project's ENV files and this thread's secrets, applied to the pi process
+ * so every shell it starts sees them. With no arguments this is the turn-start
+ * refresh, which names no command and therefore keeps the merged view. With a
+ * command it is the command's own refresh: the gateway resolves the directory it
+ * runs in and the inject rules it matches, so an agent's 'cd backend && …' sees
+ * exactly what a terminal line in 'backend' sees. A gateway that cannot answer
+ * leaves the environment as it was.
+ */
+async function refreshSessionEnvironment(cwd, command) {
+  let result
+  try {
+    result = await callGateway(
+      ${JSON.stringify(SESSION_ENVIRONMENT_ROUTE)},
+      command ? { cwd, command } : {}
+    )
+  } catch {
+    return
+  }
+  applySessionEnvironment(result && typeof result === 'object' ? result.environment : null)
+}
+
 export default function codeInOvenUtilityGatewayExtension(pi) {
   // A host without run events (a tool-only loader) still registers the tools.
   if (typeof pi.on === 'function') {
     pi.on('agent_start', async () => {
       await refreshSessionEnvironment()
+    })
+    // The turn-start refresh cannot know which directories the run will enter or
+    // which rule a command matches. Pi announces each shell command first, so the
+    // environment is resolved again for that exact command before it runs.
+    pi.on('tool_call', async (event, ctx) => {
+      if (event.toolName !== 'bash' && event.toolName !== 'powershell') return
+      const command = event.input && event.input.command
+      if (typeof command !== 'string' || command.length === 0) return
+      await refreshSessionEnvironment(ctx && ctx.cwd ? ctx.cwd : undefined, command)
+    })
+    pi.on('user_bash', async (event, ctx) => {
+      if (!event.command) return
+      await refreshSessionEnvironment(ctx && ctx.cwd ? ctx.cwd : undefined, event.command)
     })
   }
 

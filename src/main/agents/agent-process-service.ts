@@ -971,6 +971,25 @@ export class AgentProcessService implements AgentProcessObserver {
             this.journal?.unregister(root.pid)
             continue
           }
+          // The root is a process of its own, not just the top of a tree: a
+          // command started with `cio_process_start` is spawned detached and is
+          // usually the shell's own `exec`'d target, so it has no descendants at
+          // all. Recording only what was found *under* a root left the pid the
+          // tool had just returned unlisted for its own thread, and
+          // `cio_process_stop` refused it as "not owned by this thread".
+          const rootEntry = currentByPid.get(root.pid)
+          if (rootEntry && !sessionProcesses.has(root.pid)) {
+            sessionProcesses.set(root.pid, {
+              pid: root.pid,
+              parentPid: rootEntry.parentPid,
+              command: rootEntry.command,
+              startedAt: Date.now(),
+              scope: isAppScope ? 'app' : 'thread',
+              sessionId: isAppScope ? APP_SCOPE : sessionId,
+              cwd: root.cwd
+            })
+            changed = true
+          }
           for (const descendant of descendantsOf(root.pid, childrenByParent)) {
             if (sessionProcesses.has(descendant.pid)) continue
             if (isAppScope) {

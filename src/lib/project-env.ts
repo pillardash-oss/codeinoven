@@ -142,6 +142,23 @@ export interface ProjectEnvWriteResult {
   changed: boolean
 }
 
+/** Longest inject rule body one env file may carry, in characters. */
+export const ENV_INJECT_RULE_TEXT_LIMIT = 8_192
+
+/**
+ * The commands an inject rule names, one per line, blanks and comments dropped.
+ *
+ * The rule is stored as its lines rather than as the typed body, so the stored
+ * shape never depends on trailing whitespace or a blank line at the end of a
+ * textarea, and a future launch check can compare commands directly.
+ */
+export function normalizeInjectRuleLines(text: string): string[] {
+  return text
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('#'))
+}
+
 /** One managed ENV file: a directory group plus a file name. */
 export interface ProjectEnvFile {
   /** Project-relative directory, '' for the project root. */
@@ -150,10 +167,47 @@ export interface ProjectEnvFile {
   fileName: string
   entries: ProjectEnvEntry[]
   updatedAt: number
+  /**
+   * The commands this file's keys may be injected into, one per line.
+   *
+   * Empty means the file is not limited to any command, which is how every file
+   * behaves until its owner writes a rule.
+   */
+  injectRule?: string[]
   /** Project-relative path the values were imported from, when they were. */
   importedFrom?: string
   /** Project-relative path this file was last written to in the repository. */
   writtenTo?: string
+  /**
+   * The file's own line ordering, so the editor can show it again.
+   *
+   * A manifest holds names, not a body, so the comments and blank lines a user wrote
+   * would otherwise be gone the next time the file is opened. Absent means the file
+   * has no layout yet and its keys are simply listed.
+   */
+  layout?: ProjectEnvLayoutLine[]
+}
+
+/**
+ * One line of a stored file's layout.
+ *
+ * Only the shape is kept: a line the app does not own keeps its text, and a key
+ * keeps its place by name. Values live in the vault, so a layout is value-free and
+ * the store can keep a user's comments without ever holding a secret.
+ */
+export type ProjectEnvLayoutLine = { kind: 'text'; text: string } | { kind: 'key'; name: string }
+
+/** What one key of a file stands for while the text is being rebuilt. */
+export interface ProjectEnvKeyInput {
+  name: string
+  value: string
+  disabled?: boolean
+}
+
+/** What rebuilding a file's text has to know about one stored key. */
+export interface ProjectEnvTextKey {
+  name: string
+  disabled?: boolean
 }
 
 /** What a launch will inject, described without any value. */
@@ -231,6 +285,12 @@ export interface ProjectEnvEntryRequest extends ProjectEnvFileRequest {
 /** A request that turns one key on or off without losing its value. */
 export interface ProjectEnvEntryToggleRequest extends ProjectEnvEntryRequest {
   disabled: boolean
+}
+
+/** A request that replaces the commands one managed env file is limited to. */
+export interface ProjectEnvInjectRuleRequest extends ProjectEnvFileRequest {
+  /** The scripts, one per line, as the rule editor holds them. */
+  text: string
 }
 
 /** A request that replaces one managed file with the lines of a `.env` body. */
@@ -340,6 +400,170 @@ export function actionEnvironmentDirectories(script: string, groups: readonly st
   return candidates.length === 1 ? candidates : []
 }
 
+/**
+ * One command, and the directory it runs in.
+ *
+ * Both sides of an inject rule reduce to this shape: a rule line as the user typed
+ * it, and every command a launch will actually run. Matching is then one comparison
+ * of two normalized commands, never a substring search, so `bun run deploy` cannot
+ * match `bun run deploy:prod` and a `deploy` rule cannot match `redeploy`.
+ */
+export interface EnvInjectRuleTarget {
+  /** Project-relative directory, '' for the root, null when a rule names no directory. */
+  group: string | null
+  /** The command, whitespace collapsed so two spacings of one line compare equal. */
+  command: string
+}
+
+/** A `cd` at the start of a command, which decides the directory it runs in. */
+const LEADING_CD = /^cd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))\s*(?:&&|;)?\s*/u
+
+/** Whitespace between two words is never what a rule is about. */
+function collapseCommand(text: string): string {
+  return text.trim().replace(/\s+/gu, ' ')
+}
+
+/** The project-relative directory a `cd` target stands for. */
+function commandGroup(target: string, groups: readonly string[]): string {
+  const cleaned = target.trim().replace(/^\.\//u, '').replace(/\/+$/u, '')
+  if (!cleaned || cleaned === '.') return ''
+  const known = [...new Set(groups.filter((group) => group.length > 0))].find(
+    (group) =>
+      group === cleaned || cleaned.startsWith(`${group}/`) || group.startsWith(`${cleaned}/`)
+  )
+  return known ?? cleaned
+}
+
+/**
+ * The commands a script runs, in order, with quotes and separators kept out of it.
+ *
+ * A separator inside a quoted argument is part of that argument, so the split has
+ * to follow the shell's quoting instead of tearing `grep "a|b"` into two commands
+ * one of which a rule could accidentally name.
+ */
+function splitScriptCommands(script: string): string[] {
+  const commands: string[] = []
+  let current = ''
+  let quote: '"' | "'" | null = null
+  for (let index = 0; index < script.length; index += 1) {
+    const character = script[index] as string
+    if (quote) {
+      current += character
+      if (character === quote && script[index - 1] !== '\\') quote = null
+      continue
+    }
+    if (character === '"' || character === "'") {
+      quote = character
+      current += character
+      continue
+    }
+    if (character === '\\') {
+      current += character + (script[index + 1] ?? '')
+      index += 1
+      continue
+    }
+    if (character === '\n' || character === ';' || character === '&' || character === '|') {
+      commands.push(current)
+      current = ''
+      // `&&` and `||` are one separator, not two empty commands.
+      if (script[index + 1] === character) index += 1
+      continue
+    }
+    current += character
+  }
+  commands.push(current)
+  return commands.map(collapseCommand).filter((command) => command.length > 0)
+}
+
+/**
+ * Compile stored rule lines into the commands they name.
+ *
+ * `cd packages/convex-backend bun run deploy` means the command runs in that
+ * package, so the rule carries both facts and a script that runs it in the root is
+ * not the same launch.
+ */
+export function parseInjectRule(lines: readonly string[]): EnvInjectRuleTarget[] {
+  return lines.flatMap((line) => {
+    let command = collapseCommand(line)
+    let group: string | null = null
+    for (;;) {
+      const cd = LEADING_CD.exec(command)
+      if (!cd) break
+      group = commandGroup(cd[1] ?? cd[2] ?? cd[3] ?? '', [])
+      command = command.slice(cd[0].length).trim()
+    }
+    return command ? [{ group, command }] : []
+  })
+}
+
+/**
+ * Every directory a command line `cd`s into, exactly as the shell spelled it.
+ *
+ * A terminal line is handed over before it runs, so the shell's own `$PWD` still
+ * holds the directory it started in. The targets are what the command will move
+ * into, and the caller resolves them against that directory: the env file a
+ * command should see is the one for the place it really runs.
+ */
+export function commandCdTargets(script: string): string[] {
+  const targets: string[] = []
+  for (const raw of splitScriptCommands(script)) {
+    let command = raw
+    for (;;) {
+      const cd = LEADING_CD.exec(command)
+      if (!cd) break
+      const target = (cd[1] ?? cd[2] ?? cd[3] ?? '').trim()
+      if (target && target !== '.' && target !== '..') targets.push(target)
+      command = command.slice(cd[0].length).trim()
+    }
+  }
+  return targets
+}
+
+/**
+ * The commands a launch will run, each with the directory it runs in.
+ *
+ * An action script starts at the project root and `cd`s into packages, so the
+ * directory a command runs in is what the preceding `cd`s left behind. `groups`
+ * maps a `cd` target onto the env group that covers it.
+ */
+export function injectRuleTargets(
+  script: string,
+  groups: readonly string[]
+): EnvInjectRuleTarget[] {
+  const targets: EnvInjectRuleTarget[] = []
+  let group = ''
+  for (const raw of splitScriptCommands(script)) {
+    let command = raw
+    for (;;) {
+      const cd = LEADING_CD.exec(command)
+      if (!cd) break
+      group = commandGroup(cd[1] ?? cd[2] ?? cd[3] ?? '', groups)
+      command = command.slice(cd[0].length).trim()
+    }
+    if (command) targets.push({ group, command })
+  }
+  return targets
+}
+
+/**
+ * Whether a rule admits this launch.
+ *
+ * One named command is enough, and a rule that names no directory applies wherever
+ * the command runs. An empty rule list names nothing, so it admits nothing: callers
+ * treat a file with no rule as unlimited before they ever ask this.
+ */
+export function injectRuleAllows(
+  rule: readonly EnvInjectRuleTarget[],
+  targets: readonly EnvInjectRuleTarget[]
+): boolean {
+  return targets.some((target) =>
+    rule.some(
+      (line) =>
+        line.command === target.command && (line.group === null || line.group === target.group)
+    )
+  )
+}
+
 /** The managed reference a value line carries. */
 export function projectEnvReference(secretRef: string): string {
   return `${PROJECT_ENV_REFERENCE_PREFIX}${secretRef}`
@@ -390,6 +614,101 @@ export function parseProjectEnvFile(contents: string): ProjectEnvLine[] {
     if (!assignment) return { kind: 'invalid', text, reason: 'Not a NAME=value line' }
     return { kind: 'assignment', ...assignment, text, disabled: false }
   })
+}
+
+function appendEnvLines(lines: string[], appended: readonly string[]): string {
+  if (appended.length === 0) return lines.join('\n')
+  // New keys go after the file's last real line, not below a blank tail.
+  let at = lines.length
+  while (at > 0 && (lines[at - 1] ?? '').trim().length === 0) at -= 1
+  lines.splice(at, 0, ...appended)
+  return lines.join('\n')
+}
+
+/**
+ * The layout of a body: its own lines, with each key reduced to its name and place.
+ *
+ * This is what the store keeps instead of the body. It holds no value, so saving a
+ * file with a comment in it stays as value-free as saving one without.
+ */
+export function projectEnvLayout(contents: string): ProjectEnvLayoutLine[] {
+  return parseProjectEnvFile(contents).map((line) =>
+    line.kind === 'assignment'
+      ? { kind: 'key', name: line.name }
+      : { kind: 'text', text: line.text }
+  )
+}
+
+/**
+ * Render a stored file back into the body the editor shows.
+ *
+ * The layout decides the order and keeps every comment and blank line its owner
+ * wrote, and each key line is filled with the value the vault holds for that name. A
+ * key added since the last save is appended, and a layout key whose entry is gone is
+ * dropped, so the file never declares something the manifest does not hold.
+ */
+export function projectEnvFileText(
+  file: { layout?: readonly ProjectEnvLayoutLine[]; entries: readonly ProjectEnvTextKey[] },
+  values: ReadonlyMap<string, string | null>
+): string {
+  const lines: string[] = []
+  const written = new Set<string>()
+  const byName = new Map(file.entries.map((entry) => [entry.name, entry]))
+  for (const line of file.layout ?? []) {
+    if (line.kind === 'text') {
+      lines.push(line.text)
+      continue
+    }
+    const entry = byName.get(line.name)
+    // The entry's own name is written, never the layout's, so a stored manifest can
+    // never put a line in the file that it does not actually hold as a key.
+    if (!entry || written.has(entry.name)) continue
+    written.add(entry.name)
+    lines.push(
+      formatProjectEnvLine(entry.name, values.get(entry.name) ?? '', entry.disabled === true)
+    )
+  }
+  const appended = file.entries
+    .filter((entry) => !written.has(entry.name))
+    .map((entry) =>
+      formatProjectEnvLine(entry.name, values.get(entry.name) ?? '', entry.disabled === true)
+    )
+  return appendEnvLines(lines, appended)
+}
+
+/**
+ * Write key rows into a body, keeping every line the rows do not own.
+ *
+ * Comments, blank lines and lines that cannot be read belong to the user, so they
+ * stay exactly where they are and a save no longer drops them. A row takes the place
+ * of the line that declared its name, a name no row holds loses its line, and a new
+ * key is appended after the last line the file already has.
+ */
+export function mergeProjectEnvRows(contents: string, rows: readonly ProjectEnvKeyInput[]): string {
+  const pending = new Map<string, ProjectEnvKeyInput>()
+  for (const row of rows) {
+    const name = row.name.trim()
+    if (!name || pending.has(name)) continue
+    pending.set(name, { name, value: row.value, disabled: row.disabled === true })
+  }
+  const lines: string[] = []
+  const written = new Set<string>()
+  for (const line of parseProjectEnvFile(contents)) {
+    if (line.kind !== 'assignment') {
+      lines.push(line.text)
+      continue
+    }
+    const row = pending.get(line.name)
+    // A name no row holds any more was removed; a name the file declared twice is
+    // one key, so only its first line keeps the slot.
+    if (!row || written.has(line.name)) continue
+    written.add(line.name)
+    lines.push(formatProjectEnvLine(row.name, row.value, row.disabled === true))
+  }
+  const appended = [...pending.values()]
+    .filter((row) => !written.has(row.name))
+    .map((row) => formatProjectEnvLine(row.name, row.value, row.disabled === true))
+  return appendEnvLines(lines, appended)
 }
 
 /** The name and value of one `NAME=value` line, or null when the line is not one. */

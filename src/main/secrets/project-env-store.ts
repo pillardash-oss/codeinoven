@@ -1,4 +1,4 @@
-import { DEFAULT_ENV_FILE_NAME } from '../../lib/project-env'
+import { DEFAULT_ENV_FILE_NAME, type ProjectEnvLayoutLine } from '../../lib/project-env'
 import type { StorageEngine } from '../storage/storage-engine'
 
 /** One key of a stored manifest. The value lives in the vault, never here. */
@@ -16,8 +16,23 @@ export interface StoredProjectEnvFile {
   fileName: string
   entries: StoredProjectEnvEntry[]
   updatedAt: number
+  /**
+   * The commands this file's keys are limited to, one per line.
+   *
+   * Absent means no limit, so a manifest written before rules existed reads as an
+   * unlimited file instead of an empty rule.
+   */
+  injectRule?: string[]
   importedFrom?: string
   writtenTo?: string
+  /**
+   * The file's own line ordering, so the editor can show its comments again.
+   *
+   * A key is stored as its name and the vault ref of its value, so without this a
+   * saved file would come back as a plain list of assignments and every comment and
+   * blank line its owner wrote would be gone. Absent means no layout was recorded.
+   */
+  layout?: ProjectEnvLayoutLine[]
 }
 
 interface ProjectEnvDocument {
@@ -66,6 +81,8 @@ export class ProjectEnvStore {
           fileName,
           updatedAt: typeof file['updatedAt'] === 'number' ? file['updatedAt'] : 0,
           entries: entries.flatMap((entry) => sanitizeEntry(entry)),
+          ...sanitizeLayout(file['layout']),
+          ...sanitizeInjectRule(file['injectRule']),
           ...(typeof file['importedFrom'] === 'string' && file['importedFrom']
             ? { importedFrom: file['importedFrom'] }
             : {}),
@@ -110,6 +127,31 @@ function legacyModeFileName(mode: unknown): string | null {
   return /^[a-z0-9-]+$/u.test(mode) ? `.env.${mode}` : null
 }
 
+/** A stored rule, kept only as the non-empty command lines it was saved as. */
+function sanitizeInjectRule(value: unknown): { injectRule?: string[] } {
+  if (!Array.isArray(value)) return {}
+  const lines = value.flatMap((line) =>
+    typeof line === 'string' && line.trim() ? [line.trim()] : []
+  )
+  return lines.length > 0 ? { injectRule: lines } : {}
+}
+
+/** A stored layout, kept only as the readable lines it was saved as. */
+function sanitizeLayout(value: unknown): { layout?: ProjectEnvLayoutLine[] } {
+  if (!Array.isArray(value)) return {}
+  const lines = value.flatMap((line): ProjectEnvLayoutLine[] => {
+    if (typeof line !== 'object' || line === null) return []
+    const record = line as Record<string, unknown>
+    if (record['kind'] === 'key') {
+      const name = record['name']
+      return typeof name === 'string' && name ? [{ kind: 'key', name }] : []
+    }
+    const text = record['text']
+    return typeof text === 'string' ? [{ kind: 'text', text }] : []
+  })
+  return lines.length > 0 ? { layout: lines } : {}
+}
+
 function sanitizeEntry(entry: unknown): StoredProjectEnvEntry[] {
   if (typeof entry !== 'object' || entry === null) return []
   const record = entry as Record<string, unknown>
@@ -148,6 +190,12 @@ function mergeSamePathFiles(files: readonly StoredProjectEnvFile[]): StoredProje
     merged.set(key, {
       ...kept,
       updatedAt: Math.max(kept.updatedAt, file.updatedAt),
+      // The later record's rule wins, the same way its keys do: two manifests for
+      // one path are one file, and one file carries one rule.
+      ...(file.injectRule ? { injectRule: file.injectRule } : {}),
+      // The later record's layout wins with its keys, so the file it describes comes
+      // back exactly as that record left it.
+      ...(file.layout ? { layout: file.layout } : {}),
       entries: [...entries.values()]
     })
   }
