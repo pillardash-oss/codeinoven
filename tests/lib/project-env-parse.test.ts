@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   formatProjectEnvLine,
+  injectRuleAllows,
+  injectRuleTargets,
   isEnvFileNameTaken,
   mergeProjectEnvRows,
+  parseInjectRule,
   parseProjectEnvFile,
   projectEnvFileText,
   projectEnvLayout,
@@ -149,5 +152,75 @@ describe('projectEnvLayout and projectEnvFileText', () => {
     expect(projectEnvFileText({ entries }, values)).toBe(
       ['PORT=3000', `${PROJECT_ENV_DISABLED_PREFIX} DEBUG=1`].join('\n')
     )
+  })
+})
+
+describe('inject rule matching', () => {
+  const GROUPS = ['', 'packages/api', 'packages/convex-backend']
+
+  it('compiles a rule line into the command and the directory it names', () => {
+    expect(
+      parseInjectRule(['bun run deploy', 'cd packages/convex-backend bun run deploy'])
+    ).toEqual([
+      { group: null, command: 'bun run deploy' },
+      { group: 'packages/convex-backend', command: 'bun run deploy' }
+    ])
+  })
+
+  it('reads every command a script runs, with the directory the cds left behind', () => {
+    const targets = injectRuleTargets(
+      'bun run build\ncd packages/convex-backend && bun run deploy\nbun run lint',
+      GROUPS
+    )
+
+    expect(targets).toEqual([
+      { group: '', command: 'bun run build' },
+      { group: 'packages/convex-backend', command: 'bun run deploy' },
+      { group: 'packages/convex-backend', command: 'bun run lint' }
+    ])
+  })
+
+  it('keeps a quoted separator inside its argument instead of splitting it', () => {
+    expect(injectRuleTargets('grep "a|b" file.txt', GROUPS)).toEqual([
+      { group: '', command: 'grep "a|b" file.txt' }
+    ])
+  })
+
+  it('matches whole commands only, never a prefix or a substring', () => {
+    const rule = parseInjectRule(['bun run deploy'])
+
+    expect(injectRuleAllows(rule, injectRuleTargets('bun run deploy', GROUPS))).toBe(true)
+    expect(injectRuleAllows(rule, injectRuleTargets('bun run deploy:prod', GROUPS))).toBe(false)
+    expect(injectRuleAllows(rule, injectRuleTargets('bun run redeploy', GROUPS))).toBe(false)
+    expect(injectRuleAllows(rule, injectRuleTargets('echo bun run deploy', GROUPS))).toBe(false)
+  })
+
+  it('makes a cd in the rule part of what has to match', () => {
+    const rule = parseInjectRule(['cd packages/convex-backend bun run deploy'])
+
+    expect(
+      injectRuleAllows(
+        rule,
+        injectRuleTargets('cd packages/convex-backend && bun run deploy', GROUPS)
+      )
+    ).toBe(true)
+    expect(injectRuleAllows(rule, injectRuleTargets('bun run deploy', GROUPS))).toBe(false)
+  })
+
+  it('lets a rule with no cd apply wherever the command runs', () => {
+    const rule = parseInjectRule(['bun run deploy'])
+
+    expect(
+      injectRuleAllows(rule, injectRuleTargets('cd packages/api && bun run deploy', GROUPS))
+    ).toBe(true)
+  })
+
+  it('collapses spacing, so a rule is not about how the line is spaced', () => {
+    expect(
+      injectRuleAllows(
+        parseInjectRule(['bun   run deploy']),
+        injectRuleTargets('bun run  deploy', [])
+      )
+    ).toBe(true)
   })
 })

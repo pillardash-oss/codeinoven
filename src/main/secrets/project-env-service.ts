@@ -3,7 +3,10 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from 'path'
 import {
   compareEnvFileNames,
   formatProjectEnvLine,
+  injectRuleAllows,
+  injectRuleTargets,
   normalizeInjectRuleLines,
+  parseInjectRule,
   parseProjectEnvFile,
   PROJECT_ENV_DISABLED_PREFIX,
   projectEnvLayout,
@@ -87,6 +90,14 @@ export interface LaunchEnvironmentContext {
    * is what keeps a package group matching there.
    */
   directory?: string
+  /**
+   * The command or script the process will run, when the caller knows it before
+   * the spawn.
+   *
+   * This is what an inject rule is checked against. Omitted means the caller has no
+   * command yet (an interactive shell), and then no rule narrows the launch.
+   */
+  command?: string
 }
 
 export interface LaunchEnvironment {
@@ -595,6 +606,11 @@ export class ProjectEnvService {
    * directory group, then the project root, with a file later in name order
    * overriding an earlier one. A name that cannot be validated or whose value is
    * gone is skipped and reported instead of failing the launch.
+   *
+   * A file that carries an inject rule only contributes when the launch names a
+   * command the rule names, which is why the caller passes the script when it has
+   * one. A launch with no known command is not narrowed: nothing can be compared
+   * with it yet.
    */
   async environmentForLaunch(context: LaunchEnvironmentContext): Promise<LaunchEnvironment> {
     return this.resolveLaunch(context, true)
@@ -620,7 +636,34 @@ export class ProjectEnvService {
         scope: 'project' | 'thread'
       }
     >()
+    /**
+     * The commands this launch will run, or null when the caller cannot name one.
+     *
+     * An action script is known before it starts, so a rule can be checked against
+     * it. An interactive shell has typed nothing yet at spawn time, so it gets every
+     * key its scope holds: a rule that no command can be compared with must not
+     * silently empty the environment of a process nobody described.
+     */
+    const injectTargets =
+      context.command === undefined
+        ? null
+        : injectRuleTargets(context.command, [...new Set(files.map((file) => file.group))])
+    /** Names a ruled file withholds from this launch, so no other file supplies them. */
+    const withheld = new Map<string, string>()
+    const skipped: { name: string; reason: string }[] = []
+
     for (const file of groupsFor(files, relativeDirectory)) {
+      if (injectTargets && file.injectRule && file.injectRule.length > 0) {
+        if (!injectRuleAllows(parseInjectRule(file.injectRule), injectTargets)) {
+          for (const entry of file.entries) {
+            withheld.set(
+              entry.name,
+              `Only injected into the scripts ${file.group ? `${file.group}/` : ''}${file.fileName} names.`
+            )
+          }
+          continue
+        }
+      }
       for (const entry of file.entries) {
         winners.set(entry.name, {
           entry,
@@ -630,6 +673,10 @@ export class ProjectEnvService {
         })
       }
     }
+    // A withheld name is a no, the same way a turned-off key is: a shallower file
+    // declaring the same name must not quietly substitute a different secret for
+    // the one the user kept out of this script.
+    for (const name of withheld.keys()) winners.delete(name)
     if (context.threadId) {
       for (const entry of await this.dependencies.store.readThread(context.threadId)) {
         winners.set(entry.name, {
@@ -644,7 +691,9 @@ export class ProjectEnvService {
     const environment: Record<string, string> = {}
     const entries: ProjectEnvLaunchPreviewEntry[] = []
     const disabled: ProjectEnvLaunchPreviewEntry[] = []
-    const skipped: { name: string; reason: string }[] = []
+    for (const [name, reason] of withheld) {
+      if (!winners.has(name)) skipped.push({ name, reason })
+    }
 
     for (const [name, winner] of winners) {
       try {

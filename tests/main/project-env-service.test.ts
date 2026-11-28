@@ -787,3 +787,137 @@ describe('ProjectEnvService inject rule', () => {
     ).rejects.toThrow(/no longer exists/u)
   })
 })
+
+describe('ProjectEnvService inject rule enforcement', () => {
+  async function seed(): Promise<void> {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'ROOT_URL',
+      value: 'https://root.example.com'
+    })
+    await service.createProjectEnvFile({
+      projectId: PROJECT_ID,
+      group: 'packages/convex-backend',
+      fileName: '.env'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: 'packages/convex-backend',
+      fileName: '.env',
+      name: 'DEPLOY_KEY',
+      value: 'sk-deploy'
+    })
+    await service.setProjectEnvInjectRule({
+      projectId: PROJECT_ID,
+      group: 'packages/convex-backend',
+      fileName: '.env',
+      text: 'cd packages/convex-backend bun run deploy'
+    })
+  }
+
+  it('injects a ruled file into the script the rule names', async () => {
+    await seed()
+
+    const launch = await service.environmentForLaunch({
+      projectId: PROJECT_ID,
+      cwd: projectRoot,
+      directory: 'packages/convex-backend',
+      command: 'cd packages/convex-backend && bun run deploy'
+    })
+
+    expect(launch.environment).toMatchObject({
+      DEPLOY_KEY: 'sk-deploy',
+      ROOT_URL: 'https://root.example.com'
+    })
+    expect(launch.preview.skipped).toEqual([])
+  })
+
+  it('withholds a ruled file from any other script, and says why', async () => {
+    await seed()
+
+    const launch = await service.environmentForLaunch({
+      projectId: PROJECT_ID,
+      cwd: projectRoot,
+      directory: 'packages/convex-backend',
+      command: 'bun run test'
+    })
+
+    expect(launch.environment).toEqual({ ROOT_URL: 'https://root.example.com' })
+    expect(launch.preview.skipped).toEqual([
+      {
+        name: 'DEPLOY_KEY',
+        reason: expect.stringMatching(
+          /only injected into the scripts packages\/convex-backend\/\.env names/iu
+        )
+      }
+    ])
+  })
+
+  it('does not substitute a shallower value for a withheld name', async () => {
+    await seed()
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'DEPLOY_KEY',
+      value: 'from-the-root'
+    })
+
+    const launch = await service.environmentForLaunch({
+      projectId: PROJECT_ID,
+      cwd: projectRoot,
+      directory: 'packages/convex-backend',
+      command: 'bun run test'
+    })
+
+    expect(launch.environment).not.toHaveProperty('DEPLOY_KEY')
+  })
+
+  it('applies no rule to a launch whose command is not known yet', async () => {
+    await seed()
+
+    const launch = await service.environmentForLaunch({
+      projectId: PROJECT_ID,
+      cwd: projectRoot,
+      directory: 'packages/convex-backend'
+    })
+
+    expect(launch.environment).toMatchObject({ DEPLOY_KEY: 'sk-deploy' })
+  })
+
+  it('matches any of several scripts, and a rule that names no directory', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      name: 'REGISTRY_TOKEN',
+      value: 'tok'
+    })
+    await service.setProjectEnvInjectRule({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: 'bunx convex deploy\nbun run deploy'
+    })
+
+    for (const command of ['bunx convex deploy', 'bun run deploy']) {
+      const launch = await service.environmentForLaunch({
+        projectId: PROJECT_ID,
+        cwd: projectRoot,
+        command
+      })
+      expect(launch.environment).toEqual({ REGISTRY_TOKEN: 'tok' })
+    }
+
+    const other = await service.environmentForLaunch({
+      projectId: PROJECT_ID,
+      cwd: projectRoot,
+      command: 'bun run dev'
+    })
+    expect(other.environment).toEqual({})
+  })
+})

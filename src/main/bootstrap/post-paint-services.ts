@@ -1388,7 +1388,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
               projectId,
               threadId,
               cwd,
-              directory
+              directory,
+              // An action is the one launch whose command is known before it runs,
+              // so this is where an inject rule can be honoured exactly.
+              ...(script ? { command: script } : {})
             })
             if (!script) return resolved.environment
             // An action starts at the project root and then moves into a package,
@@ -1404,7 +1407,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
                 projectId,
                 threadId,
                 cwd,
-                directory: group
+                directory: group,
+                command: script
               })
               environment = { ...environment, ...packageEnv.environment }
             }

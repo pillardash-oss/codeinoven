@@ -400,6 +400,147 @@ export function actionEnvironmentDirectories(script: string, groups: readonly st
   return candidates.length === 1 ? candidates : []
 }
 
+/**
+ * One command, and the directory it runs in.
+ *
+ * Both sides of an inject rule reduce to this shape: a rule line as the user typed
+ * it, and every command a launch will actually run. Matching is then one comparison
+ * of two normalized commands, never a substring search, so `bun run deploy` cannot
+ * match `bun run deploy:prod` and a `deploy` rule cannot match `redeploy`.
+ */
+export interface EnvInjectRuleTarget {
+  /** Project-relative directory, '' for the root, null when a rule names no directory. */
+  group: string | null
+  /** The command, whitespace collapsed so two spacings of one line compare equal. */
+  command: string
+}
+
+/** A `cd` at the start of a command, which decides the directory it runs in. */
+const LEADING_CD = /^cd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))\s*(?:&&|;)?\s*/u
+
+/** Whitespace between two words is never what a rule is about. */
+function collapseCommand(text: string): string {
+  return text.trim().replace(/\s+/gu, ' ')
+}
+
+/** The project-relative directory a `cd` target stands for. */
+function commandGroup(target: string, groups: readonly string[]): string {
+  const cleaned = target.trim().replace(/^\.\//u, '').replace(/\/+$/u, '')
+  if (!cleaned || cleaned === '.') return ''
+  const known = [...new Set(groups.filter((group) => group.length > 0))].find(
+    (group) =>
+      group === cleaned || cleaned.startsWith(`${group}/`) || group.startsWith(`${cleaned}/`)
+  )
+  return known ?? cleaned
+}
+
+/**
+ * The commands a script runs, in order, with quotes and separators kept out of it.
+ *
+ * A separator inside a quoted argument is part of that argument, so the split has
+ * to follow the shell's quoting instead of tearing `grep "a|b"` into two commands
+ * one of which a rule could accidentally name.
+ */
+function splitScriptCommands(script: string): string[] {
+  const commands: string[] = []
+  let current = ''
+  let quote: '"' | "'" | null = null
+  for (let index = 0; index < script.length; index += 1) {
+    const character = script[index] as string
+    if (quote) {
+      current += character
+      if (character === quote && script[index - 1] !== '\\') quote = null
+      continue
+    }
+    if (character === '"' || character === "'") {
+      quote = character
+      current += character
+      continue
+    }
+    if (character === '\\') {
+      current += character + (script[index + 1] ?? '')
+      index += 1
+      continue
+    }
+    if (character === '\n' || character === ';' || character === '&' || character === '|') {
+      commands.push(current)
+      current = ''
+      // `&&` and `||` are one separator, not two empty commands.
+      if (script[index + 1] === character) index += 1
+      continue
+    }
+    current += character
+  }
+  commands.push(current)
+  return commands.map(collapseCommand).filter((command) => command.length > 0)
+}
+
+/**
+ * Compile stored rule lines into the commands they name.
+ *
+ * `cd packages/convex-backend bun run deploy` means the command runs in that
+ * package, so the rule carries both facts and a script that runs it in the root is
+ * not the same launch.
+ */
+export function parseInjectRule(lines: readonly string[]): EnvInjectRuleTarget[] {
+  return lines.flatMap((line) => {
+    let command = collapseCommand(line)
+    let group: string | null = null
+    for (;;) {
+      const cd = LEADING_CD.exec(command)
+      if (!cd) break
+      group = commandGroup(cd[1] ?? cd[2] ?? cd[3] ?? '', [])
+      command = command.slice(cd[0].length).trim()
+    }
+    return command ? [{ group, command }] : []
+  })
+}
+
+/**
+ * The commands a launch will run, each with the directory it runs in.
+ *
+ * An action script starts at the project root and `cd`s into packages, so the
+ * directory a command runs in is what the preceding `cd`s left behind. `groups`
+ * maps a `cd` target onto the env group that covers it.
+ */
+export function injectRuleTargets(
+  script: string,
+  groups: readonly string[]
+): EnvInjectRuleTarget[] {
+  const targets: EnvInjectRuleTarget[] = []
+  let group = ''
+  for (const raw of splitScriptCommands(script)) {
+    let command = raw
+    for (;;) {
+      const cd = LEADING_CD.exec(command)
+      if (!cd) break
+      group = commandGroup(cd[1] ?? cd[2] ?? cd[3] ?? '', groups)
+      command = command.slice(cd[0].length).trim()
+    }
+    if (command) targets.push({ group, command })
+  }
+  return targets
+}
+
+/**
+ * Whether a rule admits this launch.
+ *
+ * One named command is enough, and a rule that names no directory applies wherever
+ * the command runs. An empty rule list names nothing, so it admits nothing: callers
+ * treat a file with no rule as unlimited before they ever ask this.
+ */
+export function injectRuleAllows(
+  rule: readonly EnvInjectRuleTarget[],
+  targets: readonly EnvInjectRuleTarget[]
+): boolean {
+  return targets.some((target) =>
+    rule.some(
+      (line) =>
+        line.command === target.command && (line.group === null || line.group === target.group)
+    )
+  )
+}
+
 /** The managed reference a value line carries. */
 export function projectEnvReference(secretRef: string): string {
   return `${PROJECT_ENV_REFERENCE_PREFIX}${secretRef}`
